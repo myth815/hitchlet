@@ -28,44 +28,51 @@ export function HealthPanel({
           <h2>服务健康</h2>
         </div>
         <span
-          className={`status-pill ${health?.recoveryState === "ready" ? "good" : "warn"}`}
+          className={`status-pill ${!error && health?.recoveryState === "ready" ? "good" : "warn"}`}
         >
-          {health?.recoveryState === "ready"
-            ? "运行正常"
-            : health?.recoveryState === "recovering"
-              ? "恢复中"
-              : health?.recoveryState === "unavailable"
-                ? "不可用"
-                : "读取中"}
+          {error
+            ? "连接不可用"
+            : health?.recoveryState === "ready"
+              ? "运行正常"
+              : health?.recoveryState === "recovering"
+                ? "恢复中"
+                : health?.recoveryState === "unavailable"
+                  ? "不可用"
+                  : "读取中"}
         </span>
       </div>
       <div className="health-facts">
         <div>
           <small>执行模式</small>
           <b>
-            {health?.executionMode === "simulator"
-              ? "Simulator"
-              : health?.executionMode === "disabled"
-                ? "Disabled"
-                : "未知"}
+            {error
+              ? "未知"
+              : health?.executionMode === "simulator"
+                ? "Simulator"
+                : health?.executionMode === "disabled"
+                  ? "Disabled"
+                  : health?.executionMode === "portainer"
+                    ? "Portainer"
+                    : "未知"}
           </b>
         </div>
         <div>
           <small>账本恢复</small>
-          <b>{health?.recoveryState ?? (error ? "连接不可用" : "读取中")}</b>
-        </div>
-        <div>
-          <small>阶段</small>
-          <b>{health?.stage ?? "—"}</b>
+          <b>{error ? "观测未知" : (health?.recoveryState ?? "读取中")}</b>
         </div>
       </div>
-      {health?.executionMode === "simulator" ? (
+      {!error && health?.executionMode === "simulator" ? (
         <p className="simulator-banner">
           模拟环境，未连接真实 Docker/SSH；离线租约强制执行不受支持。
         </p>
-      ) : health?.executionMode === "disabled" ? (
+      ) : !error && health?.executionMode === "disabled" ? (
         <p className="muted-banner">
           执行器未启用。Ticket 可查询，但环境执行不可用。
+        </p>
+      ) : !error && health?.executionMode === "portainer" ? (
+        <p className="muted-banner">
+          Portainer Docker
+          执行模式；节点状态单独显示，离线租约强制执行不受支持。
         </p>
       ) : null}
       {error ? <p className="error-inline">健康状态读取失败：{error}</p> : null}
@@ -419,7 +426,7 @@ export function AcquirePanel({
             placeholder="由管理员提供的网络配置 ID"
             required
           />
-          <small>D05 尚无网络配置目录 API，请向管理员获取已授权 ID。</small>
+          <small>请向管理员获取已授权的网络配置 ID。</small>
         </label>
         <label className="span-two">
           clientRef（可选）

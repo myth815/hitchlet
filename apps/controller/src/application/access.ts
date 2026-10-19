@@ -7,14 +7,16 @@ import { SQLiteReadStore } from "../storage/read-store.js";
 import { createHash } from "node:crypto";
 import { SQLiteIdempotencyStore } from "../storage/idempotency-store.js";
 import { conflict, notFound } from "./errors.js";
+import type { LocalSecretStore } from "../storage/secret-store.js";
 type Row = Record<string, string | number | bigint | null>;
-/** Simulator-only public endpoint; never resolves management URLs or secret references. */
+/** Owner-scoped access grant; Portainer private material is resolved only from the encrypted local store. */
 export class AccessService {
   private readonly store: SQLiteReadStore;
   private readonly idempotency: SQLiteIdempotencyStore;
   constructor(
     storage: Storage,
     private readonly now = Date.now,
+    private readonly secrets?: LocalSecretStore,
   ) {
     this.store = new SQLiteReadStore(storage);
     this.idempotency = new SQLiteIdempotencyStore(storage);
@@ -44,7 +46,8 @@ export class AccessService {
       typeof row.expires_at_ms === "bigint"
         ? Number(row.expires_at_ms)
         : Number(row.expires_at_ms);
-    if (row.execution_mode !== "simulator")
+    const simulator = row.execution_mode === "simulator";
+    if (!simulator && row.execution_mode !== "portainer")
       throw conflict("execution_mode_unsupported");
     if (
       row.network_revoked === 1 ||
@@ -67,23 +70,60 @@ export class AccessService {
       parseJson(row.request_json),
     );
     const protocol = request.access.protocol;
-    const grant = AccessGrantSchema.parse({
-      ticketId,
-      leaseId: row.lease_id,
-      leaseVersion: Number(row.lease_version),
-      generation,
-      access: {
+    let access: Record<string, unknown>;
+    let authentication: Record<string, unknown>;
+    if (simulator) {
+      access = {
         protocol,
         host: "simulator.invalid",
         port: protocol === "ssh" ? 22 : 3389,
         username: "simulator",
         hostKeyFingerprint: protocol === "ssh" ? "SIMULATOR_ONLY" : null,
         expiresAt: new Date(expires).toISOString(),
-      },
-      authentication: {
+      };
+      authentication = {
         kind: "ephemeral_password",
         password: "SIMULATOR_ONLY_NO_NETWORK_ENDPOINT",
-      },
+      };
+    } else {
+      if (
+        !this.secrets ||
+        typeof row.access_secret_ref !== "string" ||
+        typeof row.actual_resources_json !== "string"
+      )
+        throw conflict("access_material_unavailable");
+      const actual = parseJson(row.actual_resources_json);
+      const evidence =
+        typeof actual === "object" && actual !== null && "receipt" in actual
+          ? (actual as { receipt?: unknown }).receipt
+          : undefined;
+      const readyAccess =
+        typeof evidence === "object" &&
+        evidence !== null &&
+        "access" in evidence
+          ? (evidence as { access?: unknown }).access
+          : undefined;
+      if (!readyAccess || typeof readyAccess !== "object")
+        throw conflict("access_material_unavailable");
+      const endpoint = readyAccess as Record<string, unknown>;
+      const privateKey = await this.secrets.get(row.access_secret_ref);
+      access = {
+        protocol,
+        host: endpoint.host,
+        port: endpoint.port,
+        username: endpoint.username,
+        hostKeyFingerprint: endpoint.hostKeyFingerprint,
+        expiresAt: new Date(expires).toISOString(),
+      };
+      authentication = { kind: "ephemeral_private_key", privateKey };
+    }
+    const grant = AccessGrantSchema.parse({
+      ticketId,
+      leaseId: row.lease_id,
+      leaseVersion: Number(row.lease_version),
+      generation,
+      access,
+      authentication,
     });
     await this.idempotency.finish({
       consumerId,

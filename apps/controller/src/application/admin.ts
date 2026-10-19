@@ -1,3 +1,4 @@
+import { ImagePublishingService } from "./image-publishing.js";
 import type { Storage } from "../storage/index.js";
 import {
   SQLiteImageValidationStore,
@@ -5,13 +6,18 @@ import {
   SQLiteProfileStore,
   SQLiteProviderConnectionStore,
 } from "../storage/admin-stores.js";
-import type { PortainerProbe } from "../providers/port.js";
+import type { PortainerEvidence, PortainerProbe } from "../providers/port.js";
 import { PortainerConnectionService } from "./provider-connections.js";
 import { ImageValidationService } from "./image-validation.js";
 import { SQLiteValidationStore } from "../storage/validation-store.js";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
+import { SQLiteAdminReadStore } from "../storage/admin-read-store.js";
+import { SQLiteImageCacheStore } from "../storage/image-cache-store.js";
 
 export type Probe = PortainerProbe;
+type ObservationSnapshot = Awaited<
+  ReturnType<SQLiteMachineNodeStore["duePortainerObservations"]>
+>[number];
 
 /** Admin use-case facade: transport handlers call these cohesive persistence workflows. */
 export class AdminService {
@@ -21,14 +27,20 @@ export class AdminService {
   private readonly profiles: SQLiteProfileStore;
   private readonly images: SQLiteImageValidationStore;
   private readonly validations: ImageValidationService;
+  private readonly publishing: ImagePublishingService;
+  private readonly reads: SQLiteAdminReadStore;
+  private readonly cacheReads: SQLiteImageCacheStore;
 
   constructor(
     db: Storage,
-    probe: Probe,
-    now = Date.now,
+    private readonly probe: Probe,
+    private readonly now = Date.now,
     allowLoopbackHttp = false,
-    readSecret?: (versionRef: string) => Promise<string>,
+    private readonly readSecret?: (versionRef: string) => Promise<string>,
   ) {
+    this.reads = new SQLiteAdminReadStore(db);
+    this.cacheReads = new SQLiteImageCacheStore(db, now);
+    this.publishing = new ImagePublishingService(db, probe, now, readSecret);
     this.connections = new SQLiteProviderConnectionStore(db, now);
     this.connectionUseCases = new PortainerConnectionService(
       this.connections,
@@ -83,8 +95,125 @@ export class AdminService {
   registerNode(input: Parameters<SQLiteMachineNodeStore["registerNode"]>[0]) {
     return this.inventory.registerNode(input);
   }
+  async configureNodeRuntime(
+    input: Parameters<SQLiteMachineNodeStore["configureRuntime"]>[0],
+  ) {
+    const refs = input.config.runtimeAgent as Record<string, unknown>;
+    if (!this.connectionUseCases || typeof refs !== "object")
+      throw new Error("Runtime Agent configuration unavailable");
+    if (this.readSecret) {
+      for (const key of [
+        "tokenSecretRef",
+        "caSecretRef",
+        "clientCertSecretRef",
+        "clientKeySecretRef",
+      ]) {
+        const ref = refs[key];
+        if (typeof ref !== "string")
+          throw new RangeError("Invalid Runtime Agent secret reference");
+        await this.readSecret(ref);
+      }
+    } else
+      throw new Error(
+        "Encrypted secret store is required for Runtime Agent registration",
+      );
+    return this.inventory.configureRuntime(input);
+  }
+  attestNodeCapabilities(
+    input: Parameters<SQLiteMachineNodeStore["attestCapabilities"]>[0],
+  ) {
+    return this.inventory.attestCapabilities(input);
+  }
+  async refreshPortainerObservations() {
+    const checkedAt = this.now();
+    // Each refresh batch is capped in the store and probes those nodes in
+    // parallel. The Portainer probe has a 10-second network bound, so an
+    // independent scheduler can refresh a bounded set without being held
+    // behind a long-running allocation operation.
+    const snapshots = await this.inventory.duePortainerObservations(
+      checkedAt,
+      45_000,
+      16,
+    );
+    const settled = await Promise.allSettled(
+      snapshots.map(async (snapshot) => {
+        let capabilities: Record<string, unknown> | undefined;
+        try {
+          const parsed: unknown = JSON.parse(snapshot.capabilitiesJson);
+          if (isRecord(parsed)) capabilities = parsed;
+        } catch {
+          // An invalid stored capability document cannot be renewed by observation.
+        }
+        if (!capabilities || !validManualCapability(capabilities, checkedAt)) {
+          if (capabilities && capabilityExpired(capabilities, checkedAt)) {
+            if (
+              await this.inventory.recordPortainerObservation(
+                snapshot,
+                "unknown",
+              )
+            )
+              return "expired" as const;
+          } else if (
+            await this.inventory.recordPortainerObservation(
+              snapshot,
+              "degraded",
+            )
+          ) {
+            return "unhealthy" as const;
+          }
+          return "unchanged" as const;
+        }
+        try {
+          if (!this.readSecret || !snapshot.apiKeyRef)
+            throw new Error("Portainer connection secret is unavailable");
+          const apiKey = await this.readSecret(snapshot.apiKeyRef);
+          const evidence = await this.probe({
+            endpointUrl: snapshot.endpointUrl,
+            environmentId: snapshot.environmentId,
+            apiKey,
+          });
+          assertObservationMatches(snapshot, capabilities, evidence);
+          if (
+            await this.inventory.recordPortainerObservation(
+              snapshot,
+              "healthy",
+              checkedAt,
+            )
+          )
+            return "refreshed" as const;
+        } catch {
+          if (
+            await this.inventory.recordPortainerObservation(
+              snapshot,
+              "degraded",
+            )
+          )
+            return "unhealthy" as const;
+        }
+        return "unchanged" as const;
+      }),
+    );
+    const failure = settled.find(
+      (item): item is PromiseRejectedResult => item.status === "rejected",
+    );
+    if (failure) throw failure.reason;
+    const outcomes = settled.map((item) => {
+      if (item.status !== "fulfilled")
+        throw new Error("Portainer observation result did not settle");
+      return item.value;
+    });
+    return {
+      checked: snapshots.length,
+      refreshed: outcomes.filter((value) => value === "refreshed").length,
+      unhealthy: outcomes.filter((value) => value === "unhealthy").length,
+      expired: outcomes.filter((value) => value === "expired").length,
+    };
+  }
   listNodes() {
     return this.inventory.listNodes();
+  }
+  getInstallation() {
+    return this.inventory.getInstallation();
   }
   createProfile(...args: Parameters<SQLiteProfileStore["createProfile"]>) {
     return this.profiles.createProfile(...args);
@@ -115,11 +244,37 @@ export class AdminService {
   ) {
     return this.validations.schedule(input);
   }
+  publishVersion(id: string, expected: number) {
+    return this.publishing.publish(id, expected);
+  }
+  moveImageAlias(
+    imageId: string,
+    alias: string,
+    versionId: string,
+    expected: number,
+  ) {
+    return this.publishing.moveAlias(imageId, alias, versionId, expected);
+  }
+  cancelValidation(id: string) {
+    return this.validations.cancel(id);
+  }
   getValidation(id: string) {
     return this.validations.get(id);
   }
   getDraftVersion(id: string) {
     return this.images.getDraftVersion(id);
+  }
+  listImageVersions() {
+    return this.reads.listImageVersions();
+  }
+  listValidationHistory(versionId: string) {
+    return this.reads.listValidationHistory(versionId);
+  }
+  listImageAliases(imageId: string) {
+    return this.reads.listImageAliases(imageId);
+  }
+  cacheOperationReceipt(nodeId: string, operationId: string) {
+    return this.cacheReads.operationReceipt(nodeId, operationId);
   }
   prewarmImageCache(
     input: Parameters<SQLiteImageValidationStore["prewarmImageCache"]>[0],
@@ -131,4 +286,81 @@ export class AdminService {
   ) {
     return this.images.planCacheEviction(input);
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function capabilityExpired(capability: Record<string, unknown>, now: number) {
+  if (typeof capability.expiresAt !== "string") return true;
+  const expiry = Date.parse(capability.expiresAt);
+  return !Number.isFinite(expiry) || expiry <= now;
+}
+
+function validManualCapability(
+  capability: Record<string, unknown>,
+  now: number,
+) {
+  if (
+    capabilityExpired(capability, now) ||
+    capability.admissionMode !== "constant_online_manual_inventory" ||
+    capability.offline !== false ||
+    capability.powerEnabled !== false ||
+    typeof capability.connectionRevisionId !== "string" ||
+    capability.cpuHardLimit !== "verified" ||
+    capability.memoryHardLimit !== "verified" ||
+    capability.networkPolicyEnforcement !== "verified" ||
+    typeof capability.capabilityFingerprint !== "string" ||
+    !/^[a-f0-9]{64}$/.test(capability.capabilityFingerprint) ||
+    typeof capability.providerVersion !== "string" ||
+    !Array.isArray(capability.architectures) ||
+    !Array.isArray(capability.guestOs) ||
+    !capability.guestOs.includes("linux")
+  )
+    return false;
+  const report = capability.manualReport;
+  if (!isRecord(report) || typeof report.sha256 !== "string") return false;
+  const scopes = report.scopes;
+  const names = [
+    "resourceLimits",
+    "firewallInput",
+    "firewallForward",
+    "ipv6",
+    "sshBootstrap",
+    "cleanupRecovery",
+  ];
+  return (
+    isRecord(scopes) &&
+    Object.keys(scopes).length === names.length &&
+    names.every(
+      (name) => isRecord(scopes[name]) && scopes[name].status === "passed",
+    )
+  );
+}
+
+function assertObservationMatches(
+  snapshot: ObservationSnapshot,
+  capability: Record<string, unknown>,
+  evidence: PortainerEvidence,
+) {
+  const versionMatch =
+    capability.providerVersion ===
+    `Portainer/${evidence.portainerVersion}; Docker/${evidence.dockerVersion}`;
+  const capacity = capability.capacity;
+  if (
+    evidence.engineId !== snapshot.engineId ||
+    capability.connectionRevisionId !== snapshot.revisionId ||
+    evidence.os !== "linux" ||
+    evidence.architecture !== snapshot.architecture ||
+    !Array.isArray(capability.architectures) ||
+    !capability.architectures.includes(evidence.architecture) ||
+    !versionMatch ||
+    !isRecord(capacity) ||
+    capacity.cpuMillis !== snapshot.cpuMillis ||
+    capacity.memoryMiB !== snapshot.memoryMiB ||
+    snapshot.cpuMillis > evidence.cpuCount * 1000 ||
+    snapshot.memoryMiB > Math.floor(evidence.memoryBytes / 1024 ** 2)
+  )
+    throw new Error("Live Portainer observation does not match attested Node");
 }

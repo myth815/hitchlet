@@ -50,7 +50,7 @@ describe("SQLite storage worker", () => {
     opened.push(restarted);
     expect(
       await restarted.get("SELECT count(*) AS count FROM schema_migrations"),
-    ).toMatchObject({ count: 2n });
+    ).toMatchObject({ count: 4n });
   });
 
   it("enforces foreign keys, immutable rows, and active grant cleanup guards", async () => {
@@ -246,10 +246,10 @@ describe("SQLite storage worker", () => {
     opened.push(storage);
     expect(
       await storage.get("SELECT count(*) AS count FROM schema_migrations"),
-    ).toMatchObject({ count: 2n });
+    ).toMatchObject({ count: 4n });
     expect(
       await storage.get<{ user_version: bigint }>("PRAGMA user_version"),
-    ).toMatchObject({ user_version: 2n });
+    ).toMatchObject({ user_version: 4n });
     expect(
       await storage.get(
         "SELECT name FROM pragma_table_info('gui_sessions') WHERE name='source_credential_id'",
@@ -279,5 +279,51 @@ describe("SQLite storage worker", () => {
         ["c".repeat(64), "d".repeat(64)],
       ),
     ).rejects.toMatchObject({ code: "STORAGE_CONSTRAINT" });
+  });
+  it("upgrades v2 to the same evidence-protection schema as a new ledger", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const dir = await mkdtemp(join(tmpdir(), "hitchlet-upgrade-v2-"));
+    dirs.push(dir);
+    const raw = new Database(join(dir, "hitchlet.sqlite"));
+    raw.exec(
+      await readFile(resolve("src/storage/migrations/001-initial.sql"), "utf8"),
+    );
+    raw.exec(
+      await readFile(
+        resolve("src/storage/migrations/002-session-credential-lineage.sql"),
+        "utf8",
+      ),
+    );
+    raw
+      .prepare(
+        "INSERT INTO events(aggregate_type,aggregate_id,aggregate_version,event_type,occurred_at_ms,payload_json) VALUES('installation','legacy',1,'legacy.event',1,'{}')",
+      )
+      .run();
+    raw.close();
+    const upgraded = await openStorage(dir);
+    opened.push(upgraded);
+    const { storage: fresh } = await fixture();
+    const schema =
+      "SELECT type,name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name";
+    expect(await upgraded.all(schema)).toEqual(await fresh.all(schema));
+    expect(
+      await upgraded.get(
+        "SELECT count(*) n FROM events WHERE aggregate_id='legacy'",
+      ),
+    ).toEqual({ n: 1n });
+    expect(await upgraded.get("PRAGMA user_version")).toEqual({
+      user_version: 4n,
+    });
+    expect(
+      (
+        await readFile(
+          resolve("dist/storage/migrations/003-validation-evidence.sql"),
+        )
+      ).equals(
+        await readFile(
+          resolve("src/storage/migrations/003-validation-evidence.sql"),
+        ),
+      ),
+    ).toBe(true);
   });
 });

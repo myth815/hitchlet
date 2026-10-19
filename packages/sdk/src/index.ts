@@ -20,8 +20,15 @@ import {
 } from "./transport.js";
 import { TicketCommands } from "./tickets.js";
 import { SessionCommands } from "./session.js";
+import { AdminCommands } from "./admin.js";
 
 export { ComputeClientError } from "./transport.js";
+export { AdminCommands } from "./admin.js";
+export type {
+  AdminImageAliasView,
+  AdminImageVersionSummary,
+  AdminValidationHistoryItem,
+} from "@hitchlet/contracts/admin";
 /** @deprecated Use ComputeClientError; retained as an alias for the original health-only SDK. */
 export { ComputeClientError as HitchletApiError } from "./transport.js";
 export type {
@@ -49,6 +56,7 @@ function validateRequest<T>(
 
 /** Consumer SDK entry point. Authentication is injected and never persisted by the SDK. */
 export class HitchletClient implements ComputeClient {
+  readonly admin: AdminCommands;
   readonly session: Pick<SessionCommands, "create" | "me" | "logout">;
   readonly tickets: TicketClient;
   readonly images: {
@@ -74,6 +82,7 @@ export class HitchletClient implements ComputeClient {
         ? { ...legacyOptions, fetch: optionsOrFetch }
         : optionsOrFetch;
     this.http = new HttpTransport(baseUrl, options);
+    this.admin = new AdminCommands(this.http);
     this.session = new SessionCommands(this.http);
     this.tickets = new TicketCommands(this.http);
     this.images = {

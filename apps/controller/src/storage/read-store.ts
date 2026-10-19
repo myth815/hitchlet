@@ -110,7 +110,7 @@ export class SQLiteReadStore {
   accessContext(ticketId: string, consumerId: string) {
     return this.storage.get<ReadRow>(
       `SELECT t.phase,t.request_json,l.id AS lease_id,l.generation,l.version AS lease_version,l.state AS lease_state,l.claimed_at_ms,l.expires_at_ms,
-      a.desired_state,a.ownership_json,
+      a.desired_state,a.ownership_json,a.actual_resources_json,a.access_secret_ref,
       (SELECT json_extract(o.intent_json,'$.executionMode') FROM operations o WHERE o.allocation_id=a.id AND o.kind='allocation.provision' ORDER BY o.created_at_ms DESC LIMIT 1) AS execution_mode,
       EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=t.network_profile_revision_id) AS network_revoked,
       EXISTS(SELECT 1 FROM ticket_storage_grants g JOIN profile_grant_revocations r ON r.storage_profile_revision_id=g.storage_profile_revision_id WHERE g.ticket_id=t.id) AS storage_revoked

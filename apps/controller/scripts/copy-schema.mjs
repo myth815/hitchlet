@@ -11,3 +11,13 @@ await copyFile(
   resolve(source, "002-session-credential-lineage.sql"),
   resolve(target, "002-session-credential-lineage.sql"),
 );
+
+await copyFile(
+  resolve(source, "003-validation-evidence.sql"),
+  resolve(target, "003-validation-evidence.sql"),
+);
+
+await copyFile(
+  resolve(source, "004-managed-resource-identities.sql"),
+  resolve(target, "004-managed-resource-identities.sql"),
+);

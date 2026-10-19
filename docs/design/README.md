@@ -572,6 +572,10 @@ Portainer/宿主管理身份从不发给消费者。控制面secret在本地加�
 - complete：确认manifest全清、未决create全查实、凭据撤销→释放Claim/Lease结束→released/Event。
 - validate/publish：管理员创建固定指纹的验证运行→预算/validation Allocation→执行与回收→确认cleanup complete及测试通过→发布事务核对当前指纹；任何失败都不能绕过回收。
 
+Docker 的每次原生 network、volume、container 创建，在 HTTP 请求之前把固定名称、请求摘要和 `unknown` 意图写入原 provision Operation 的 `result_json.createEffects`。同一未知意图不能重新发送；按完整 ownership、名称和冻结合同读回对象后才结算。控制器崩溃、连接超时和暂时的空 inventory 都不能证明远端创建已经结束。清理先收编迟到对象，未决意图存在时继续保留 Claim，不先删除其依赖。旧账本中已经尝试但没有这一日志的操作同样保守处理；没有可靠终结证据时进入人工核实，不能为了自动闭环猜测成功、重启 Docker 或释放容量。这里复用现有 Operation JSON，不增加独立任务框架。
+
+准备和 ready 实时核对原连接修订绑定的 Engine 与 Docker/Portainer 版本；发布前再执行实时 probe，并在原发布 CAS 内重核报告、能力、合同和依赖修订。版本变化阻止沿用旧验证报告，不阻止同一 Engine 上的安全回收。成功测试证据和完成后的验证报告由迁移约束保持不可变；测试通过而清理未完仍不能发布。
+
 SQL负责FK、枚举、非负、唯一一票实例等局部不变量；池额度SUM、依赖无环、资源归属一致、相互状态转换必须在应用事务中实现，并用真实SQLite测试。所有并发更新带实体version条件；0行更新先重读，不能当成功。数据库事务内禁止网络调用、VM启动、镜像下载或通知。
 
 Event本身是持久通知源；SSE从Event读取，不需要额外消息队列。v1不提供webhook；后续需要时再增加outbox delivery记录、签名和重试，不在状态事务内发HTTP。心跳覆盖最新值，重要状态变化才发事件。

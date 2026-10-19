@@ -1,3 +1,4 @@
+import { resourceManifest } from "../domain/resource-manifest.js";
 import { randomUUID } from "node:crypto";
 import {
   AcceptedAcquireRequestSchema,
@@ -7,22 +8,41 @@ import {
 import { StorageError, type Storage } from "../storage/index.js";
 import type {
   ExecutionPort,
+  Inspection,
   ProvisionPlan,
   OwnedResource,
   ReadyReceipt,
   NetworkDestination,
   NetworkDenyRule,
   StorageProtocol,
-  ResourceJournal,
 } from "../providers/port.js";
 import { createHash } from "node:crypto";
+import { ImageValidationService } from "./image-validation.js";
+import { ResourceContractSchema } from "@hitchlet/contracts/schemas";
+import { SQLiteValidationStore } from "../storage/validation-store.js";
 import { SQLiteOperationStore } from "../storage/operation-store.js";
 
 type Row = Record<string, string | number | bigint | null>;
+/** A controller owns this guard only for calls still executing in its own process.
+ * It is not persisted and is never evidence that a remote request has completed. */
+export class AllocationCreateCalls {
+  private readonly active = new Set<string>();
+  has(allocationId: string): boolean {
+    return this.active.has(allocationId);
+  }
+  enter(allocationId: string): void {
+    this.active.add(allocationId);
+  }
+  leave(allocationId: string): void {
+    this.active.delete(allocationId);
+  }
+}
 
-/** Persistent operation executor and restart reconciler for the explicit Simulator mode. */
+/** Shared durable executor for tenant and internal validation allocations. */
 export class OperationWorker {
   private readonly store: SQLiteOperationStore;
+  private readonly validations: SQLiteValidationStore;
+  private readonly createCalls: AllocationCreateCalls;
   constructor(
     private readonly options: {
       storage: Storage;
@@ -31,9 +51,14 @@ export class OperationWorker {
       controllerEpoch?: number;
       now?: () => number;
       id?: () => string;
+      createCalls?: AllocationCreateCalls;
     },
   ) {
     this.store = new SQLiteOperationStore(options.storage);
+    this.createCalls = options.createCalls ?? new AllocationCreateCalls();
+    this.validations = new SQLiteValidationStore(options.storage, () =>
+      this.now(),
+    );
   }
   private now(): number {
     return (this.options.now ?? Date.now)();
@@ -47,11 +72,178 @@ export class OperationWorker {
     let worked = 0;
     for (const row of rows)
       if (typeof row.id === "string" && (await this.run(row.id))) worked++;
+    worked += await this.reconcileIntegrityAudits();
     return worked;
+  }
+  /** Read-only Portainer integrity audits use the provision operation as their
+   * durable cursor. They never transition it out of succeeded or call create. */
+  private async reconcileIntegrityAudits(): Promise<number> {
+    const epoch = this.options.controllerEpoch ?? 1;
+    const due = await this.store.dueIntegrityAudits(this.now());
+    let worked = 0;
+    for (const candidate of due) {
+      if (typeof candidate.id !== "string") continue;
+      const token = (this.options.id ?? randomUUID)();
+      const op = await this.store.claimIntegrityAudit({
+        operationId: candidate.id,
+        operationVersion: Number(candidate.version),
+        token,
+        epoch,
+        now: this.now(),
+        intervalMs: 30_000,
+      });
+      if (!op) continue;
+      worked++;
+      const now = this.now();
+      const allocationId = stringField(val(op, "allocation_id"));
+      const ticketId = stringField(val(op, "ticket_id"));
+      const controlVersion = Number(op.control_version);
+      try {
+        const base = await this.plan(op, stringField(val(op, "id")));
+        const observationPlan: ProvisionPlan = {
+          ...base,
+          deadlineMs: now + 15_000,
+          executionPhase: "observe",
+        };
+        const inspection = await this.inspect(observationPlan);
+        let loss: string | undefined;
+        if (inspection.presence === "absent") loss = "RESOURCE_MISSING";
+        else if (inspection.presence === "present") {
+          if (inspection.integrity?.state === "lost")
+            loss = inspection.integrity.reason ?? "RESOURCE_INTEGRITY_LOST";
+          else if (inspection.integrity?.state !== "healthy")
+            await this.recordAuditUnknown(
+              op,
+              token,
+              allocationId,
+              ticketId,
+              controlVersion,
+              "integrity_evidence_incomplete",
+            );
+          else {
+            const expected = expectedManifest(op.actual_resources_json);
+            const journalRows = await this.store.integrityManifest(
+              allocationId,
+              Number(op.generation),
+            );
+            const journal = journalRows
+              .filter(
+                (item) =>
+                  item.ownership === "owned" &&
+                  item.observed_state === "present",
+              )
+              .map((item) => `${item.kind}:${item.id}`)
+              .sort();
+            if (
+              !expected ||
+              journalRows.some((item) => item.observed_state !== "present") ||
+              JSON.stringify(expected) !== JSON.stringify(journal)
+            ) {
+              await this.recordAuditUnknown(
+                op,
+                token,
+                allocationId,
+                ticketId,
+                controlVersion,
+                "persisted_resource_manifest_incomplete",
+              );
+              continue;
+            }
+            const actual = inspection.evidence.objects
+              .filter((item) => item.ownership === "owned")
+              .map((item) => `${item.kind}:${item.id}`)
+              .sort();
+            if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+              const expectedSet = new Set(expected);
+              const ownedOrphans = actual.filter(
+                (item) => !expectedSet.has(item),
+              );
+              loss = ownedOrphans.length
+                ? `RESOURCE_MANIFEST_DRIFT; ownedOrphans=${ownedOrphans.join(",")}`
+                : "RESOURCE_MANIFEST_DRIFT";
+            } else
+              await this.store.recordIntegrityAudit({
+                operationId: stringField(val(op, "id")),
+                allocationId,
+                ticketId,
+                token,
+                operationVersion: Number(op.version),
+                controlVersion,
+                epoch,
+                now: this.now(),
+                state: "healthy",
+              });
+          }
+        } else {
+          await this.recordAuditUnknown(
+            op,
+            token,
+            allocationId,
+            ticketId,
+            controlVersion,
+            inspection.reason,
+          );
+        }
+        if (loss) {
+          await this.store.terminateExpired({
+            id: ticketId,
+            phase: "ready",
+            version: Number(op.ticket_version),
+            reason: "resource_lost",
+            detail: loss,
+            cleanupId: (this.options.id ?? randomUUID)(),
+            requestHash: createHash("sha256")
+              .update(`${ticketId}:resource_lost:${loss}:${controlVersion}`)
+              .digest("hex"),
+            now: this.now(),
+            expectedControlVersion: controlVersion,
+            expectedEpoch: epoch,
+            auditOperationId: stringField(val(op, "id")),
+            auditToken: token,
+            auditOperationVersion: Number(op.version),
+          });
+        }
+      } catch {
+        await this.recordAuditUnknown(
+          op,
+          token,
+          allocationId,
+          ticketId,
+          controlVersion,
+          "integrity_observation_failed",
+        );
+      }
+    }
+    return worked;
+  }
+  private async recordAuditUnknown(
+    op: Row,
+    token: string,
+    allocationId: string,
+    ticketId: string,
+    controlVersion: number,
+    reason: string,
+  ): Promise<void> {
+    await this.store.recordIntegrityAudit({
+      operationId: stringField(val(op, "id")),
+      allocationId,
+      ticketId,
+      token,
+      operationVersion: Number(op.version),
+      controlVersion,
+      epoch: this.options.controllerEpoch ?? 1,
+      now: this.now(),
+      state: "unknown",
+      reason,
+    });
   }
   /** Run before scheduling on startup and periodically; deadlines are strict (equality is expired). */
   async reconcileBeforeScheduling(): Promise<number> {
+    await this.validations.expireDue(this.now());
     await this.expireDue();
+    await new ImageValidationService(this.validations, () =>
+      this.now(),
+    ).retryBlocked();
     return this.reconcile();
   }
   async expireDue(): Promise<number> {
@@ -112,18 +304,42 @@ export class OperationWorker {
     if (
       !op ||
       typeof op.allocation_id !== "string" ||
-      typeof op.ticket_id !== "string" ||
       typeof op.node_id !== "string"
     )
       return false;
+    const flightKey = `${this.options.installationId}:${op.allocation_id}`;
+    if (this.createCalls.has(flightKey)) {
+      await this.defer(op, token, "create_call_in_flight");
+      return true;
+    }
+    const trackFlight =
+      parseObject(op.intent_json).executionMode === "portainer";
+    if (op.kind === "allocation.provision" && trackFlight)
+      this.createCalls.enter(flightKey);
     try {
-      if (op.kind === "allocation.provision" && Number(op.attempt_count) >= 5)
-        await this.inspectExhaustedProvision(op, token);
-      else if (op.kind === "allocation.provision")
-        await this.provision(op, await this.plan(op, operationId), token);
-      else await this.cleanup(op, token);
-    } catch {
+      if (op.kind === "allocation.provision" && op.desired_state !== "present")
+        await this.defer(op, token, "allocation_terminated");
+      else if (
+        op.kind === "allocation.provision" &&
+        trackFlight &&
+        parseObject(op.result_json).createJournalVersion !== 1
+      )
+        await this.defer(op, token, "untracked_create_outcome_unknown");
+      else if (op.kind === "allocation.provision") {
+        const execute = async () => {
+          if (Number(op.attempt_count) >= 5)
+            await this.inspectExhaustedProvision(op, token);
+          else
+            await this.provision(op, await this.plan(op, operationId), token);
+        };
+        if (trackFlight) await this.withProvisionLease(op, token, execute);
+        else await execute();
+      } else await this.cleanup(op, token);
+    } catch (error) {
       await this.defer(op, token, "execution_error");
+    } finally {
+      if (op.kind === "allocation.provision" && trackFlight)
+        this.createCalls.leave(flightKey);
     }
     return true;
   }
@@ -131,14 +347,99 @@ export class OperationWorker {
   retryFailedOperation(operationId: string, reason: string): Promise<void> {
     return this.store.retryFailedOperation(operationId, reason, this.now());
   }
+  private async inspect(plan: ProvisionPlan): Promise<Inspection> {
+    const result = await this.options.execution.inspect(plan);
+    if (result.presence === "unknown") return result;
+    const evidence = result.evidence;
+    const expected = plan.identity;
+    const identityMatches = (identity: ProvisionPlan["identity"]) =>
+      identity.installationId === expected.installationId &&
+      identity.allocationId === expected.allocationId &&
+      identity.generation === expected.generation &&
+      identity.operationId === expected.operationId &&
+      identity.purpose === expected.purpose &&
+      identity.runtimeIdentityId === expected.runtimeIdentityId &&
+      identity.connectionRevisionId === expected.connectionRevisionId;
+    if (
+      evidence.completeness !== "complete" ||
+      !identityMatches(evidence.identity) ||
+      evidence.identity.controlVersion !== expected.controlVersion ||
+      evidence.runtime.runtimeIdentityId !== expected.runtimeIdentityId ||
+      evidence.runtime.connectionRevisionId !== expected.connectionRevisionId
+    )
+      return { presence: "unknown", reason: "inventory_incomplete" };
+    if (
+      result.presence === "present" &&
+      result.evidence.objects.some(
+        (item) =>
+          !identityMatches(item.identity) ||
+          item.contractHash !== plan.resolved.contractHash,
+      )
+    )
+      return { presence: "unknown", reason: "inventory_incomplete" };
+    return result;
+  }
+
+  /** Keep this controller's bounded lease alive during slow external readiness checks.
+   * Renewal cannot extend the original provision deadline or revive an expired owner. */
+  private async withProvisionLease(
+    op: Row,
+    token: string,
+    execute: () => Promise<void>,
+  ): Promise<void> {
+    const renew = () =>
+      this.store.assertProvisionActive(
+        String(op.id),
+        token,
+        Number(op.version),
+        this.now(),
+      );
+    await renew();
+    let pending: Promise<void> | undefined;
+    let failed: unknown;
+    const timer = setInterval(() => {
+      if (pending || failed) return;
+      pending = renew()
+        .catch((error: unknown) => {
+          failed = error;
+        })
+        .finally(() => {
+          pending = undefined;
+        });
+    }, 10_000);
+    timer.unref();
+    try {
+      await execute();
+    } finally {
+      clearInterval(timer);
+      await pending;
+    }
+  }
+
   private async inspectExhaustedProvision(
     op: Row,
     token: string,
   ): Promise<void> {
     const plan = await this.plan(op, stringField(val(op, "id")));
-    const inspection = await this.options.execution.inspect(plan);
-    if (inspection.presence === "present")
+    const inspection = await this.inspect(plan);
+    if (inspection.presence === "present") {
       await this.recordObjects(op, inspection.evidence.objects);
+      if (!(await this.store.unknownCreateEffects(String(op.allocation_id)))) {
+        // Exhaustion forbids another create call, but verified existing resources may still become ready.
+        await this.provision(op, plan, token, false);
+        return;
+      }
+    }
+    const subject = operationSubject(op);
+    if (subject.kind === "validation") {
+      await this.validations.terminate(
+        subject.validationId,
+        "execution_failed",
+        this.now(),
+      );
+      await this.defer(op, token, "validation_execution_failed");
+      return;
+    }
     await this.defer(
       op,
       token,
@@ -153,36 +454,84 @@ export class OperationWorker {
     op: Row,
     plan: ProvisionPlan,
     token: string,
+    allowCreate = true,
   ): Promise<void> {
     const now = this.now();
-    await this.store.markProvisioning(stringField(val(op, "ticket_id")), now);
-    if (op.desired_state !== "present" || Number(op.deadline_ms) <= now)
-      return this.defer(op, token);
-    let inspection = await this.options.execution.inspect(plan);
-    if (inspection.presence === "unknown") return this.defer(op, token);
-    const expectedObjects = 3 + plan.resolved.mounts.length;
+    const subject = operationSubject(op);
+    if (subject.kind === "tenant")
+      await this.store.markProvisioning(subject.ticketId, now);
+    else await this.validations.markRunning(subject.validationId, now);
     if (
-      inspection.presence === "absent" ||
-      (inspection.presence === "present" &&
-        inspection.evidence.objects.length < expectedObjects)
+      op.desired_state !== "present" ||
+      Number(op.control_version) !== Number(op.allocation_control_version) ||
+      Number(op.deadline_ms) <= now
+    )
+      return this.defer(op, token);
+    let inspection = await this.inspect(plan);
+    if (inspection.presence === "unknown") return this.defer(op, token);
+    if (
+      allowCreate &&
+      (inspection.presence === "absent" || inspection.presence === "present")
     ) {
       await this.options.execution.create(plan, {
+        beforeCreate: (effect) =>
+          this.store.beforeCreate({
+            operationId: String(op.id),
+            token,
+            operationVersion: Number(op.version),
+            effect,
+            now: this.now(),
+          }),
+        assertActive: () =>
+          this.store.assertProvisionActive(
+            String(op.id),
+            token,
+            Number(op.version),
+            this.now(),
+          ),
         recordCreated: (resource) => this.recordResource(op, resource),
       });
-      inspection = await this.options.execution.inspect(plan);
+      inspection = await this.inspect(plan);
     }
     if (
       inspection.presence !== "present" ||
-      inspection.evidence.objects.length !== expectedObjects
+      inspection.evidence.completeness !== "complete"
     )
       return this.defer(op, token);
     await this.recordObjects(op, inspection.evidence.objects);
+    if (await this.store.unknownCreateEffects(String(op.allocation_id)))
+      return this.defer(op, token, "create_effect_outcome_unknown");
+    if (parseObject(op.intent_json).executionMode === "portainer")
+      await this.store.assertProvisionActive(
+        String(op.id),
+        token,
+        Number(op.version),
+        this.now(),
+      );
     const receipt = await this.options.execution.ready(
       plan,
       inspection.evidence,
     );
+    if (parseObject(op.intent_json).executionMode === "portainer")
+      await this.store.assertProvisionActive(
+        String(op.id),
+        token,
+        Number(op.version),
+        this.now(),
+      );
     if (!validReceipt(plan, inspection.evidence.objects, receipt))
-      return this.defer(op, token, "simulator_ready_evidence_mismatch");
+      return this.defer(op, token, "ready_evidence_mismatch");
+    if (subject.kind === "validation") {
+      await this.validations.completeTest({
+        validationId: subject.validationId,
+        op,
+        token,
+        receipt,
+        objects: inspection.evidence.objects,
+        now: this.now(),
+      });
+      return;
+    }
     const ticket = await this.store.ticketForReady(
       stringField(val(op, "ticket_id")),
     );
@@ -207,6 +556,7 @@ export class OperationWorker {
       return this.defer(op, token);
     await this.store.completeReady({
       receipt,
+      executionMode: String(parseObject(op.intent_json).executionMode),
       starts,
       claimBy,
       expires,
@@ -240,9 +590,13 @@ export class OperationWorker {
         ...item.identity,
         referenceKey: item.referenceKey ?? null,
       }),
+      observedAtMs: this.now(),
       detailsJson: JSON.stringify({
-        simulator: true,
-        detachedOnly: item.ownership === "reference",
+        ...item.details,
+        contractHash: item.contractHash,
+        ...(item.details
+          ? {}
+          : { simulator: true, detachedOnly: item.ownership === "reference" }),
       }),
     });
     if (result.changes !== 1n)
@@ -262,15 +616,37 @@ export class OperationWorker {
       typeof row.content_digest !== "string"
     )
       throw new Error("Persisted provision inputs are incomplete");
-    const accepted = AcceptedAcquireRequestSchema.parse(
-      JSON.parse(row.request_json),
-    ) as unknown as AcceptedAcquireRequest;
+    const subject = operationSubject(op);
     const frozen = parseObject(row.accepted_contract_json);
+    const accepted =
+      subject.kind === "tenant"
+        ? (AcceptedAcquireRequestSchema.parse(
+            JSON.parse(row.request_json),
+          ) as unknown as AcceptedAcquireRequest)
+        : {
+            resources: ResourceContractSchema.parse(
+              frozen.resources,
+            ) as ResourceContract,
+            access: { protocol: "ssh" as const },
+          };
     const network = objectValue(frozen.network);
     const storage = Array.isArray(frozen.storage)
       ? frozen.storage.map(objectValue)
       : [];
     const resources: ResourceContract = accepted.resources;
+    const requirementsRow = parseObject(
+      stringField(val(row, "requirements_json")),
+    );
+    const requirements = objectValue(
+      requirementsRow.bootstrap ?? {
+        mechanism: "simulator",
+        contractVersion: "1",
+        identityReset: true,
+      },
+    );
+    const accessRecipe = objectValue(
+      parseObject(stringField(val(row, "access_recipe_json"))),
+    );
     const selectionHash = stringField(frozen.selectionHash);
     const mounts = storage.map((entry) => ({
       grantId: stringField(entry.grantId),
@@ -322,12 +698,16 @@ export class OperationWorker {
       .digest("hex")
       .slice(0, 32)}`;
     const plan: ProvisionPlan = {
+      deadlineMs: Number(op.deadline_ms),
+      ...(typeof row.frozen_config_json === "string"
+        ? { runtimeConfig: parseObject(row.frozen_config_json) }
+        : {}),
       identity: {
         installationId: this.options.installationId,
         allocationId: stringField(val(op, "allocation_id")),
         generation: Number(op.generation),
         operationId,
-        purpose: "tenant",
+        purpose: subject.kind,
         controlVersion: Number(op.control_version),
         runtimeIdentityId: row.runtime_identity_id,
         connectionRevisionId: binding,
@@ -349,6 +729,34 @@ export class OperationWorker {
         mounts,
       },
       accessProtocol: accepted.access.protocol,
+      bootstrap: {
+        mechanism: stringField(requirements.mechanism),
+        contractVersion: stringField(requirements.contractVersion),
+        identityReset: requiredTrue(requirements.identityReset),
+      },
+      access: {
+        accessProtocols: stringList(
+          accessRecipe.accessProtocols ?? [accepted.access.protocol],
+        ) as ("ssh" | "rdp")[],
+        ports: numberList(
+          accessRecipe.ports ?? [
+            accepted.access.protocol === "ssh" ? 22 : 3389,
+          ],
+        ),
+        account:
+          typeof accessRecipe.account === "string"
+            ? accessRecipe.account
+            : "simulator",
+        allowedSourceCidrs: stringList(accessRecipe.allowedSourceCidrs ?? []),
+        discovery:
+          typeof accessRecipe.discovery === "string"
+            ? accessRecipe.discovery
+            : "simulator",
+        readiness:
+          typeof accessRecipe.readiness === "string"
+            ? accessRecipe.readiness
+            : "simulator",
+      },
     };
     const boundId = row.resolved_provision_contract_id;
     if (typeof boundId === "string") {
@@ -389,14 +797,34 @@ export class OperationWorker {
       Number(createOperation.locked_until_ms) > this.now()
     )
       return this.defer(op, token, "create_worker_lease_active");
+    let cleanupEvidence: Record<string, unknown> = {
+      verifiedAbsentAtMs: this.now(),
+      noExternalCreate: true,
+    };
     const noExternalCreate =
       (createOperation.state === "cancelled" &&
         Number(createOperation.attempt_count) === 0) ||
       (typeof op.resolved_provision_contract_id !== "string" &&
         createOperation.state !== "succeeded");
     if (!noExternalCreate) {
-      const createPlan = await this.plan(op, stringField(createOperation.id));
-      let createInspection = await this.options.execution.inspect(createPlan);
+      const baseCreatePlan = await this.plan(
+        op,
+        stringField(createOperation.id),
+      );
+      const journaled = await this.store.cleanupResources(
+        stringField(val(op, "allocation_id")),
+        Number(op.generation),
+      );
+      const journaledObjects = journaled.map((row) =>
+        journaledOwnedResource(baseCreatePlan, row),
+      );
+      const createPlan: ProvisionPlan = {
+        ...baseCreatePlan,
+        deadlineMs: this.now() + 30_000,
+        executionPhase: "cleanup" as const,
+        cleanupResources: journaledObjects,
+      };
+      let createInspection = await this.inspect(createPlan);
       if (
         createInspection.presence === "unknown" &&
         createInspection.reason === "runtime_identity_mismatch"
@@ -404,25 +832,67 @@ export class OperationWorker {
         return this.defer(op, token, "create_runtime_unknown");
       if (createInspection.presence === "unknown") {
         await this.options.execution.revokeStop(createPlan);
-        createInspection = await this.options.execution.inspect(createPlan);
+        createInspection = await this.inspect(createPlan);
       }
       if (createInspection.presence === "unknown")
         return this.defer(op, token, "create_inventory_unknown");
       if (createInspection.presence === "present")
         await this.recordObjects(op, createInspection.evidence.objects);
-      await this.options.execution.revokeStop(createPlan);
-      if (createInspection.presence === "present") {
-        for (const item of createInspection.evidence.objects)
-          await this.options.execution.destroy(createPlan, item);
+      if (await this.store.unknownCreateEffects(String(op.allocation_id)))
+        return this.defer(op, token, "create_effect_outcome_unknown");
+      const knownObjects =
+        createInspection.presence === "present"
+          ? [...createInspection.evidence.objects]
+          : [];
+      for (const row of journaled) {
+        const resource = journaledOwnedResource(createPlan, row);
+        const index = knownObjects.findIndex(
+          (item) => item.id === resource.id && item.kind === resource.kind,
+        );
+        if (index < 0) knownObjects.push(resource);
+        else
+          knownObjects[index] = {
+            ...knownObjects[index]!,
+            details: { ...knownObjects[index]!.details, ...resource.details },
+          };
       }
-      const after = await this.options.execution.inspect(createPlan);
+      const cleanupPlan: ProvisionPlan = {
+        ...createPlan,
+        cleanupResources: knownObjects,
+      };
+      await this.options.execution.revokeStop(cleanupPlan);
+      const rank = (item: OwnedResource) =>
+        item.kind === "container" ? 0 : item.kind === "network_policy" ? 2 : 1;
+      knownObjects.sort((a, b) => rank(a) - rank(b));
+      const destructionReceipts = [];
+      for (const item of knownObjects) {
+        const receipt = await this.options.execution.destroy(cleanupPlan, item);
+        if (receipt) destructionReceipts.push(receipt);
+      }
+      const after = await this.inspect(cleanupPlan);
       if (after.presence !== "absent") return this.defer(op, token);
+      cleanupEvidence = {
+        verifiedAbsentAtMs: this.now(),
+        inventory: after.evidence,
+        resources: knownObjects.map((item) => ({
+          id: item.id,
+          kind: item.kind,
+          ownership: item.ownership,
+        })),
+        destructionReceipts,
+      };
     }
+    if (await this.store.unknownCreateEffects(String(op.allocation_id)))
+      return this.defer(op, token, "create_effect_outcome_unknown");
     const now = this.now();
     await this.store.finishCleanup({
+      cleanupEvidence,
       operationId: stringField(val(op, "id")),
       allocationId: stringField(val(op, "allocation_id")),
-      ticketId: stringField(val(op, "ticket_id")),
+      ticketId: typeof op.ticket_id === "string" ? op.ticket_id : null,
+      ...(typeof op.image_validation_id === "string"
+        ? { validationId: op.image_validation_id }
+        : {}),
       token,
       operationVersion: Number(op.version),
       controlVersion: Number(op.control_version),
@@ -439,7 +909,10 @@ export class OperationWorker {
     await this.store.deferOperation({
       operationId: stringField(val(op, "id")),
       allocationId: stringField(val(op, "allocation_id")),
-      ticketId: stringField(val(op, "ticket_id")),
+      ticketId: typeof op.ticket_id === "string" ? op.ticket_id : null,
+      ...(typeof op.image_validation_id === "string"
+        ? { validationId: op.image_validation_id }
+        : {}),
       controlVersion: Number(op.control_version),
       token,
       operationVersion: Number(op.version),
@@ -450,6 +923,16 @@ export class OperationWorker {
   }
 }
 
+type OperationSubject =
+  | { kind: "tenant"; ticketId: string }
+  | { kind: "validation"; validationId: string };
+function operationSubject(op: Row): OperationSubject {
+  if (op.purpose === "tenant" && typeof op.ticket_id === "string")
+    return { kind: "tenant", ticketId: op.ticket_id };
+  if (op.purpose === "validation" && typeof op.image_validation_id === "string")
+    return { kind: "validation", validationId: op.image_validation_id };
+  throw new Error("Operation allocation subject is invalid");
+}
 function parseObject(value: unknown): Record<string, unknown> {
   if (typeof value !== "string") throw new Error("Invalid persisted contract");
   const parsed: unknown = JSON.parse(value);
@@ -474,6 +957,11 @@ function stringList(value: unknown): string[] {
   if (!Array.isArray(value) || value.some((item) => typeof item !== "string"))
     throw new Error("Persisted string list is invalid");
   return value as string[];
+}
+function numberList(value: unknown): number[] {
+  return Array.isArray(value) && value.every(Number.isSafeInteger)
+    ? (value as number[])
+    : [];
 }
 function parseEgress(value: unknown): NetworkDestination[] {
   if (!Array.isArray(value))
@@ -555,6 +1043,29 @@ function networkMode(value: unknown): "isolated_bridge" {
     throw new Error("Persisted network mode is invalid");
   return value;
 }
+function expectedManifest(value: unknown): string[] | undefined {
+  if (typeof value !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))
+      return undefined;
+    const objects = (parsed as Record<string, unknown>).objects;
+    if (!Array.isArray(objects)) return undefined;
+    const result: string[] = [];
+    for (const item of objects) {
+      if (typeof item !== "object" || item === null || Array.isArray(item))
+        return undefined;
+      const resource = item as Record<string, unknown>;
+      if (resource.ownership !== "owned") continue;
+      if (typeof resource.id !== "string" || typeof resource.kind !== "string")
+        return undefined;
+      result.push(`${resource.kind}:${resource.id}`);
+    }
+    return result.sort();
+  } catch {
+    return undefined;
+  }
+}
 function requiredTrue(value: unknown): true {
   if (value !== true)
     throw new Error("Persisted verification requirement is missing");
@@ -576,6 +1087,9 @@ function validReceipt(
     receipt.bootstrapComplete === true &&
     receipt.offlineLeaseEnforcement === "unsupported" &&
     receipt.identity.installationId === identity.installationId &&
+    receipt.identity.purpose === identity.purpose &&
+    receipt.manifestId === resourceManifest(plan, objects).manifestId &&
+    receipt.manifestHash === resourceManifest(plan, objects).manifestHash &&
     receipt.identity.allocationId === identity.allocationId &&
     receipt.identity.generation === identity.generation &&
     receipt.identity.operationId === identity.operationId &&
@@ -592,8 +1106,11 @@ function validReceipt(
       plan.resources.limit.cpuMillis &&
     receipt.effectiveResources.limits.memoryMiB ===
       plan.resources.limit.memoryMiB &&
-    receipt.effectiveResources.limits.scratchMiB ===
-      plan.resources.limit.scratchMiB &&
+    (receipt.effectiveResources.scratchEnforcement === "best_effort"
+      ? receipt.effectiveResources.limits.scratchMiB <=
+        plan.resources.limit.scratchMiB
+      : receipt.effectiveResources.limits.scratchMiB ===
+        plan.resources.limit.scratchMiB) &&
     receipt.effectiveResources.cpuEnforcement === "hard" &&
     receipt.effectiveResources.memoryEnforcement === "hard" &&
     receipt.effectiveResources.scratchEnforcement ===
@@ -602,9 +1119,57 @@ function validReceipt(
         : "best_effort") &&
     receipt.effectiveResources.acceleratorAssignments.length ===
       plan.resources.accelerators.length &&
+    ids.length > 0 &&
+    new Set(ids).size === ids.length &&
     receipt.objectIds.length === ids.length &&
     receipt.objectIds.every((id, index) => id === ids[index])
   );
+}
+function journaledOwnedResource(plan: ProvisionPlan, row: Row): OwnedResource {
+  const id = stringField(val(row, "id"));
+  const kind = stringField(val(row, "kind"));
+  if (
+    ![
+      "container",
+      "network_policy",
+      "endpoint",
+      "storage_reference",
+      "volume",
+    ].includes(kind)
+  )
+    throw new Error("Managed resource journal contains an unsupported kind");
+  const ownershipJson = parseObject(stringField(val(row, "ownership_json")));
+  const identity = ownershipJson as unknown as ProvisionPlan["identity"];
+  if (
+    identity.installationId !== plan.identity.installationId ||
+    identity.runtimeIdentityId !== plan.identity.runtimeIdentityId ||
+    identity.connectionRevisionId !== plan.identity.connectionRevisionId ||
+    identity.allocationId !== plan.identity.allocationId ||
+    identity.generation !== plan.identity.generation ||
+    identity.purpose !== plan.identity.purpose
+  )
+    throw new Error(
+      "Managed resource journal owner does not match the frozen Operation",
+    );
+  const details = parseObject(stringField(val(row, "details_json")));
+  return {
+    id,
+    kind: kind as OwnedResource["kind"],
+    ownership: "owned",
+    ...(typeof ownershipJson.referenceKey === "string"
+      ? { referenceKey: ownershipJson.referenceKey }
+      : {}),
+    details,
+    identity,
+    contractHash: plan.resolved.contractHash,
+    evidence: {
+      artifactDigest: plan.artifact.digest,
+      resourcesHash: hash(plan.resources),
+      networkHash: hash(plan.resolved.network),
+      mountsHash: hash(plan.resolved.mounts),
+      accessProtocol: plan.accessProtocol,
+    },
+  };
 }
 function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");

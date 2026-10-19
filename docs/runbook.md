@@ -1,8 +1,8 @@
-# M0 local Simulator runbook
+# Local operation and Docker integration runbook
 
 ## Real installation bootstrap and Portainer credential handling
 
-`pnpm --filter @hitchlet/controller init:admin` bootstraps only the installation identity and one administrator credential in an empty data directory. Capture the one-time `hcl_...` output in a password manager. It does not seed a Simulator, runtime identity, node, capability, or network baseline. A non-empty database is rejected.
+`pnpm --filter @hitchlet/controller init:admin` bootstraps only the installation identity and one administrator credential in an empty data directory. Capture the one-time `hcl_...` output in a password manager. It creates an explicit empty platform management-deny baseline, but does not seed a Simulator, runtime identity, node, or capability. Read the installation ID, controller epoch and current baseline from the full-admin, no-store `GET /v1/admin/installation` endpoint. The empty baseline is not proof that management destinations have been inventoried. A non-empty database is rejected.
 
 Create a separate 32-byte master-key file on the controller host, protect it from other users, and back it up separately from the SQLite directory. For example, on Linux:
 
@@ -21,7 +21,7 @@ unset PORTAINER_API_KEY
 
 The command prints a version reference. Pass only that reference to the management API; the controller resolves the encrypted value locally. The API response and SQLite ledger never contain the key. HTTPS verifies certificates by default. For a private CA, configure the Node runtime's `NODE_EXTRA_CA_CERTS` with the CA file; do not disable certificate verification. Portainer endpoint URLs must be origin-root URLs with no path, query, or fragment because Portainer's environment proxy routes are rooted at `/api`; explicitly configure a reverse proxy at that root if needed. Plain HTTP requires the explicit `PORTAINER_ALLOW_LOOPBACK_HTTP=true` development setting and a loopback URL. The master key is not recoverable from the SQLite backup.
 
-## D10/D11a management workflow
+## Portainer registration workflow
 
 Use a separate empty installation for real registration. Start the built controller with its `DATA_DIR`, `HITCHLET_SECRET_KEY_FILE`, and `EXECUTION_MODE=disabled`. Authenticate management requests with the full administrator bearer, or an administrator session with CSRF on writes. Restricted administrator credentials cannot manage resources. `GET /v1/openapi.json` describes the request and response schemas.
 
@@ -31,9 +31,23 @@ Use a separate empty installation for real registration. Start the built control
 4. Create authorized network/storage profiles at `/v1/network-profiles` and `/v1/storage-profiles`; create immutable subsequent revisions at `/{profileId}/revisions` with `If-Match`. New current revisions do not rewrite existing frozen contracts. Storage profiles declare a fixed `sourceRef`, `allowedSubpaths`, `allowedModes`, protocol, and optional secret version; consumers cannot submit arbitrary host mount options.
 5. `POST /v1/images` creates a logical image and its first draft. Add subsequent versions at `/v1/images/{imageId}/versions` and artifacts at `/v1/image-versions/{versionId}/artifacts`. Read drafts through `/v1/admin/image-versions/{versionId}`. Consumer image/version routes keep their existing published-only DTOs. A pinned digest/platform declaration is not manifest verification or publication.
 6. `POST /v1/image-versions/{versionId}/validate` accepts the explicit image artifact, node, network profile, storage requests, resource contract, and bounded deadline. It freezes the selection and uses the shared capacity ledger, without a consumer Ticket, Lease, or access endpoint. Missing verified capabilities return a persisted blocked run, not running/success. Read `/v1/image-validations/{validationId}`.
-7. Node `/image-cache/prewarm` and `/image-cache/gc` routes only persist exact-artifact plans in this batch. Repeating the same action reuses its active operation; an opposite active action returns409. GC excludes pinned/referenced artifacts and rechecks in its transaction. Actual pull/inspect/delete and another reference check at execution are required in batch5; `queued` or `unknown` never means a ready cache.
+7. Node `/image-cache/prewarm` and `/image-cache/gc` routes persist exact-artifact operations. Repeating the same action reuses its active operation; an opposite active action returns409. Read the safe receipt at `/v1/nodes/{nodeId}/image-cache/operations/{operationId}`. In Portainer execution mode, an already-present image can be adopted only after registry manifest, platform and local digest verification. GC rechecks pins, allocations and validation references before exact-image deletion; it never runs Docker prune. New pulls remain blocked with `capacity_unverified` until verified image-store capacity is supplied by the later Host/storage work. `queued`, `unknown` or `evicting` never means ready or deleted.
 
-No real allocation executor or publishing endpoint is enabled in this batch. Do not enable a node by editing SQLite or reuse the Simulator as proof of Docker isolation. The next batch adds real network enforcement and the validation/create/cleanup/publish loop in a dedicated experimental environment. Hyper-V, Tart, WOL, and smart-plug actions remain outside these registration steps.
+Do not enable a node by editing SQLite or reuse the Simulator as proof of Docker isolation. The Docker implementation below is still undergoing batch5 acceptance; its presence does not mean M1 or M2 has been released. Hyper-V, Tart, WOL, and smart-plug actions remain outside these steps.
+
+## Experimental Docker validation and renting
+
+Use an isolated Linux Engine. Follow the [Runtime Agent deployment instructions](../apps/runtime-agent/README.md) and the [Node SSH image recipe](../docker/node-ssh-v1/Dockerfile). The controller and Agent must agree on installation, runtime identity, native Engine and Agent identities; keep Agent credentials in the versioned secret store and journal data on persistent storage.
+
+While the Node is disabled, configure `/v1/nodes/{nodeId}/runtime-config` with its current `If-Match` version. Supply the access host, allocation CIDR base, actual userland-proxy mode, Agent endpoint and secret version references, and explicit management-deny rules/baseline. The current schema is available in OpenAPI; the runtime profile is not a consumer-supplied shell or mount template.
+
+Before admitting the Node, collect actual resource-limit, INPUT/FORWARD, IPv6, SSH-bootstrap and cleanup-recovery evidence for the exact Engine and network profile revisions. Submit the bounded manual report at `/v1/nodes/{nodeId}/capability-attestations` with `If-Match`. This temporary constant-online/manual-inventory mode expires after one hour; live observations do not extend that capability expiry. It does not establish human absence, safe power control, persistent storage or strict offline lease enforcement. Unsupported hard requirements are rejected.
+
+Restart with `EXECUTION_MODE=portainer` and the same control directory/master key. Schedule the draft validation from the minimal administrator GUI or the validation API. Inspect both test outcome and cleanup status. Only a successful run with completed cleanup and its immutable report can support publication; a passing test whose resources are still being reclaimed is insufficient. Cancel through `/v1/image-validations/{validationId}/cancel` and allow the same worker to finish reclamation. An unknown result retains its capacity Claim until the owned native resources and remote effects are resolved.
+
+Publish with `POST /v1/image-versions/{versionId}/publish` using `expectedEntityVersion`, then move the desired image alias using its own expected version. The server rechecks every required artifact, report, cleanup result, frozen contract and live runtime fingerprint. Consumers can then use the normal Ticket API/SDK: acquire, wait ready, claim, request access, renew and release. SSH material is per allocation and returned only through the authorized access endpoint. Release acceptance is not proof of cleanup: wait until released before considering capacity reusable.
+
+The administrator GUI currently covers Node status, image versions, explicit validation selection/history, cleanup evidence, publication and alias changes. Full credential/profile/Node configuration forms, backup/restore and final installation acceptance remain in later batches. See [the implementation evidence](IMPLEMENTATION.md) for the exact accepted scope.
 
 This runbook starts the controller against an explicitly initialized local
 Simulator. It does not configure Docker, Portainer, VM isolation, host power,

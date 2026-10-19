@@ -37,11 +37,18 @@ import { AccessService } from "./application/access.js";
 import { ApplicationError } from "./application/errors.js";
 import { AdminService } from "./application/admin.js";
 import {
+  ImageAliasNameSchema,
+  ImagePublishRequestSchema,
+  ImagePublishReceiptSchema,
+  ImageAliasRequestSchema,
+  ImageAliasReceiptSchema,
   PortainerConnectionInputSchema,
   ConnectionActivationSchema,
   ConnectionActivationReceiptSchema,
   MachineInputSchema,
   NodeInputSchema,
+  NodeRuntimeConfigSchema,
+  NodeCapabilityAttestationSchema,
   NetworkProfileInputSchema,
   NetworkProfileRevisionSchema,
   StorageProfileInputSchema,
@@ -53,8 +60,13 @@ import {
   CacheArtifactSchema,
   ProviderConnectionViewSchema,
   NodeViewSchema,
+  AdminInstallationViewSchema,
   AdminProfileViewSchema,
   AdminValidationViewSchema,
+  AdminImageVersionSummarySchema,
+  AdminValidationHistoryItemSchema,
+  AdminImageAliasViewSchema,
+  AdminCacheOperationReceiptSchema,
   ProviderOperationReceiptSchema,
   MachineReceiptSchema,
   NodeReceiptSchema,
@@ -175,7 +187,11 @@ export async function buildApp(
     const queries = new TicketQueries(runtime.storage);
     const ticketCommands = new TicketCommandService(runtime.storage, queries);
     const leases = new LeaseService(runtime.storage);
-    const access = new AccessService(runtime.storage);
+    const access = new AccessService(
+      runtime.storage,
+      Date.now,
+      runtime.secrets,
+    );
     const admin = new AdminService(
       runtime.storage,
       probePortainer,
@@ -199,6 +215,13 @@ export async function buildApp(
         throw new AuthFailure("forbidden");
       return actor;
     };
+    app.get("/v1/admin/installation", async (request, reply) => {
+      await requireAdmin(request);
+      const installation = await admin.getInstallation();
+      if (!installation) throw new ApplicationError("not_found");
+      reply.header("Cache-Control", "no-store");
+      return AdminInstallationViewSchema.parse(installation);
+    });
     app.post("/v1/provider-connections", async (request, reply) => {
       await requireAdmin(request, true);
       const body = parseInput(PortainerConnectionInputSchema, request.body);
@@ -321,6 +344,39 @@ export async function buildApp(
         await admin.listConnections(),
       );
     });
+    app.put("/v1/nodes/:nodeId/runtime-config", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      const body = parseInput(NodeRuntimeConfigSchema, request.body);
+      const result = await admin.configureNodeRuntime({
+        nodeId: uuidParam(request.params, "nodeId"),
+        expectedVersion: ifMatchVersion(request.headers["if-match"]),
+        config: body,
+        operatorId: actor.consumerId,
+        requestId: request.id,
+      });
+      return reply.code(200).header("ETag", `"${result.version}"`).send(result);
+    });
+    app.post(
+      "/v1/nodes/:nodeId/capability-attestations",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        const body = parseInput(NodeCapabilityAttestationSchema, request.body);
+        const result = await admin.attestNodeCapabilities({
+          nodeId: uuidParam(request.params, "nodeId"),
+          expectedVersion: ifMatchVersion(request.headers["if-match"]),
+          ...body,
+          engineId: body.expectedEngineId,
+          dockerVersion: body.expectedDockerVersion,
+          portainerVersion: body.expectedPortainerVersion,
+          operatorId: actor.consumerId,
+          requestId: request.id,
+        });
+        return reply
+          .code(200)
+          .header("ETag", `"${result.version}"`)
+          .send(result);
+      },
+    );
     app.get("/v1/nodes", async (request) => {
       await requireAdmin(request);
       return NodeViewSchema.array().parse(await admin.listNodes());
@@ -445,6 +501,47 @@ export async function buildApp(
               await admin.addDraftArtifact(request.params.versionId, body),
             ),
           );
+      },
+    );
+    app.post<{ Params: { versionId: string } }>(
+      "/v1/image-versions/:versionId/publish",
+      async (request) => {
+        await requireAdmin(request, true);
+        const body = parseInput(ImagePublishRequestSchema, request.body);
+        return ImagePublishReceiptSchema.parse(
+          await admin.publishVersion(
+            request.params.versionId,
+            body.expectedEntityVersion,
+          ),
+        );
+      },
+    );
+    app.put<{ Params: { imageId: string; alias: string } }>(
+      "/v1/images/:imageId/aliases/:alias",
+      async (request) => {
+        await requireAdmin(request, true);
+        const body = parseInput(ImageAliasRequestSchema, request.body);
+        const alias = parseInput(ImageAliasNameSchema, request.params.alias);
+        return ImageAliasReceiptSchema.parse(
+          await admin.moveImageAlias(
+            request.params.imageId,
+            alias,
+            body.versionId,
+            body.expectedVersion,
+          ),
+        );
+      },
+    );
+    app.post<{ Params: { validationId: string } }>(
+      "/v1/image-validations/:validationId/cancel",
+      async (request) => {
+        await requireAdmin(request, true);
+        if (!(await admin.getValidation(request.params.validationId)))
+          throw new ApplicationError("not_found");
+        await admin.cancelValidation(request.params.validationId);
+        return AdminValidationViewSchema.parse(
+          await admin.getValidation(request.params.validationId),
+        );
       },
     );
     app.get<{ Params: { validationId: string } }>(
@@ -803,7 +900,10 @@ export async function buildApp(
         const actor = await identify(request, true);
         if (!actor.scopes.includes("tickets:write") || actor.role === "viewer")
           return reply.code(403).send(apiError(request.id, "forbidden", false));
-        if (config.EXECUTION_MODE !== "simulator")
+        if (
+          config.EXECUTION_MODE !== "simulator" &&
+          config.EXECUTION_MODE !== "portainer"
+        )
           return reply
             .code(503)
             .send(apiError(request.id, "access_unavailable", true));
@@ -861,6 +961,48 @@ export async function buildApp(
         const draft = await admin.getDraftVersion(request.params.versionId);
         if (!draft) throw new ApplicationError("not_found");
         return DraftVersionViewSchema.parse(draft);
+      },
+    );
+    app.get("/v1/admin/image-versions", async (request, reply) => {
+      await requireAdmin(request);
+      reply.header("Cache-Control", "no-store");
+      return z
+        .array(AdminImageVersionSummarySchema)
+        .parse(await admin.listImageVersions());
+    });
+    app.get<{ Params: { versionId: string } }>(
+      "/v1/admin/image-versions/:versionId/validations",
+      async (request, reply) => {
+        await requireAdmin(request);
+        const items = await admin.listValidationHistory(
+          request.params.versionId,
+        );
+        if (!items) throw new ApplicationError("not_found");
+        reply.header("Cache-Control", "no-store");
+        return z.array(AdminValidationHistoryItemSchema).parse(items);
+      },
+    );
+    app.get<{ Params: { imageId: string } }>(
+      "/v1/admin/images/:imageId/aliases",
+      async (request, reply) => {
+        await requireAdmin(request);
+        const items = await admin.listImageAliases(request.params.imageId);
+        if (!items) throw new ApplicationError("not_found");
+        reply.header("Cache-Control", "no-store");
+        return z.array(AdminImageAliasViewSchema).parse(items);
+      },
+    );
+    app.get<{ Params: { nodeId: string; operationId: string } }>(
+      "/v1/nodes/:nodeId/image-cache/operations/:operationId",
+      async (request, reply) => {
+        await requireAdmin(request);
+        const receipt = await admin.cacheOperationReceipt(
+          uuidParam(request.params, "nodeId"),
+          uuidParam(request.params, "operationId"),
+        );
+        if (!receipt) throw new ApplicationError("not_found");
+        reply.header("Cache-Control", "no-store");
+        return AdminCacheOperationReceiptSchema.parse(receipt);
       },
     );
     app.get<{ Params: { versionId: string } }>(
@@ -1218,4 +1360,18 @@ function ifMatchVersion(value: string | string[] | undefined): number {
   if (!Number.isSafeInteger(version) || version < 1)
     throw new RangeError("If-Match entity version is invalid");
   return version;
+}
+function uuidParam(value: unknown, key: string): string {
+  const candidate =
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)[key]
+      : undefined;
+  if (
+    typeof candidate !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+      candidate,
+    )
+  )
+    throw new ApplicationError("invalid_request");
+  return candidate;
 }

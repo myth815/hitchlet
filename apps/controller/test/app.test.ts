@@ -11,6 +11,31 @@ afterEach(async () => {
   temporaryDirectory = undefined;
 });
 describe("controller app", () => {
+  it("serves a schema-valid healthy response when Portainer execution is enabled", async () => {
+    temporaryDirectory = await mkdtemp(
+      path.join(os.tmpdir(), "hitchlet-portainer-health-"),
+    );
+    const app = await buildApp(
+      loadConfig({
+        DATA_DIR: temporaryDirectory,
+        EXECUTION_MODE: "portainer",
+        HITCHLET_SECRET_KEY_FILE: path.join(temporaryDirectory, "master.key"),
+      }),
+    );
+    try {
+      const response = await app.inject({ method: "GET", url: "/healthz" });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toEqual({
+        status: "ok",
+        stage: "D05",
+        executionMode: "portainer",
+        recoveryState: "ready",
+      });
+    } finally {
+      await app.close();
+    }
+  });
+
   it("serves health, static assets, SPA routes, and preserves API 404s", async () => {
     temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), "hitchlet-"));
     await mkdir(path.join(temporaryDirectory, "assets"));

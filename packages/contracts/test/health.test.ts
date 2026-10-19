@@ -17,6 +17,16 @@ describe("health response contract", () => {
       recoveryState: "ready",
     });
   });
+  it("accepts Portainer execution mode in the shared health response", () => {
+    expect(
+      HealthResponseSchema.parse({
+        status: "ok",
+        stage: "D05",
+        executionMode: "portainer",
+        recoveryState: "ready",
+      }).executionMode,
+    ).toBe("portainer");
+  });
   it("rejects unknown or invalid health data", () => {
     expect(
       HealthResponseSchema.safeParse({

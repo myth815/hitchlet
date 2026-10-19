@@ -1,11 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { z } from "zod";
-import {
-  safeMountPath,
-  safeRelativePath,
-  type Row,
-} from "../storage/admin-store-utils.js";
+import { hash } from "../storage/admin-store-utils.js";
 import { SQLiteValidationStore } from "../storage/validation-store.js";
 
 const JsonObject = z.record(z.string(), z.unknown());
@@ -29,9 +25,40 @@ export class ImageValidationService {
   async schedule(
     input: ImageValidationRequest & { versionId: string; requestedBy: string },
   ) {
+    const receipt = await this.scheduleInternal(input);
+    if (!receipt)
+      throw new Error("Initial validation scheduling produced no receipt");
+    return receipt;
+  }
+
+  private async scheduleInternal(
+    input: ImageValidationRequest & { versionId: string; requestedBy: string },
+    retry?: {
+      id: string;
+      contract: Record<string, unknown>;
+      deadlineMs: number;
+    },
+  ) {
+    if (input.storage.length > 0)
+      throw new RangeError(
+        "Persistent validation mounts are unsupported until source evidence is available",
+      );
     const context = await this.store.loadContext(input);
-    const { consumer, network, storageProfiles, target } = context;
-    if (!consumer || consumer.status !== "active")
+    const { consumer, target, deny } = context;
+    let network = context.network;
+    if (retry) {
+      if (retry.deadlineMs <= this.now()) return;
+      network = await this.store.frozenNetwork(
+        String(retry.contract.networkRevisionId),
+      );
+      if (
+        !target ||
+        target.runtime_identity_id !== retry.contract.runtimeIdentityId ||
+        target.connection_revision_id !== retry.contract.connectionRevisionId
+      )
+        return;
+    }
+    if (!consumer || consumer.status !== "active" || consumer.role !== "admin")
       throw new RangeError("Administrator identity is unavailable");
     if (
       !network ||
@@ -43,6 +70,8 @@ export class ImageValidationService {
       throw new RangeError(
         "No registered node matches this artifact and connection",
       );
+    if (!deny)
+      throw new RangeError("Platform network deny revision is unavailable");
     const authorization = object(
       consumer.authorization_json,
       "consumer authorization",
@@ -50,6 +79,8 @@ export class ImageValidationService {
     const permitted = (key: string, id: string) =>
       authorization[key] === "all" ||
       stringArray(authorization[key]).includes(id);
+    if (!permitted("nodeIds", String(target.node_id)))
+      throw new RangeError("Node is not authorized for validation");
     if (!permitted("imageIds", String(target.image_id)))
       throw new RangeError("Image is not authorized for validation");
     if (!permitted("networkProfileIds", input.networkProfileId))
@@ -62,60 +93,7 @@ export class ImageValidationService {
     const nodeAccess = stringArray(caps.supportedAccess);
     const accessProtocols = stringArray(recipe.accessProtocols);
     const networkPolicy = object(network.policy_json, "network policy");
-    const bindings = [];
-    for (const request of input.storage) {
-      if (!permitted("storageProfileIds", request.storageProfileId))
-        throw new RangeError(
-          "Storage profile is not authorized for validation",
-        );
-      if (
-        !safeRelativePath(request.authorizedSubpath) ||
-        !safeMountPath(request.mountPath)
-      )
-        throw new RangeError("Invalid validation storage path");
-      const profile = storageProfiles.get(request.storageProfileId);
-      if (
-        !profile ||
-        profile.status !== "active" ||
-        profile.current_revision_id === null
-      )
-        throw new RangeError(
-          "Storage profile has no active immutable revision",
-        );
-      const config = object(
-        profile.config_json,
-        "storage profile configuration",
-      );
-      const allowedPaths = stringArray(config.allowedSubpaths),
-        allowedModes = stringArray(config.allowedModes);
-      if (
-        !allowedModes.includes(request.mode) ||
-        !allowedPaths.some(
-          (prefix) =>
-            request.authorizedSubpath === prefix ||
-            request.authorizedSubpath.startsWith(
-              `${prefix.replace(/\/$/, "")}/`,
-            ),
-        )
-      )
-        throw new RangeError(
-          "Validation storage request exceeds the frozen profile authorization",
-        );
-      bindings.push({
-        storageProfileId: request.storageProfileId,
-        storageProfileRevisionId: String(profile.current_revision_id),
-        profileVersion: Number(profile.version),
-        protocol: String(profile.kind),
-        sourceRef: String(config.sourceRef),
-        authorizedSubpath: request.authorizedSubpath,
-        mountPath: request.mountPath,
-        mode: request.mode,
-        secretVersionRef:
-          typeof profile.secret_version_ref === "string"
-            ? profile.secret_version_ref
-            : null,
-      });
-    }
+    const bindings: [] = [];
     const requested = input.resources.request;
     const minimum = {
       cpuMillis: Number(target.minimum_cpu_millis),
@@ -139,11 +117,6 @@ export class ImageValidationService {
       typeof caps.expiresAt === "string"
         ? Date.parse(caps.expiresAt)
         : Number.NaN;
-    const storageVerified = bindings.every((binding) =>
-      stringArray(caps.verifiedStorageProfileRevisionIds).includes(
-        binding.storageProfileRevisionId,
-      ),
-    );
     const block =
       caps.cpuHardLimit !== "verified" ||
       caps.memoryHardLimit !== "verified" ||
@@ -155,7 +128,6 @@ export class ImageValidationService {
       !caps.verifiedNetworkProfileRevisionIds.includes(
         String(network.current_revision_id),
       ) ||
-      !storageVerified ||
       !stringArray(caps.architectures).includes(String(target.architecture)) ||
       !stringArray(caps.guestOs).includes(String(target.guest_os)) ||
       !stringArray(caps.resourceKinds).includes("container") ||
@@ -169,9 +141,7 @@ export class ImageValidationService {
       Number(target.observed_at_ms ?? 0) + 120_000 <= this.now() ||
       target.observed_power !== "on";
     let blockReason = block
-      ? storageVerified
-        ? "node_capacity_or_network_capability_unverified"
-        : "node_storage_capability_unverified"
+      ? "node_capacity_or_network_capability_unverified"
       : null;
     if (!block) {
       const capacity = JsonObject.parse(caps.capacity) as Record<
@@ -188,14 +158,24 @@ export class ImageValidationService {
         blockReason = "node_capacity_or_network_capability_unverified";
     }
     const time = this.now(),
-      validationId = randomUUID(),
+      validationId = retry?.id ?? randomUUID(),
       allocationId = randomUUID(),
       claimId = randomUUID(),
       operationId = randomUUID();
     const contract = {
       imageVersionId: input.versionId,
       imageArtifactId: input.imageArtifactId,
+      backendKind: target.backend_kind,
+      environmentKind: target.environment_kind,
+      variant: target.variant,
       digest: target.content_digest,
+      artifactRef: target.artifact_ref,
+      manifest: object(target.manifest_json, "image manifest"),
+      requirements: object(target.requirements_json, "artifact requirements"),
+      access: recipe,
+      runtimeIdentityId: target.runtime_identity_id,
+      platformDenyRevisionId: deny.id,
+      managementDenyRules: JSON.parse(String(deny.management_deny_rules_json)),
       architecture: target.architecture,
       guestOs: target.guest_os,
       nodeId: input.nodeId,
@@ -206,17 +186,39 @@ export class ImageValidationService {
       networkPolicy,
       storageBindings: bindings,
       resources: input.resources,
+      minimumResources: minimum,
       deadlineSeconds: input.deadlineSeconds,
+      request: input,
+      network: {
+        grantId: `validation:${validationId}`,
+        networkProfileRevisionId: network.current_revision_id,
+        platformDenyRevisionId: deny.id,
+        mode: "isolated_bridge",
+        ipv6: networkPolicy.ipv6,
+        allowedEgress: networkPolicy.allowedEgress,
+        allowedIngressSourceCidrs: networkPolicy.allowedIngressSourceCidrs,
+        managementDenyRules: JSON.parse(
+          String(deny.management_deny_rules_json),
+        ),
+        enforcement: "docker_iptables",
+        verificationRequired: true,
+      },
+      storage: [],
     };
+    if (retry && blockReason) return;
     const result = await this.store.persistSchedule({
       request: input,
-      context,
+      context: { ...context, network },
       bindings,
-      contract,
+      contract: retry?.contract ?? {
+        ...contract,
+        selectionHash: hash(JSON.stringify(contract)),
+      },
       blockReason,
       ids: { validationId, allocationId, claimId, operationId },
       now: time,
-      deadlineMs: time + input.deadlineSeconds * 1000,
+      deadlineMs: retry?.deadlineMs ?? time + input.deadlineSeconds * 1000,
+      ...(retry ? { retry: true } : {}),
     });
     return {
       validationId,
@@ -231,8 +233,32 @@ export class ImageValidationService {
           : (blockReason ?? "insufficient_validation_capacity"),
       testOutcome: "pending",
       cleanupStatus: "pending",
-      deadlineMs: time + input.deadlineSeconds * 1000,
+      deadlineMs: retry?.deadlineMs ?? time + input.deadlineSeconds * 1000,
     };
+  }
+
+  async retryBlocked() {
+    for (const row of await this.store.blockedRuns()) {
+      const contract = object(
+        row.accepted_contract_json,
+        "validation contract",
+      );
+      if (Number(row.deadline_ms) <= this.now()) continue;
+      await this.scheduleInternal(
+        contract.request as ImageValidationRequest & {
+          versionId: string;
+          requestedBy: string;
+        },
+        { id: String(row.id), contract, deadlineMs: Number(row.deadline_ms) },
+      ).catch(async (error: unknown) => {
+        if (!(error instanceof RangeError)) throw error;
+        await this.store.noteBlocked(String(row.id), this.now());
+      });
+    }
+  }
+
+  cancel(id: string) {
+    return this.store.terminate(id, "cancelled");
   }
 
   get(id: string) {

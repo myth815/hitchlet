@@ -15,7 +15,8 @@ export type ApplicationErrorCode =
   | "lease_lifetime_exhausted"
   | "renewal_deadline_expired"
   | "renewal_in_progress"
-  | "lease_not_accessible";
+  | "lease_not_accessible"
+  | "access_material_unavailable";
 export class ApplicationError extends Error {
   constructor(readonly code: ApplicationErrorCode) {
     super(code);

@@ -7,6 +7,7 @@ import {
   type TerminalReason,
 } from "@hitchlet/contracts";
 import { normalizeAcquireRequest } from "../domain/admission.js";
+import { supportsNodeSshRecipe } from "../domain/docker-recipe.js";
 import {
   leaseDeadline,
   terminalReasonFor,
@@ -436,6 +437,15 @@ export class TicketService {
           ? frozen.storage.map((item) => object(item))
           : [];
         if (
+          executionMode(candidate.config_json) === "portainer" &&
+          (!supportsNodeSshRecipe(
+            { bootstrap: artifactRequirements.bootstrap },
+            accessRecipe,
+          ) ||
+            frozenStorage.length > 0)
+        )
+          continue;
+        if (
           frozenStorage.some(
             (item) =>
               !stringList(caps.verifiedStorageProfileRevisionIds).includes(
@@ -492,6 +502,7 @@ export class TicketService {
             runtimeIdentityId: String(candidate.runtime_identity_id),
             connectionRevisionId: String(candidate.connection_revision_id),
             executionMode: executionMode(candidate.config_json),
+            runtimeConfigJson: String(candidate.config_json),
             operationId: this.id(),
             installationId: this.options.installationId ?? null,
             controllerEpoch: this.options.controllerEpoch ?? 1,

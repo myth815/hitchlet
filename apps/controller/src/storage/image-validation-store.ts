@@ -302,12 +302,19 @@ export class SQLiteImageValidationStore {
   }
   async prewarmImageCache(input: { nodeId: string; artifactId: string }) {
     const target = await this.db.get<Row>(
-      "SELECT n.runtime_identity_id,n.id AS node_id,n.admission,pc.current_revision_id,r.id AS revision_id,a.content_digest,a.backend_kind,c.node_id AS cached_node,c.observed_state,c.local_ref,c.digest_verified_at_ms FROM nodes n JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id JOIN provider_connection_revisions r ON r.id=pc.current_revision_id AND r.verified_runtime_identity_id=n.runtime_identity_id JOIN image_artifacts a ON a.id=? LEFT JOIN image_caches c ON c.node_id=n.id AND c.image_artifact_id=a.id WHERE n.id=? AND a.backend_kind=n.backend_kind",
+      "SELECT n.runtime_identity_id,n.id AS node_id,n.admission,m.admission AS machine_admission,pc.current_revision_id,r.id AS revision_id,a.content_digest,a.backend_kind,c.node_id AS cached_node,c.observed_state,c.local_ref,c.digest_verified_at_ms FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id AND pc.enabled=1 JOIN provider_connection_revisions r ON r.id=pc.current_revision_id AND r.verified_runtime_identity_id=n.runtime_identity_id JOIN image_artifacts a ON a.id=? LEFT JOIN image_caches c ON c.node_id=n.id AND c.image_artifact_id=a.id WHERE n.id=? AND a.backend_kind=n.backend_kind",
       [input.artifactId, input.nodeId],
     );
     if (!target)
       throw new RangeError(
         "Image artifact and node do not share a verified runtime connection",
+      );
+    if (
+      target.admission !== "enabled" ||
+      target.machine_admission !== "enabled"
+    )
+      throw new RangeError(
+        "New image cache pulls require an enabled node and machine",
       );
     const pending = await this.db.get<Row>(
       "SELECT id,kind FROM operations WHERE node_id=? AND image_artifact_id=? AND kind IN ('image-cache.pull','image-cache.evict') AND state IN ('planned','running','unknown') ORDER BY created_at_ms DESC LIMIT 1",
@@ -332,30 +339,46 @@ export class SQLiteImageValidationStore {
         runtimeIdentityId: target.runtime_identity_id,
         connectionRevisionId: target.revision_id,
       };
-    await this.db.batchTransaction([
-      {
-        kind: "run",
-        sql: "INSERT INTO operations(id,node_id,runtime_identity_id,connection_revision_id,image_artifact_id,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,created_at_ms,updated_at_ms) SELECT ?,n.id,n.runtime_identity_id,r.id,?,i.controller_epoch,'image-cache.pull',?,?,'planned',?,?,?,?,? FROM nodes n JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions r ON r.id=pc.current_revision_id JOIN installations i ON i.singleton=1 JOIN image_artifacts a ON a.id=? AND a.backend_kind=n.backend_kind WHERE n.id=? AND r.verified_runtime_identity_id=n.runtime_identity_id AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.node_id=n.id AND o.image_artifact_id=a.id AND o.kind IN ('image-cache.pull','image-cache.evict') AND o.state IN ('planned','running','unknown'))",
-        params: [
-          operationId,
-          input.artifactId,
-          input.artifactId,
-          `image-cache.pull:${operationId}`,
-          hash(JSON.stringify(intent)),
-          JSON.stringify(intent),
-          time,
-          time,
-          time,
-          input.artifactId,
-          input.nodeId,
-        ],
-      },
-      {
-        kind: "run",
-        sql: "INSERT INTO image_caches(node_id,image_artifact_id,desired_state,observed_state) SELECT ?,?,'present','unknown' WHERE EXISTS(SELECT 1 FROM operations WHERE id=? AND state='planned') ON CONFLICT(node_id,image_artifact_id) DO UPDATE SET desired_state='present',observed_state=CASE WHEN image_caches.observed_state='ready' AND image_caches.digest_verified_at_ms IS NOT NULL AND image_caches.local_ref=(SELECT content_digest FROM image_artifacts WHERE id=?) THEN 'ready' ELSE 'unknown' END,last_error_json=NULL",
-        params: [input.nodeId, input.artifactId, operationId, input.artifactId],
-      },
-    ]);
+    try {
+      await this.db.batchTransaction([
+        {
+          kind: "run",
+          sql: "INSERT INTO operations(id,node_id,runtime_identity_id,connection_revision_id,image_artifact_id,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,created_at_ms,updated_at_ms) SELECT ?,n.id,n.runtime_identity_id,r.id,?,i.controller_epoch,'image-cache.pull',?,?,'planned',?,?,?,?,? FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions r ON r.id=pc.current_revision_id JOIN installations i ON i.singleton=1 JOIN image_artifacts a ON a.id=? AND a.backend_kind=n.backend_kind WHERE n.id=? AND n.admission='enabled' AND m.admission='enabled' AND m.source='local' AND pc.enabled=1 AND r.verified_runtime_identity_id=n.runtime_identity_id AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.node_id=n.id AND o.image_artifact_id=a.id AND o.kind IN ('image-cache.pull','image-cache.evict') AND o.state IN ('planned','running','unknown')) AND NOT EXISTS(SELECT 1 FROM image_caches c JOIN image_artifacts ca ON ca.id=c.image_artifact_id WHERE c.node_id=n.id AND ca.content_digest=a.content_digest AND c.observed_state='evicting')",
+          params: [
+            operationId,
+            input.artifactId,
+            input.artifactId,
+            `image-cache.pull:${operationId}`,
+            hash(JSON.stringify(intent)),
+            JSON.stringify(intent),
+            time,
+            time,
+            time,
+            input.artifactId,
+            input.nodeId,
+          ],
+        },
+        {
+          kind: "run",
+          sql: "INSERT INTO image_caches(node_id,image_artifact_id,desired_state,observed_state) SELECT ?,?,'present','unknown' WHERE EXISTS(SELECT 1 FROM operations WHERE id=? AND state='planned') ON CONFLICT(node_id,image_artifact_id) DO UPDATE SET desired_state='present',observed_state=CASE WHEN image_caches.observed_state='ready' AND image_caches.digest_verified_at_ms IS NOT NULL AND image_caches.local_ref=(SELECT content_digest FROM image_artifacts WHERE id=?) THEN 'ready' ELSE 'unknown' END,last_error_json=NULL",
+          params: [
+            input.nodeId,
+            input.artifactId,
+            operationId,
+            input.artifactId,
+          ],
+        },
+      ]);
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "STORAGE_CAS_FAILED"
+      )
+        return { state: "conflict" as const };
+      throw error;
+    }
     const active = await this.db.get<Row>(
       "SELECT id,kind FROM operations WHERE node_id=? AND image_artifact_id=? AND kind IN ('image-cache.pull','image-cache.evict') AND state IN ('planned','running','unknown') ORDER BY created_at_ms DESC LIMIT 1",
       [input.nodeId, input.artifactId],
@@ -372,7 +395,7 @@ export class SQLiteImageValidationStore {
 
   async planCacheEviction(input: { nodeId: string; artifactId: string }) {
     const cached = await this.db.get<Row>(
-      "SELECT c.observed_state,c.local_ref,c.digest_verified_at_ms,a.content_digest,n.runtime_identity_id,r.id AS revision_id FROM image_caches c JOIN image_artifacts a ON a.id=c.image_artifact_id JOIN nodes n ON n.id=c.node_id JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id JOIN provider_connection_revisions r ON r.id=pc.current_revision_id AND r.verified_runtime_identity_id=n.runtime_identity_id WHERE c.node_id=? AND c.image_artifact_id=? AND c.observed_state='ready' AND c.digest_verified_at_ms IS NOT NULL AND c.local_ref=a.content_digest AND (c.pinned_until_ms IS NULL OR c.pinned_until_ms<=?) AND NOT EXISTS(SELECT 1 FROM allocations x WHERE x.image_artifact_id=c.image_artifact_id AND x.cleanup_status<>'complete') AND NOT EXISTS(SELECT 1 FROM image_validations v WHERE v.image_artifact_id=c.image_artifact_id AND v.state IN ('queued','running','releasing') AND json_extract(v.checks_json,'$.scheduler') IN ('queued','running'))",
+      "SELECT c.observed_state,c.local_ref,c.digest_verified_at_ms,a.content_digest,n.runtime_identity_id,r.id AS revision_id FROM image_caches c JOIN image_artifacts a ON a.id=c.image_artifact_id JOIN nodes n ON n.id=c.node_id JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id JOIN provider_connection_revisions r ON r.id=pc.current_revision_id AND r.verified_runtime_identity_id=n.runtime_identity_id WHERE c.node_id=? AND c.image_artifact_id=? AND c.observed_state='ready' AND c.digest_verified_at_ms IS NOT NULL AND c.local_ref=a.content_digest AND (c.pinned_until_ms IS NULL OR c.pinned_until_ms<=?) AND NOT EXISTS(SELECT 1 FROM allocations x JOIN image_artifacts xa ON xa.id=x.image_artifact_id WHERE xa.content_digest=a.content_digest AND x.cleanup_status<>'complete') AND NOT EXISTS(SELECT 1 FROM image_validations v JOIN image_artifacts va ON va.id=v.image_artifact_id WHERE va.content_digest=a.content_digest AND v.state IN ('queued','running','releasing') AND json_extract(v.checks_json,'$.scheduler') IN ('queued','running'))",
       [input.nodeId, input.artifactId, this.now()],
     );
     if (!cached)
@@ -403,38 +426,51 @@ export class SQLiteImageValidationStore {
         runtimeIdentityId: cached.runtime_identity_id,
         connectionRevisionId: cached.revision_id,
       };
-    await this.db.batchTransaction([
-      {
-        kind: "run",
-        sql: "INSERT INTO operations(id,node_id,runtime_identity_id,connection_revision_id,image_artifact_id,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,created_at_ms,updated_at_ms) SELECT ?,n.id,n.runtime_identity_id,r.id,?,i.controller_epoch,'image-cache.evict',?,?,'planned',?,?,?,?,? FROM nodes n JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions r ON r.id=pc.current_revision_id JOIN installations i ON i.singleton=1 JOIN image_caches c ON c.node_id=n.id AND c.image_artifact_id=? AND c.observed_state='ready' AND c.digest_verified_at_ms IS NOT NULL AND c.local_ref=? AND (c.pinned_until_ms IS NULL OR c.pinned_until_ms<=?) WHERE n.id=? AND r.verified_runtime_identity_id=n.runtime_identity_id AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.node_id=n.id AND o.image_artifact_id=c.image_artifact_id AND o.kind IN ('image-cache.pull','image-cache.evict') AND o.state IN ('planned','running','unknown')) AND NOT EXISTS(SELECT 1 FROM allocations x WHERE x.image_artifact_id=c.image_artifact_id AND x.cleanup_status<>'complete') AND NOT EXISTS(SELECT 1 FROM image_validations v WHERE v.image_artifact_id=c.image_artifact_id AND v.state IN ('queued','running','releasing') AND json_extract(v.checks_json,'$.scheduler') IN ('queued','running'))",
-        params: [
-          operationId,
-          input.artifactId,
-          input.artifactId,
-          `image-cache.evict:${operationId}`,
-          hash(JSON.stringify(intent)),
-          JSON.stringify(intent),
-          time,
-          time,
-          time,
-          input.artifactId,
-          String(cached.content_digest),
-          time,
-          input.nodeId,
-        ],
-      },
-      {
-        kind: "run",
-        sql: "UPDATE image_caches SET desired_state='absent' WHERE node_id=? AND image_artifact_id=? AND observed_state='ready' AND digest_verified_at_ms IS NOT NULL AND local_ref=? AND (pinned_until_ms IS NULL OR pinned_until_ms<=?) AND NOT EXISTS(SELECT 1 FROM allocations x WHERE x.image_artifact_id=image_caches.image_artifact_id AND x.cleanup_status<>'complete') AND NOT EXISTS(SELECT 1 FROM image_validations v WHERE v.image_artifact_id=image_caches.image_artifact_id AND v.state IN ('queued','running','releasing') AND json_extract(v.checks_json,'$.scheduler') IN ('queued','running')) AND EXISTS(SELECT 1 FROM operations WHERE id=? AND kind='image-cache.evict' AND state='planned')",
-        params: [
-          input.nodeId,
-          input.artifactId,
-          String(cached.content_digest),
-          time,
-          operationId,
-        ],
-      },
-    ]);
+    try {
+      await this.db.batchTransaction([
+        {
+          kind: "run",
+          sql: "INSERT INTO operations(id,node_id,runtime_identity_id,connection_revision_id,image_artifact_id,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,created_at_ms,updated_at_ms) SELECT ?,n.id,n.runtime_identity_id,r.id,?,i.controller_epoch,'image-cache.evict',?,?,'planned',?,?,?,?,? FROM nodes n JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions r ON r.id=pc.current_revision_id JOIN installations i ON i.singleton=1 JOIN image_caches c ON c.node_id=n.id AND c.image_artifact_id=? AND c.observed_state='ready' AND c.digest_verified_at_ms IS NOT NULL AND c.local_ref=? AND (c.pinned_until_ms IS NULL OR c.pinned_until_ms<=?) JOIN image_artifacts a ON a.id=c.image_artifact_id WHERE n.id=? AND r.verified_runtime_identity_id=n.runtime_identity_id AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.node_id=n.id AND o.image_artifact_id=c.image_artifact_id AND o.kind IN ('image-cache.pull','image-cache.evict') AND o.state IN ('planned','running','unknown')) AND NOT EXISTS(SELECT 1 FROM allocations x JOIN image_artifacts xa ON xa.id=x.image_artifact_id WHERE xa.content_digest=a.content_digest AND x.cleanup_status<>'complete') AND NOT EXISTS(SELECT 1 FROM image_validations v JOIN image_artifacts va ON va.id=v.image_artifact_id WHERE va.content_digest=a.content_digest AND v.state IN ('queued','running','releasing') AND json_extract(v.checks_json,'$.scheduler') IN ('queued','running'))",
+          params: [
+            operationId,
+            input.artifactId,
+            input.artifactId,
+            `image-cache.evict:${operationId}`,
+            hash(JSON.stringify(intent)),
+            JSON.stringify(intent),
+            time,
+            time,
+            time,
+            input.artifactId,
+            String(cached.content_digest),
+            time,
+            input.nodeId,
+          ],
+        },
+        {
+          kind: "run",
+          sql: "UPDATE image_caches SET desired_state='absent',observed_state='evicting' WHERE node_id=? AND image_artifact_id=? AND observed_state='ready' AND digest_verified_at_ms IS NOT NULL AND local_ref=? AND (pinned_until_ms IS NULL OR pinned_until_ms<=?) AND NOT EXISTS(SELECT 1 FROM allocations x JOIN image_artifacts xa ON xa.id=x.image_artifact_id WHERE xa.content_digest=(SELECT content_digest FROM image_artifacts WHERE id=image_caches.image_artifact_id) AND x.cleanup_status<>'complete') AND NOT EXISTS(SELECT 1 FROM image_validations v JOIN image_artifacts va ON va.id=v.image_artifact_id WHERE va.content_digest=(SELECT content_digest FROM image_artifacts WHERE id=image_caches.image_artifact_id) AND v.state IN ('queued','running','releasing') AND json_extract(v.checks_json,'$.scheduler') IN ('queued','running')) AND NOT EXISTS(SELECT 1 FROM image_caches other JOIN image_artifacts oa ON oa.id=other.image_artifact_id WHERE oa.content_digest=? AND NOT(other.node_id=image_caches.node_id AND other.image_artifact_id=image_caches.image_artifact_id) AND other.observed_state='ready') AND EXISTS(SELECT 1 FROM operations WHERE id=? AND kind='image-cache.evict' AND state='planned')",
+          params: [
+            input.nodeId,
+            input.artifactId,
+            String(cached.content_digest),
+            time,
+            String(cached.content_digest),
+            operationId,
+          ],
+          expectChanges: 1,
+        },
+      ]);
+    } catch (error) {
+      if (
+        error &&
+        typeof error === "object" &&
+        "code" in error &&
+        error.code === "STORAGE_CAS_FAILED"
+      )
+        return { state: "conflict" as const };
+      throw error;
+    }
     const active = await this.db.get<Row>(
       "SELECT id,kind FROM operations WHERE node_id=? AND image_artifact_id=? AND kind IN ('image-cache.pull','image-cache.evict') AND state IN ('planned','running','unknown') ORDER BY created_at_ms DESC LIMIT 1",
       [input.nodeId, input.artifactId],

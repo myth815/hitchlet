@@ -28,6 +28,7 @@ import {
   RecoveryPanel,
   TicketListPanel,
 } from "./Panels.js";
+import { AdminPanel } from "./AdminPanel.js";
 
 const makeClient = () =>
   new HitchletClient(window.location.origin, {
@@ -518,7 +519,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
       <main>
         <section className="hero">
           <div>
-            <div className="eyebrow">HITCHLET · D05</div>
+            <div className="eyebrow">临时计算环境</div>
             <h1>
               搭个便车：
               <br className="mobile-break" />
@@ -535,6 +536,9 @@ export function App({ client: injected }: { client?: HitchletClient }) {
           </div>
         </section>
         <HealthPanel health={health} error={healthError} />
+        {principal?.role === "admin" ? (
+          <AdminPanel client={client} principal={principal} />
+        ) : null}
         {notice ? (
           <div className="notice" role="status">
             {notice}

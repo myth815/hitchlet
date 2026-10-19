@@ -13,6 +13,8 @@ import { OperationWorker } from "../dist/application/operations.js";
 import { PersistentSimulator } from "../dist/providers/simulator.js";
 import { buildApp } from "../dist/app.js";
 import { loadConfig } from "../dist/config.js";
+import { LocalSecretStore } from "../dist/storage/secret-store.js";
+import ssh2 from "ssh2";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -93,7 +95,390 @@ async function fixture() {
   };
 }
 
+async function addPortainerAuditIntent(f: Awaited<ReturnType<typeof fixture>>) {
+  const allocation = await f.storage.get<{ allocation_id: string }>(
+    "SELECT allocation_id FROM leases WHERE ticket_id=?",
+    [f.ready.id],
+  );
+  if (!allocation) throw new Error("Ready fixture has no allocation");
+  const provision = await f.storage.get<{ id: string }>(
+    "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision' ORDER BY created_at_ms LIMIT 1",
+    [allocation.allocation_id],
+  );
+  if (!provision) throw new Error("Ready fixture has no provision operation");
+  const id = randomUUID();
+  await f.storage.run(
+    `INSERT INTO operations(id,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,result_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms)
+     SELECT ?,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,'allocation.provision','integrity-audit-fixture',?,'succeeded',request_hash,json_set(intent_json,'$.executionMode','portainer'),result_json,?,?,?,? FROM operations WHERE id=?`,
+    [
+      id,
+      `${allocation.allocation_id}:integrity-audit-fixture`,
+      f.now(),
+      f.now() + 30_000,
+      f.now(),
+      f.now(),
+      provision.id,
+    ],
+  );
+  await f.storage.run(
+    "UPDATE operations SET kind='allocation.provision.fixture' WHERE id=?",
+    [provision.id],
+  );
+  return { allocationId: allocation.allocation_id, provisionId: id };
+}
+
 describe("independent D05 protocol and lease review", () => {
+  it("audits ready Portainer allocations without recreating them and retains claims on unknown inspection", async () => {
+    const f = await fixture();
+    const allocation = await addPortainerAuditIntent(f);
+    const external = new PersistentSimulator(join(f.dir, "external"));
+    const execution = {
+      create: external.create.bind(external),
+      ready: external.ready.bind(external),
+      revokeStop: external.revokeStop.bind(external),
+      destroy: external.destroy.bind(external),
+      inspect: async (plan: Parameters<typeof external.inspect>[0]) => {
+        if (plan.executionPhase === "observe")
+          return {
+            presence: "unknown" as const,
+            reason: "inventory_incomplete" as const,
+          };
+        return external.inspect(plan);
+      },
+    };
+    await f.storage.run(
+      "UPDATE installations SET controller_epoch=controller_epoch+1 WHERE singleton=1",
+    );
+    f.setTime(f.now() + 31_000);
+    const restarted = new OperationWorker({
+      storage: f.storage,
+      execution,
+      installationId: (await f.storage.get<{ installation_id: string }>(
+        "SELECT installation_id FROM installations WHERE singleton=1",
+      ))!.installation_id,
+      controllerEpoch: Number(
+        (await f.storage.get<{ controller_epoch: bigint }>(
+          "SELECT controller_epoch FROM installations WHERE singleton=1",
+        ))!.controller_epoch,
+      ),
+      now: f.now,
+    });
+    await restarted.reconcile();
+    expect(
+      await f.storage.get<{ phase: string; terminal_reason: string | null }>(
+        "SELECT phase,terminal_reason FROM tickets WHERE id=?",
+        [f.ready.id],
+      ),
+    ).toMatchObject({ phase: "ready", terminal_reason: null });
+    expect(
+      await f.storage.get<{ state: string }>(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation.allocationId],
+      ),
+    ).toMatchObject({ state: "committed" });
+    expect(
+      await f.storage.get<{
+        state: string;
+        diagnostic: string;
+        controller_epoch: bigint;
+      }>(
+        "SELECT json_extract(result_json,'$.integrity.state') AS state,json_extract(result_json,'$.integrity.reason') AS diagnostic,controller_epoch FROM operations WHERE id=?",
+        [allocation.provisionId],
+      ),
+    ).toMatchObject({
+      state: "unknown",
+      diagnostic: "inventory_incomplete",
+      controller_epoch: 2n,
+    });
+  });
+
+  it("terminates a ready allocation as resource_lost only after confirmed integrity loss", async () => {
+    const f = await fixture();
+    const allocation = await addPortainerAuditIntent(f);
+    const external = new PersistentSimulator(join(f.dir, "external"));
+    const execution = {
+      create: external.create.bind(external),
+      ready: external.ready.bind(external),
+      revokeStop: external.revokeStop.bind(external),
+      destroy: external.destroy.bind(external),
+      inspect: async (plan: Parameters<typeof external.inspect>[0]) => {
+        if (plan.executionPhase === "observe")
+          return {
+            presence: "present" as const,
+            evidence: {
+              completeness: "complete" as const,
+              runtime: {
+                runtimeIdentityId: plan.identity.runtimeIdentityId,
+                connectionRevisionId: plan.identity.connectionRevisionId,
+              },
+              identity: plan.identity,
+              objects: [],
+            },
+            integrity: {
+              state: "lost" as const,
+              reason: "NETWORK_GUARANTEE_LOST",
+            },
+          };
+        return external.inspect(plan);
+      },
+    };
+    const installation = await f.storage.get<{
+      installation_id: string;
+      controller_epoch: bigint;
+    }>(
+      "SELECT installation_id,controller_epoch FROM installations WHERE singleton=1",
+    );
+    const worker = new OperationWorker({
+      storage: f.storage,
+      execution,
+      installationId: installation!.installation_id,
+      controllerEpoch: Number(installation!.controller_epoch),
+      now: f.now,
+    });
+    await worker.reconcile();
+    expect(
+      await f.storage.get<{
+        phase: string;
+        terminal_reason: string;
+        cleanup_status: string;
+      }>(
+        "SELECT phase,terminal_reason,cleanup_status FROM tickets WHERE id=?",
+        [f.ready.id],
+      ),
+    ).toMatchObject({
+      phase: "releasing",
+      terminal_reason: "resource_lost",
+      cleanup_status: "pending",
+    });
+    expect(
+      await f.storage.get<{ state: string }>(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation.allocationId],
+      ),
+    ).toMatchObject({ state: "committed" });
+    expect(
+      await f.storage.get<{ diagnostic: string }>(
+        "SELECT json_extract(payload_json,'$.detail') AS diagnostic FROM events WHERE aggregate_type='ticket' AND aggregate_id=? AND event_type='ticket.terminated' ORDER BY occurred_at_ms DESC LIMIT 1",
+        [f.ready.id],
+      ),
+    ).toMatchObject({ diagnostic: "NETWORK_GUARANTEE_LOST" });
+    expect(
+      await f.storage.get<{ state: string }>(
+        "SELECT state FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+        [allocation.allocationId],
+      ),
+    ).toMatchObject({ state: "planned" });
+  });
+
+  it("does not let a stale lost-resource observation overwrite a concurrent release", async () => {
+    const f = await fixture();
+    await addPortainerAuditIntent(f);
+    const external = new PersistentSimulator(join(f.dir, "external"));
+    let released = false;
+    const execution = {
+      create: external.create.bind(external),
+      ready: external.ready.bind(external),
+      revokeStop: external.revokeStop.bind(external),
+      destroy: external.destroy.bind(external),
+      inspect: async (plan: Parameters<typeof external.inspect>[0]) => {
+        if (plan.executionPhase === "observe") {
+          if (!released) {
+            released = true;
+            await f.tickets.cancel(f.ready.id, f.consumerId);
+          }
+          return {
+            presence: "absent" as const,
+            evidence: {
+              completeness: "complete" as const,
+              runtime: {
+                runtimeIdentityId: plan.identity.runtimeIdentityId,
+                connectionRevisionId: plan.identity.connectionRevisionId,
+              },
+              identity: plan.identity,
+            },
+          };
+        }
+        return external.inspect(plan);
+      },
+    };
+    const installation = await f.storage.get<{
+      installation_id: string;
+      controller_epoch: bigint;
+    }>(
+      "SELECT installation_id,controller_epoch FROM installations WHERE singleton=1",
+    );
+    await new OperationWorker({
+      storage: f.storage,
+      execution,
+      installationId: installation!.installation_id,
+      controllerEpoch: Number(installation!.controller_epoch),
+      now: f.now,
+    }).reconcile();
+    expect(released).toBe(true);
+    expect(
+      await f.storage.get<{ phase: string; terminal_reason: string }>(
+        "SELECT phase,terminal_reason FROM tickets WHERE id=?",
+        [f.ready.id],
+      ),
+    ).toMatchObject({ phase: "releasing", terminal_reason: "consumer_cancel" });
+  });
+
+  it("confirms Portainer claim and renewal across a storage restart before serving private access", async () => {
+    const f = await fixture();
+    const keyFile = join(f.dir, "secret-master-key");
+    await writeFile(keyFile, randomBytes(32), { mode: 0o600 });
+    const secrets = await LocalSecretStore.open(f.dataDir, keyFile);
+    const privateKey = ssh2.utils.generateKeyPairSync("ed25519").private;
+    const secretRef = await secrets.put(privateKey);
+    const accessReceipt = JSON.stringify({
+      receipt: {
+        access: {
+          host: "127.0.0.1",
+          port: 22022,
+          username: "workspace",
+          hostKeyFingerprint: "SHA256:fixture-host-key-fingerprint",
+        },
+      },
+    });
+    const allocation = await f.storage.get<{ allocation_id: string }>(
+      "SELECT allocation_id FROM leases WHERE ticket_id=?",
+      [f.ready.id],
+    );
+    if (!allocation) throw new Error("Ready fixture has no allocation");
+    await f.storage.run(
+      `INSERT INTO operations(id,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms)
+       SELECT ?,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,'allocation.provision','access-fixture',?,'succeeded',request_hash,json_set(intent_json,'$.executionMode','portainer'),?,?,?,?
+       FROM operations WHERE allocation_id=? AND kind='allocation.provision' ORDER BY created_at_ms DESC LIMIT 1`,
+      [
+        randomUUID(),
+        `${allocation.allocation_id}:access-fixture`,
+        f.now() + 5_000,
+        f.now() + 30_000,
+        f.now() + 5_000,
+        f.now() + 5_000,
+        allocation.allocation_id,
+      ],
+    );
+    await f.storage.run(
+      "UPDATE allocations SET access_secret_ref=?,actual_resources_json=? WHERE id=?",
+      [secretRef, accessReceipt, allocation.allocation_id],
+    );
+
+    const initialPortainerApp = await buildApp(
+      loadConfig({
+        DATA_DIR: f.dataDir,
+        GUI_DIR: join(f.dir, "no-gui"),
+        LOG_LEVEL: "silent",
+        EXECUTION_MODE: "portainer",
+        HITCHLET_SECRET_KEY_FILE: keyFile,
+      }),
+      { storage: f.storage, secrets },
+    );
+    cleanup.push(() => initialPortainerApp.close());
+    const headers = (key: string) => ({
+      authorization: `Bearer ${f.token}`,
+      "idempotency-key": key,
+    });
+    const claimDeadline = await f.storage.get<{ claim_by_ms: bigint }>(
+      "SELECT claim_by_ms FROM leases WHERE ticket_id=?",
+      [f.ready.id],
+    );
+    await f.storage.run("UPDATE leases SET claim_by_ms=? WHERE ticket_id=?", [
+      Date.now() - 1,
+      f.ready.id,
+    ]);
+    const lateClaim = await initialPortainerApp.inject({
+      method: "POST",
+      url: `/v1/tickets/${f.ready.id}/renew`,
+      headers: headers("portainer-late-first-claim"),
+      payload: f.request,
+    });
+    expect(lateClaim.statusCode).toBe(409);
+    expect(lateClaim.json().error.code).toBe("claim_deadline_expired");
+    await f.storage.run("UPDATE leases SET claim_by_ms=? WHERE ticket_id=?", [
+      claimDeadline!.claim_by_ms,
+      f.ready.id,
+    ]);
+    const claim = await initialPortainerApp.inject({
+      method: "POST",
+      url: `/v1/tickets/${f.ready.id}/renew`,
+      headers: headers("portainer-first-claim"),
+      payload: f.request,
+    });
+    expect(claim.statusCode).toBe(202);
+    const denied = await initialPortainerApp.inject({
+      method: "POST",
+      url: `/v1/tickets/${f.ready.id}/access`,
+      headers: headers("unclaimed-portainer-access"),
+      payload: { generation: f.request.generation },
+    });
+    expect(denied.statusCode).toBe(409);
+    expect(denied.json().error.code).toBe("lease_not_accessible");
+
+    await initialPortainerApp.close();
+    await f.storage.close();
+    const storage = await openStorage(f.dataDir);
+    cleanup.push(() => storage.close());
+    await new LeaseService(storage).reconcilePending();
+    const portainerApp = await buildApp(
+      loadConfig({
+        DATA_DIR: f.dataDir,
+        GUI_DIR: join(f.dir, "no-gui"),
+        LOG_LEVEL: "silent",
+        EXECUTION_MODE: "portainer",
+        HITCHLET_SECRET_KEY_FILE: keyFile,
+      }),
+      { storage, secrets },
+    );
+    cleanup.push(() => portainerApp.close());
+    const claimedReplay = await portainerApp.inject({
+      method: "POST",
+      url: `/v1/tickets/${f.ready.id}/renew`,
+      headers: headers("portainer-first-claim"),
+      payload: f.request,
+    });
+    expect(claimedReplay.statusCode).toBe(200);
+    expect(claimedReplay.json().leaseVersion).toBe(
+      f.request.expectedLeaseVersion + 1,
+    );
+    const nextRequest = {
+      generation: f.request.generation,
+      expectedLeaseVersion: f.request.expectedLeaseVersion + 1,
+    };
+    const renewal = await portainerApp.inject({
+      method: "POST",
+      url: `/v1/tickets/${f.ready.id}/renew`,
+      headers: headers("portainer-following-renewal"),
+      payload: nextRequest,
+    });
+    expect(renewal.statusCode).toBe(202);
+    await new LeaseService(storage).reconcilePending();
+    const renewalReplay = await portainerApp.inject({
+      method: "POST",
+      url: `/v1/tickets/${f.ready.id}/renew`,
+      headers: headers("portainer-following-renewal"),
+      payload: nextRequest,
+    });
+    expect(renewalReplay.statusCode).toBe(200);
+    expect(renewalReplay.json().leaseVersion).toBe(
+      nextRequest.expectedLeaseVersion + 1,
+    );
+
+    const granted = await portainerApp.inject({
+      method: "POST",
+      url: `/v1/tickets/${f.ready.id}/access`,
+      headers: headers("claimed-portainer-access"),
+      payload: { generation: f.request.generation },
+    });
+    expect(granted.statusCode).toBe(200);
+    expect(granted.headers["cache-control"]).toBe("no-store");
+    expect(granted.headers.pragma).toBe("no-cache");
+    expect(granted.json().authentication).toEqual({
+      kind: "ephemeral_private_key",
+      privateKey,
+    });
+  });
+
   it("hides another consumer's Ticket and renewal across every owner route", async () => {
     const f = await fixture();
     const pending = await f.leases.renew(

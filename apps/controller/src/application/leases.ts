@@ -34,7 +34,7 @@ function stable(value: unknown): string {
   return JSON.stringify(value);
 }
 
-/** Fixed accepted lease bounds; Simulator deliberately returns no offline guard ACK. */
+/** Fixed accepted lease bounds; controller confirmation never implies offline enforcement. */
 export class LeaseService {
   private readonly store: SQLiteRenewalStore;
   constructor(
@@ -73,7 +73,10 @@ export class LeaseService {
       row.storage_revoked === 1n
     )
       throw conflict("profile_grant_revoked");
-    if (row.execution_mode !== "simulator")
+    if (
+      row.execution_mode !== "simulator" &&
+      row.execution_mode !== "portainer"
+    )
       throw conflict("execution_mode_unsupported");
     if (Number(row.generation) !== request.generation)
       throw preconditionFailed("generation_conflict");
@@ -124,6 +127,7 @@ export class LeaseService {
         proposedExpiresAt,
         decisionDeadline,
         initial,
+        executionMode: row.execution_mode,
         now,
       });
     } catch (error) {
@@ -154,7 +158,7 @@ export class LeaseService {
     return this.outcome(ticketId, consumerId, renewalId);
   }
 
-  /** Controller-only Simulator decision loop. It never fabricates an agent guard ACK. */
+  /** Controller lease decision loop; it never fabricates an offline guard ACK. */
   async reconcilePending(): Promise<number> {
     const rows = await this.store.pendingRows(this.now());
     let decided = 0;
@@ -173,7 +177,8 @@ export class LeaseService {
       const invalid =
         row.phase !== "ready" ||
         row.lease_state !== "active" ||
-        row.execution_mode !== "simulator" ||
+        (row.execution_mode !== "simulator" &&
+          row.execution_mode !== "portainer") ||
         Number(row.lease_version) !== Number(row.expected_version) ||
         row.network_revoked === 1 ||
         row.network_revoked === 1n ||

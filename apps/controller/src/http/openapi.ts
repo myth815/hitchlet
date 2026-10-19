@@ -107,6 +107,14 @@ export function openApiDocument() {
     openapi: "3.1.0",
     info: { title: "Hitchlet API", version: "1.0.0" },
     paths: {
+      "/v1/admin/installation": {
+        get: adminOperation(
+          "Read non-secret installation and platform network-deny metadata",
+          "200",
+          undefined,
+          AdminSchemas.AdminInstallationViewSchema,
+        ),
+      },
       "/v1/auth/session": {
         post: {
           summary:
@@ -364,6 +372,41 @@ export function openApiDocument() {
           [pathId("versionId")],
         ),
       },
+      "/v1/admin/image-versions": {
+        get: adminOperation(
+          "List image version summaries across draft and publication states",
+          "200",
+          undefined,
+          z.array(AdminSchemas.AdminImageVersionSummarySchema),
+        ),
+      },
+      "/v1/admin/image-versions/{versionId}/validations": {
+        get: adminOperation(
+          "List validation history for an image version",
+          "200",
+          undefined,
+          z.array(AdminSchemas.AdminValidationHistoryItemSchema),
+          [pathId("versionId")],
+        ),
+      },
+      "/v1/admin/images/{imageId}/aliases": {
+        get: adminOperation(
+          "Read current image aliases and CAS versions",
+          "200",
+          undefined,
+          z.array(AdminSchemas.AdminImageAliasViewSchema),
+          [pathId("imageId")],
+        ),
+      },
+      "/v1/nodes/{nodeId}/image-cache/operations/{operationId}": {
+        get: adminOperation(
+          "Read a safe receipt for one image-cache operation",
+          "200",
+          undefined,
+          AdminSchemas.AdminCacheOperationReceiptSchema,
+          [pathId("nodeId"), pathId("operationId")],
+        ),
+      },
       "/v1/image-versions/{versionId}": {
         get: operation(
           "Get an authorized image version",
@@ -469,6 +512,24 @@ export function openApiDocument() {
           AdminSchemas.NodeReceiptSchema,
         ),
       },
+      "/v1/nodes/{nodeId}/runtime-config": {
+        put: adminOperation(
+          "Register Runtime Agent and fixed network/access configuration",
+          "200",
+          AdminSchemas.NodeRuntimeConfigSchema,
+          AdminSchemas.NodeRuntimeConfigReceiptSchema,
+          [pathId("nodeId"), ifMatch()],
+        ),
+      },
+      "/v1/nodes/{nodeId}/capability-attestations": {
+        post: adminOperation(
+          "Import a recent independent manual capability test report and enable constant-online admission",
+          "200",
+          AdminSchemas.NodeCapabilityAttestationSchema,
+          AdminSchemas.NodeCapabilityAttestationReceiptSchema,
+          [pathId("nodeId"), ifMatch()],
+        ),
+      },
       "/v1/network-profiles": {
         get: adminOperation(
           "List network profile revisions",
@@ -531,6 +592,40 @@ export function openApiDocument() {
           AdminSchemas.ImageValidationRequestSchema,
           AdminSchemas.ValidationScheduleReceiptSchema,
           [pathId("versionId")],
+        ),
+      },
+      "/v1/image-versions/{versionId}/publish": {
+        post: adminOperation(
+          "Publish matching, cleaned validation evidence",
+          "200",
+          AdminSchemas.ImagePublishRequestSchema,
+          AdminSchemas.ImagePublishReceiptSchema,
+          [pathId("versionId")],
+        ),
+      },
+      "/v1/images/{imageId}/aliases/{alias}": {
+        put: adminOperation(
+          "Move a published image alias",
+          "200",
+          AdminSchemas.ImageAliasRequestSchema,
+          AdminSchemas.ImageAliasReceiptSchema,
+          [
+            pathId("imageId"),
+            parameter(
+              "alias",
+              "path",
+              z.toJSONSchema(AdminSchemas.ImageAliasNameSchema),
+            ),
+          ],
+        ),
+      },
+      "/v1/image-validations/{validationId}/cancel": {
+        post: adminOperation(
+          "Cancel and reclaim an internal validation",
+          "200",
+          undefined,
+          AdminSchemas.AdminValidationViewSchema,
+          [pathId("validationId")],
         ),
       },
       "/v1/image-validations/{validationId}": {

@@ -1,3 +1,4 @@
+import { resourceManifest } from "../domain/resource-manifest.js";
 import { createHash } from "node:crypto";
 import {
   access,
@@ -291,9 +292,6 @@ export class PersistentSimulator implements ExecutionPort {
       )
     )
       throw new Error("simulator manifest is incomplete");
-    const manifestHash = createHash("sha256")
-      .update(JSON.stringify(inventory.objects))
-      .digest("hex");
     const effectiveResources = {
       limits: plan.resources.limit,
       cpuEnforcement: "hard" as const,
@@ -313,7 +311,7 @@ export class PersistentSimulator implements ExecutionPort {
       identity: plan.identity,
       artifactDigest: plan.artifact.digest,
       contractHash: plan.resolved.contractHash,
-      manifestHash,
+      ...resourceManifest(plan, inventory.objects),
       objectIds: inventory.objects.map((item) => item.id).sort(),
       effectiveResources,
       networkRevisionId: plan.resolved.network.revisionId,

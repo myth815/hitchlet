@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { App } from "./App.js";
+import { HealthPanel } from "./Panels.js";
 import { HitchletClient } from "@hitchlet/sdk";
 import type { AuthenticatedPrincipal } from "@hitchlet/sdk";
 
@@ -425,7 +426,58 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-describe("D05 consumer console", () => {
+describe("consumer console", () => {
+  it("labels Portainer mode and keeps the offline-lease limitation visible", async () => {
+    const element = document.createElement("div");
+    const root = createRoot(element);
+    roots.push(root);
+    await act(async () => {
+      root.render(
+        <HealthPanel
+          health={{
+            status: "ok",
+            stage: "D05",
+            executionMode: "portainer",
+            recoveryState: "ready",
+          }}
+          error=""
+        />,
+      );
+    });
+    expect(element.textContent).toContain("Portainer");
+    expect(element.textContent).toContain("离线租约强制执行不受支持");
+  });
+
+  it("prioritizes a failed health refresh over stale ready data and recovers on reconnect", async () => {
+    const element = document.createElement("div");
+    const root = createRoot(element);
+    roots.push(root);
+    const healthy = {
+      status: "ok" as const,
+      stage: "D05" as const,
+      executionMode: "portainer" as const,
+      recoveryState: "ready" as const,
+    };
+    await act(async () => {
+      root.render(<HealthPanel health={healthy} error="" />);
+    });
+    expect(element.textContent).toContain("运行正常");
+
+    await act(async () => {
+      root.render(<HealthPanel health={healthy} error="请求超时" />);
+    });
+    expect(element.textContent).toContain("连接不可用");
+    expect(element.textContent).toContain("观测未知");
+    expect(element.textContent).not.toContain("运行正常");
+    expect(element.textContent).not.toContain("Portainer Docker");
+
+    await act(async () => {
+      root.render(<HealthPanel health={healthy} error="" />);
+    });
+    expect(element.textContent).toContain("运行正常");
+    expect(element.textContent).toContain("Portainer");
+  });
+
   it("allows ticket writers across admin/consumer roles and blocks viewers", async () => {
     const admin = harness({
       authPrincipal: { ...principal, role: "admin", scopes: ["tickets:write"] },

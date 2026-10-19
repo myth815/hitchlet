@@ -1,3 +1,4 @@
+import { dockerImageReferencePath } from "../domain/docker-image-reference.js";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 
@@ -65,6 +66,7 @@ export function projectCapabilities(value: string) {
   };
 }
 export function validateArtifact(ref: string, digest: string) {
+  dockerImageReferencePath(ref);
   if (
     !/^sha256:[a-f0-9]{64}$/.test(digest) ||
     !/^.+@sha256:[a-f0-9]{64}$/.test(ref) ||

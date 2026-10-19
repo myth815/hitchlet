@@ -1,3 +1,6 @@
+import Database from "better-sqlite3";
+import { TicketQueries } from "../dist/application/queries.js";
+import { SQLiteOperationStore } from "../dist/storage/operation-store.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -1062,6 +1065,272 @@ describe("SQLite Ticket admission", () => {
 });
 
 describe("persistent simulator lifecycle", () => {
+  it("review: upgrades native resource primary keys, preserves UUID parents and evidence, and projects blocked cleanup using UUIDs", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "native-resource-upgrade",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const operation = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation!.allocationId],
+    );
+    const external = join(dir, "upgrade-external");
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(external),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(operation!.id);
+    const before = await storage.all<{
+      id: string;
+      provider_id: string;
+      kind: string;
+      allocation_id: string;
+      node_id: string;
+      generation: bigint;
+      ownership: string;
+      ownership_json: string;
+      details_json: string;
+    }>("SELECT * FROM managed_resources ORDER BY kind");
+    expect(
+      before.every(
+        (r) => /^[a-f0-9-]{36}$/.test(r.id) && r.id !== r.provider_id,
+      ),
+    ).toBe(true);
+    const preserved = before.find((r) => r.kind === "container")!,
+      parent = before.find((r) => r.kind === "network_policy")!,
+      child = before.find((r) => r.kind === "endpoint")!;
+    const evidence = await storage.get(
+      "SELECT actual_resources_json FROM allocations WHERE id=?",
+      [allocation!.allocationId],
+    );
+    await storage.close();
+    const raw = new Database(join(dir, "hitchlet.sqlite"));
+    raw.pragma("foreign_keys=ON");
+    raw.exec("BEGIN; PRAGMA defer_foreign_keys=ON;");
+    raw
+      .prepare(
+        "UPDATE managed_resources SET id=provider_id WHERE kind<>'container'",
+      )
+      .run();
+    raw
+      .prepare(
+        "UPDATE managed_resources SET parent_resource_id=? WHERE provider_id=?",
+      )
+      .run(parent.provider_id, child.provider_id);
+    raw
+      .prepare("UPDATE managed_resources SET provider_id=NULL WHERE id=?")
+      .run(child.provider_id);
+    raw.exec(
+      "DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; COMMIT;",
+    );
+    raw.close();
+    const recovered = await openStorage(dir);
+    opened.push(recovered);
+    const after = await recovered.all<{
+      id: string;
+      provider_id: string;
+      parent_resource_id: string | null;
+    }>(
+      "SELECT id,provider_id,parent_resource_id FROM managed_resources ORDER BY provider_id",
+    );
+    expect(after.every((r) => /^[a-f0-9-]{36}$/.test(r.id))).toBe(true);
+    expect(after.find((r) => r.provider_id === preserved.provider_id)!.id).toBe(
+      preserved.id,
+    );
+    expect(
+      after.find((r) => r.provider_id === child.provider_id)!
+        .parent_resource_id,
+    ).toBe(after.find((r) => r.provider_id === parent.provider_id)!.id);
+    expect(await recovered.all("PRAGMA foreign_key_check")).toEqual([]);
+    expect(
+      await recovered.get(
+        "SELECT actual_resources_json FROM allocations WHERE id=?",
+        [allocation!.allocationId],
+      ),
+    ).toEqual(evidence);
+    const store = new SQLiteOperationStore(recovered);
+    for (const r of before)
+      await store.recordResource({
+        id: r.provider_id,
+        allocationId: r.allocation_id,
+        nodeId: r.node_id,
+        generation: Number(r.generation),
+        kind: r.kind,
+        ownership: r.ownership,
+        ownershipJson: r.ownership_json,
+        detailsJson: r.details_json,
+        observedAtMs: now + 1,
+      });
+    expect(
+      await recovered.all(
+        "SELECT id,provider_id,parent_resource_id FROM managed_resources ORDER BY provider_id",
+      ),
+    ).toEqual(after);
+    const native = await store.cleanupResources(allocation!.allocationId, 1);
+    expect(native.map((r) => r.id).sort()).toEqual(
+      before.map((r) => r.provider_id).sort(),
+    );
+    const resumed = new TicketService({
+      storage: recovered,
+      now: () => now + 1,
+    });
+    const second = await resumed.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "native-owner-conflict",
+      request(),
+    );
+    const secondAllocation = await resumed.reserveNext();
+    expect(secondAllocation!.ticketId).toBe(second.ticketId);
+    const resource = before[0]!;
+    await expect(
+      store.recordResource({
+        id: resource.provider_id,
+        allocationId: secondAllocation!.allocationId,
+        nodeId: resource.node_id,
+        generation: 1,
+        kind: resource.kind,
+        ownership: resource.ownership,
+        ownershipJson: resource.ownership_json,
+        detailsJson: resource.details_json,
+        observedAtMs: now + 1,
+      }),
+    ).rejects.toMatchObject({ code: "STORAGE_CONSTRAINT" });
+    await resumed.cancel(
+      ticket.ticketId,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    const cleanup = await recovered.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation!.allocationId],
+    );
+    await new OperationWorker({
+      storage: recovered,
+      execution: new PersistentSimulator(external, "delete_failure"),
+      installationId: "test-installation",
+      now: () => now + 1,
+    }).run(cleanup!.id);
+    const view = await new TicketQueries(recovered, () => now + 1).getAny(
+      ticket.ticketId,
+    );
+    expect(view!.phase).toBe("releasing");
+    expect(view!.cleanupBlockedResources.length).toBeGreaterThan(0);
+    for (const item of view!.cleanupBlockedResources)
+      expect(after.some((r) => r.id === item.managedResourceId)).toBe(true);
+    await recovered.close();
+    const restarted = await openStorage(dir);
+    opened.push(restarted);
+    expect(
+      await restarted.all(
+        "SELECT id,provider_id,parent_resource_id FROM managed_resources WHERE allocation_id=? ORDER BY provider_id",
+        [allocation!.allocationId],
+      ),
+    ).toEqual(after);
+  });
+
+  it("review: two allocations of the same FrozenSelection have independent manifest identities and actual inventory digests", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const simulator = new PersistentSimulator(join(dir, "shared-selection"));
+    const worker = new OperationWorker({
+      storage,
+      execution: simulator,
+      installationId: "test-installation",
+      now: () => now,
+    });
+    const tickets = [];
+    for (const key of ["manifest-one", "manifest-two"]) {
+      const ticket = await service.acquire(
+        "10000000-0000-4000-8000-000000000001",
+        key,
+        request(),
+      );
+      tickets.push(ticket.ticketId);
+      const allocation = await service.reserveNext();
+      const op = await storage.get<{ id: string }>(
+        "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+        [allocation!.allocationId],
+      );
+      expect(await worker.run(op!.id)).toBe(true);
+    }
+    const rows = await storage.all<{
+      manifest_id: string;
+      selection_hash: string;
+      actual_resources_json: string;
+      phase: string;
+    }>(
+      "SELECT a.manifest_id,c.selection_hash,a.actual_resources_json,t.phase FROM allocations a JOIN tickets t ON t.id=a.ticket_id JOIN resolved_provision_contracts c ON c.id=a.resolved_provision_contract_id ORDER BY a.id",
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.every((r) => r.phase === "ready")).toBe(true);
+    expect(rows[0]!.selection_hash).toBe(rows[1]!.selection_hash);
+    expect(rows[0]!.manifest_id).not.toBe(rows[1]!.manifest_id);
+    const receipts = rows.map(
+      (r) => JSON.parse(r.actual_resources_json).receipt,
+    );
+    expect(receipts[0].manifestHash).not.toBe(receipts[1].manifestHash);
+    for (let i = 0; i < rows.length; i++) {
+      expect(rows[i]!.manifest_id).toBe(receipts[i].manifestId);
+      expect(receipts[i].manifestHash).toMatch(/^[a-f0-9]{64}$/);
+      expect(receipts[i].manifestHash).not.toBe(rows[i]!.selection_hash);
+    }
+  });
+
+  it("review: exhausted provisioning can finish read-only readiness without another create or stale success diagnostic", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "ready-after-exhaustion",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const op = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation!.allocationId],
+    );
+    const simulator = new PersistentSimulator(join(dir, "exhausted-ready"));
+    const realReady = simulator.ready.bind(simulator),
+      realCreate = simulator.create.bind(simulator);
+    let readyCalls = 0,
+      createCalls = 0,
+      clock = now;
+    simulator.create = async (...args) => {
+      createCalls++;
+      return realCreate(...args);
+    };
+    simulator.ready = async (...args) => {
+      readyCalls++;
+      if (readyCalls <= 4) throw new Error("transient ready transport");
+      return realReady(...args);
+    };
+    const worker = new OperationWorker({
+      storage,
+      execution: simulator,
+      installationId: "test-installation",
+      now: () => clock,
+    });
+    for (let i = 0; i < 5; i++) {
+      await worker.run(op!.id);
+      clock += 20_000;
+    }
+    expect(readyCalls).toBe(5);
+    expect(createCalls).toBe(4);
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "ready" });
+    const result = await storage.get<{ state: string; result_json: string }>(
+      "SELECT state,result_json FROM operations WHERE id=?",
+      [op!.id],
+    );
+    expect(result!.state).toBe("succeeded");
+    expect(JSON.parse(result!.result_json).diagnostic).toBeUndefined();
+    expect(JSON.parse(result!.result_json).code).toBeUndefined();
+  });
+
   it("review: exhausted cleanup retains capacity but is still inspected at low frequency", async () => {
     const { service, storage, dir, now } = await fixture();
     const ticket = await service.acquire(

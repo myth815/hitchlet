@@ -17,7 +17,8 @@ try {
     installationId = randomUUID(),
     adminId = randomUUID(),
     credentialId = randomUUID(),
-    policyId = randomUUID();
+    policyId = randomUUID(),
+    denyRevisionId = randomUUID();
   const token = `hcl_${randomBytes(32).toString("base64url")}`;
   const tokenHash = createHash("sha256").update(token).digest("hex");
   const quota = {
@@ -52,8 +53,13 @@ try {
     },
     {
       kind: "run",
-      sql: "INSERT INTO installations(singleton,installation_id,controller_epoch,created_at_ms) VALUES(1,?,1,?)",
-      params: [installationId, now],
+      sql: "INSERT INTO platform_network_deny_revisions(id,revision,management_deny_rules_json,reason,created_by_consumer_id,created_at_ms) VALUES(?,1,'[]','Initial manual platform deny baseline; empty until explicitly configured and not evidence of isolation',?,?)",
+      params: [denyRevisionId, adminId, now],
+    },
+    {
+      kind: "run",
+      sql: "INSERT INTO installations(singleton,installation_id,controller_epoch,current_network_deny_revision_id,created_at_ms) VALUES(1,?,1,?,?)",
+      params: [installationId, denyRevisionId, now],
     },
     {
       kind: "run",

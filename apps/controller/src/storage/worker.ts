@@ -133,11 +133,43 @@ async function open(): Promise<void> {
       )
       .get() as { version: bigint } | undefined;
   }
-  if (applied?.version !== 2n)
+  if (applied?.version === 2n) {
+    db.exec(
+      await readFile(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          "migrations/003-validation-evidence.sql",
+        ),
+        "utf8",
+      ),
+    );
+    applied = db
+      .prepare(
+        "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
+      )
+      .get() as { version: bigint } | undefined;
+  }
+  if (applied?.version === 3n) {
+    db.exec(
+      await readFile(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          "migrations/004-managed-resource-identities.sql",
+        ),
+        "utf8",
+      ),
+    );
+    applied = db
+      .prepare(
+        "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
+      )
+      .get() as { version: bigint } | undefined;
+  }
+  if (applied?.version !== 4n)
     throw new Error(
       `Unsupported schema version ${String(applied?.version ?? "none")}`,
     );
-  db.pragma("user_version = 2");
+  db.pragma("user_version = 4");
   const fk = db.pragma("foreign_keys", { simple: true });
   const sync = db.pragma("synchronous", { simple: true });
   if ((fk !== 1 && fk !== 1n) || (sync !== 2 && sync !== 2n))
@@ -177,7 +209,7 @@ void open().then(
       id: 0,
       result: {
         sqliteVersion: db?.prepare("SELECT sqlite_version() AS version").get(),
-        schemaVersion: 1,
+        schemaVersion: 4,
       },
     }),
   (error: unknown) => {

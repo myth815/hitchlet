@@ -1,4 +1,4 @@
-import type { ResourceAmounts, ResourceContract } from "@hitchlet/contracts";
+import type { ResourceContract } from "@hitchlet/contracts";
 import type { EffectiveResources } from "@hitchlet/contracts/internal";
 
 export type PortainerEvidence = Readonly<{
@@ -46,9 +46,11 @@ export type ProvisionIdentity = RuntimeBinding &
     generation: number;
     operationId: string;
     controlVersion: number;
-    purpose: "tenant";
+    purpose: "tenant" | "validation";
   }>;
 export type ProvisionPlan = Readonly<{
+  deadlineMs: number;
+  runtimeConfig?: Readonly<Record<string, unknown>>;
   identity: ProvisionIdentity;
   artifact: Readonly<{ id: string; ref: string; digest: string }>;
   resources: ResourceContract;
@@ -83,13 +85,38 @@ export type ProvisionPlan = Readonly<{
       secretVersionRef: string | null;
     }>[];
   }>;
+  /** Cleanup has its own short command deadline; the create deadline stays frozen. */
+  executionPhase?: "provision" | "cleanup" | "observe";
+  /** Persisted resources supplied only to cleanup so a missing container does
+   * not erase the original network ports/bridge facts needed to revoke rules. */
+  cleanupResources?: readonly OwnedResource[];
   accessProtocol: "ssh" | "rdp";
+  bootstrap: Readonly<{
+    mechanism: string;
+    contractVersion: string;
+    identityReset: true;
+  }>;
+  access: Readonly<{
+    accessProtocols: readonly ("ssh" | "rdp")[];
+    ports: readonly number[];
+    account: string;
+    allowedSourceCidrs: readonly string[];
+    discovery: string;
+    readiness: string;
+  }>;
 }>;
 export type OwnedResource = Readonly<{
   id: string;
-  kind: "container" | "network_policy" | "endpoint" | "storage_reference";
+  kind:
+    | "container"
+    | "network_policy"
+    | "endpoint"
+    | "storage_reference"
+    | "volume";
   ownership: "owned" | "reference";
   referenceKey?: string;
+  /** Provider-only inspectable facts persisted alongside the receipt. */
+  details?: Readonly<Record<string, unknown>>;
   identity: ProvisionIdentity;
   contractHash: string;
   evidence: Readonly<{
@@ -107,7 +134,15 @@ export type InventoryEvidence = Readonly<{
   objects: readonly OwnedResource[];
 }>;
 export type Inspection =
-  | { presence: "present"; evidence: InventoryEvidence }
+  | {
+      presence: "present";
+      evidence: InventoryEvidence;
+      /** Populated only by an explicit read-only integrity inspection. */
+      integrity?: Readonly<{
+        state: "healthy" | "lost";
+        reason?: string;
+      }>;
+    }
   | {
       presence: "absent";
       evidence: Readonly<{
@@ -124,6 +159,7 @@ export type ReadyReceipt = Readonly<{
   identity: ProvisionIdentity;
   artifactDigest: string;
   contractHash: string;
+  manifestId: string;
   manifestHash: string;
   objectIds: readonly string[];
   effectiveResources: EffectiveResources;
@@ -133,9 +169,37 @@ export type ReadyReceipt = Readonly<{
   accessProtocol: "ssh" | "rdp";
   bootstrapComplete: true;
   offlineLeaseEnforcement: "unsupported";
+  access?: Readonly<{
+    host: string;
+    port: number;
+    username: string;
+    hostKeyFingerprint: string;
+    clientPublicKeyFingerprint: string;
+  }>;
+}>;
+
+export type CleanupReceipt = Readonly<{
+  resourceId: string;
+  kind: OwnedResource["kind"];
+  runtime: RuntimeBinding;
+  identity: ProvisionIdentity;
+  presence: "absent";
+  networkRules: "removed" | "never_installed" | "not_applicable";
+  verifiedAtMs: number;
+  agentResult?: Readonly<Record<string, unknown>>;
+}>;
+
+export type CreateEffect = Readonly<{
+  kind: "network_policy" | "volume" | "container";
+  name: string;
+  requestHash: string;
 }>;
 
 export interface ResourceJournal {
+  /** Durable unknown intent precedes a Portainer create; an existing intent must never resend. */
+  beforeCreate?(effect: CreateEffect): Promise<void>;
+  /** Check the durable operation fence immediately before each new side effect. */
+  assertActive?(): Promise<void>;
   /** Persist each verified side effect immediately; failure leaves capacity reserved for reconciliation. */
   recordCreated(resource: OwnedResource): Promise<void>;
 }
@@ -152,5 +216,8 @@ export interface ExecutionPort {
     inventory: InventoryEvidence,
   ): Promise<ReadyReceipt>;
   revokeStop(plan: ProvisionPlan): Promise<void>;
-  destroy(plan: ProvisionPlan, resource: OwnedResource): Promise<void>;
+  destroy(
+    plan: ProvisionPlan,
+    resource: OwnedResource,
+  ): Promise<CleanupReceipt | void>;
 }

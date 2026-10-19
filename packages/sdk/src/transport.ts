@@ -124,7 +124,7 @@ export class HttpTransport {
 
   async request<T>(
     path: string,
-    method: "GET" | "POST" | "DELETE",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     body: unknown,
     parse: (value: unknown, response: Response) => T,
     context: RequestContext = {},
@@ -164,7 +164,10 @@ export class HttpTransport {
         `Bearer ${auth.token}`,
         recovery,
       );
-    if (method === "POST" && context.authExchangeToken === undefined) {
+    if (
+      (method === "POST" || method === "PUT") &&
+      context.authExchangeToken === undefined
+    ) {
       headers.set("Content-Type", "application/json");
       if (!context.key)
         throw new ComputeClientError({
@@ -175,7 +178,7 @@ export class HttpTransport {
       headers.set("Idempotency-Key", context.key);
     }
     if (
-      (method === "POST" || method === "DELETE") &&
+      (method === "POST" || method === "PUT" || method === "DELETE") &&
       context.authExchangeToken === undefined &&
       (method === "DELETE" || auth?.kind === "cookie")
     ) {
@@ -208,7 +211,8 @@ export class HttpTransport {
     const init: RequestInit = {
       method,
       headers,
-      ...(method === "POST" && context.authExchangeToken === undefined
+      ...((method === "POST" || method === "PUT") &&
+      context.authExchangeToken === undefined
         ? { body: JSON.stringify(body) }
         : {}),
       credentials:

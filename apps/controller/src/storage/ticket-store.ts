@@ -19,6 +19,7 @@ export interface ReservationWrite {
   readonly runtimeIdentityId: string;
   readonly connectionRevisionId: string;
   readonly executionMode: "simulator" | "portainer" | "unconfigured";
+  readonly runtimeConfigJson: string;
   readonly operationId: string;
   readonly installationId: string | null;
   readonly controllerEpoch: number;
@@ -533,7 +534,7 @@ export class SQLiteTicketStore {
         sql:
           "INSERT INTO allocations(id,purpose,ticket_id,machine_id,node_id,runtime_identity_id,resolved_provision_contract_id,image_artifact_id,generation,control_version,desired_state,observed_state,cleanup_status,resource_contract_json,ownership_json,version,created_at_ms,updated_at_ms) SELECT ?, 'tenant', ?, ?, ?, ?, NULL, ?, ?,1,'present','unknown','pending',?,'{}',1,?,? WHERE EXISTS(SELECT 1 FROM tickets t WHERE t.id=? AND t.phase='queued' AND t.version=? AND json_extract(t.request_json,'$.locality')='local_only' AND EXISTS(SELECT 1 FROM consumers c WHERE c.id=t.consumer_id AND c.version=? AND c.status='active' AND c.quota_json=?) AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=t.network_profile_revision_id) AND NOT EXISTS(SELECT 1 FROM ticket_storage_grants g JOIN profile_grant_revocations r ON r.storage_profile_revision_id=g.storage_profile_revision_id WHERE g.ticket_id=t.id)) AND EXISTS(SELECT 1 FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN capacity_pools p ON p.id=n.pool_id WHERE n.id=? AND n.version=? AND m.id=? AND m.version=? AND m.source='local' AND m.admission='enabled' AND n.admission='enabled' AND p.version=? AND p.id=? AND (p.parent_allocation_id IS NULL OR EXISTS(SELECT 1 FROM allocations pa JOIN image_artifacts pai ON pai.id=pa.image_artifact_id WHERE pa.id=p.parent_allocation_id AND pa.machine_id=m.id AND pa.purpose='infrastructure' AND pai.environment_kind='vm' AND pa.desired_state='present' AND pa.observed_state='running' AND pa.cleanup_status IN ('pending','running') AND p.total_cpu_millis<=(SELECT coalesce(sum(c.cpu_millis),0) FROM capacity_claims c WHERE c.allocation_id=pa.id AND c.state='committed') AND p.total_memory_mib<=(SELECT coalesce(sum(c.memory_mib),0) FROM capacity_claims c WHERE c.allocation_id=pa.id AND c.state='committed') AND p.total_scratch_mib<=(SELECT coalesce(sum(c.scratch_mib),0) FROM capacity_claims c WHERE c.allocation_id=pa.id AND c.state='committed'))) AND " +
           capCheck +
-          `) AND ${activeCount} < ? AND ${usage("cpu_millis")} + ? <= ? AND ${usage("memory_mib")} + ? <= ? AND ${usage("scratch_mib")} + ? <= ?`,
+          `) AND ${activeCount} < ? AND ${usage("cpu_millis")} + ? <= ? AND ${usage("memory_mib")} + ? <= ? AND ${usage("scratch_mib")} + ? <= ? AND NOT EXISTS(SELECT 1 FROM image_caches ev JOIN image_artifacts ea ON ea.id=ev.image_artifact_id JOIN image_artifacts target ON target.id=? AND target.content_digest=ea.content_digest WHERE ev.node_id=? AND ev.observed_state='evicting')`,
         params: [
           input.allocationId,
           input.ticketId,
@@ -556,6 +557,8 @@ export class SQLiteTicketStore {
           input.poolVersion,
           input.poolId,
           ...guardParams,
+          input.artifactId,
+          input.nodeId,
         ],
         expectChanges: 1,
       },
@@ -593,6 +596,7 @@ export class SQLiteTicketStore {
             ticketId: input.ticketId,
             purpose: "tenant",
             executionMode: input.executionMode,
+            runtimeConfig: JSON.parse(input.runtimeConfigJson),
           }),
           input.now,
           input.deadline,

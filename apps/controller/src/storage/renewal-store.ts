@@ -51,18 +51,20 @@ export class SQLiteRenewalStore {
     proposedExpiresAt: number;
     decisionDeadline: number;
     initial: boolean;
+    executionMode: "simulator" | "portainer";
     now: number;
   }): Promise<void> {
     await this.db.batchTransaction([
       {
         kind: "run",
         sql: `INSERT INTO operations(id,allocation_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms)
-        SELECT ?,a.id,a.generation,a.control_version,i.controller_epoch,'lease.renew',?,?,'planned',?,json_object('executionMode','simulator','renewalId',?,'ticketId',?),?,?,?,? FROM allocations a JOIN installations i ON i.singleton=1 WHERE a.ticket_id=?`,
+        SELECT ?,a.id,a.generation,a.control_version,i.controller_epoch,'lease.renew',?,?,'planned',?,json_object('executionMode',?,'renewalId',?,'ticketId',?),?,?,?,? FROM allocations a JOIN installations i ON i.singleton=1 WHERE a.ticket_id=?`,
         params: [
           input.operationId,
           input.renewalId,
           `lease:${input.renewalId}`,
           input.requestHash,
+          input.executionMode,
           input.renewalId,
           input.ticketId,
           input.now,
@@ -170,7 +172,9 @@ export class SQLiteRenewalStore {
         sql: `UPDATE leases SET claimed_at_ms=coalesce(claimed_at_ms,?),last_renewed_at_ms=?,expires_at_ms=(SELECT proposed_expires_at_ms FROM lease_renewals WHERE id=?),version=version+1,updated_at_ms=? WHERE id=(SELECT lease_id FROM lease_renewals WHERE id=?) AND state='active' AND version=(SELECT expected_version FROM lease_renewals WHERE id=?) AND expires_at_ms>? AND EXISTS(
         SELECT 1 FROM lease_renewals r JOIN tickets t ON t.id=(SELECT ticket_id FROM leases WHERE id=r.lease_id) JOIN allocations a ON a.id=(SELECT allocation_id FROM leases WHERE id=r.lease_id) JOIN operations o ON o.id=r.operation_id
         WHERE r.id=? AND r.state='pending' AND r.decision_deadline_ms>? AND t.phase='ready' AND a.desired_state='present' AND a.generation=(SELECT generation FROM leases WHERE id=r.lease_id)
-        AND a.control_version=o.control_version AND o.generation=a.generation AND o.kind='lease.renew' AND json_extract(o.intent_json,'$.executionMode')='simulator'
+        AND a.control_version=o.control_version AND o.generation=a.generation AND o.kind='lease.renew'
+        AND json_extract(o.intent_json,'$.executionMode') IN ('simulator','portainer')
+        AND json_extract(o.intent_json,'$.executionMode')=(SELECT json_extract(p.intent_json,'$.executionMode') FROM operations p WHERE p.allocation_id=a.id AND p.kind='allocation.provision' ORDER BY p.created_at_ms DESC LIMIT 1)
         AND (r.is_initial_claim=0 OR (SELECT claim_by_ms FROM leases WHERE id=r.lease_id)>?) AND (SELECT renew_until_ms FROM leases WHERE id=r.lease_id)>?
         AND r.proposed_expires_at_ms<=(SELECT renew_until_ms FROM leases WHERE id=r.lease_id)
         AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations p WHERE p.network_profile_revision_id=t.network_profile_revision_id)

@@ -5,8 +5,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStorage } from "../dist/storage/index.js";
 import { AdminService } from "../src/application/admin.js";
+import { SQLiteMachineNodeStore } from "../src/storage/machine-node-store.js";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
+import { ImageCacheWorker } from "../src/application/image-cache.js";
+import {
+  SQLiteImageCacheStore,
+  type ImageCacheOperationReceipt,
+} from "../src/storage/image-cache-store.js";
 
 const dirs: string[] = [];
 const dbs: Awaited<ReturnType<typeof openStorage>>[] = [];
@@ -30,7 +36,7 @@ async function fixture() {
         adminId,
         JSON.stringify({
           imageIds: [],
-          nodeIds: [],
+          nodeIds: "all",
           networkProfileIds: [],
           storageProfileIds: [],
         }),
@@ -45,6 +51,10 @@ async function fixture() {
       params: [randomUUID(), now],
     },
   ]);
+  await db.run(
+    "INSERT INTO platform_network_deny_revisions(id,revision,management_deny_rules_json,reason,created_by_consumer_id,created_at_ms) VALUES(?,1,'[]','test baseline',?,?)",
+    [randomUUID(), adminId, now],
+  );
   return { dir, db, adminId };
 }
 afterEach(async () => {
@@ -71,6 +81,417 @@ const evidence = (engineId: string) => ({
 const secret = `secret:${"a".repeat(32)}`;
 
 describe("D10 Portainer identity and D11a catalog", () => {
+  it("refreshes only live Portainer observations while preserving attestation and admission under expiry or races", async () => {
+    const { db, adminId } = await fixture();
+    let clock = Date.now();
+    let live = evidence("engine-observation");
+    let probeCount = 0;
+    const service = new AdminService(
+      db,
+      async () => {
+        probeCount++;
+        return live;
+      },
+      () => clock,
+      false,
+      async () => "fixture-portainer-key",
+    );
+    const discovery = (await service.discover({
+      endpointUrl: "https://portainer.observation.test",
+      environmentId: "1",
+      secretVersionRef: secret,
+      apiKey: "fixture-api-key",
+    })) as { result: { connectionId: string; engineId: string } };
+    const machine = await service.createMachine({
+      name: "Observation runtime",
+      hostOs: "linux",
+      architecture: "amd64",
+      capacity: { cpuMillis: 3000, memoryMiB: 3000, scratchMiB: 1000 },
+      operatorId: adminId,
+    });
+    const node = await service.registerNode({
+      name: "Observed Portainer node",
+      machineId: machine.id,
+      connectionId: discovery.result.connectionId,
+      operatorId: adminId,
+    });
+    const network = await service.createProfile("network", {
+      name: "Observation test network",
+      config: {
+        allowedEgress: [],
+        allowedIngressSourceCidrs: [],
+        ipv6: "disabled",
+      },
+      authorizedConsumerIds: [adminId],
+    });
+    const configured = await service.configureNodeRuntime({
+      nodeId: node.id,
+      expectedVersion: 1,
+      operatorId: adminId,
+      requestId: randomUUID(),
+      config: {
+        accessHost: "192.0.2.20",
+        networkCidrBase: "172.25.0.0/16",
+        userlandProxy: false,
+        managementDenyRevisionId: randomUUID(),
+        managementDenyRules: [],
+        runtimeAgent: {
+          id: randomUUID(),
+          baseUrl: "https://agent.observation.test",
+          tokenSecretRef: secret,
+          caSecretRef: secret,
+          clientCertSecretRef: secret,
+          clientKeySecretRef: secret,
+        },
+      },
+    });
+    const scopes = Object.fromEntries(
+      [
+        "resourceLimits",
+        "firewallInput",
+        "firewallForward",
+        "ipv6",
+        "sshBootstrap",
+        "cleanupRecovery",
+      ].map((name) => [
+        name,
+        {
+          status: "passed" as const,
+          summary: `checked ${name}`,
+          evidenceRef: `fixture:${name}`,
+        },
+      ]),
+    );
+    const report = {
+      runId: randomUUID(),
+      sha256: createHash("sha256").update("manual test fixture").digest("hex"),
+      scopes,
+    };
+    await service.attestNodeCapabilities({
+      nodeId: node.id,
+      expectedVersion: configured.version,
+      engineId: discovery.result.engineId,
+      dockerVersion: live.dockerVersion,
+      portainerVersion: live.portainerVersion,
+      architecture: "amd64",
+      checkedAt: new Date(clock).toISOString(),
+      report,
+      networkProfileRevisionIds: [network.revisionId],
+      operatorId: adminId,
+      requestId: randomUUID(),
+    });
+    const before = await db.get<{
+      capabilities_json: string;
+      observed_at_ms: bigint;
+    }>("SELECT capabilities_json,observed_at_ms FROM nodes WHERE id=?", [
+      node.id,
+    ]);
+    expect(before).toBeDefined();
+
+    clock += 121_000;
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      checked: 1,
+      refreshed: 1,
+      unhealthy: 0,
+    });
+    let current = await db.get<{
+      capabilities_json: string;
+      observed_at_ms: bigint;
+      observed_health: string;
+      admission: string;
+    }>(
+      "SELECT capabilities_json,observed_at_ms,observed_health,admission FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(current?.observed_at_ms).toBe(BigInt(clock));
+    expect(current?.observed_health).toBe("healthy");
+    expect(current?.admission).toBe("enabled");
+    expect(current?.capabilities_json).toBe(before?.capabilities_json);
+    const lastGoodObservation = BigInt(clock);
+
+    clock += 46_000;
+    live = { ...live, engineId: "wrong-engine" };
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      checked: 1,
+      refreshed: 0,
+      unhealthy: 1,
+    });
+    current = await db.get(
+      "SELECT capabilities_json,observed_at_ms,observed_health,admission FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(current?.observed_at_ms).toBe(lastGoodObservation);
+    expect(current?.observed_health).toBe("degraded");
+    expect(current?.capabilities_json).toBe(before?.capabilities_json);
+
+    live = evidence("engine-observation");
+    clock += 46_000;
+    live = { ...live, dockerVersion: "29.5.3" };
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      checked: 1,
+      refreshed: 0,
+      unhealthy: 1,
+    });
+    current = await db.get(
+      "SELECT capabilities_json,observed_at_ms,observed_health,admission FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(current?.observed_at_ms).toBe(lastGoodObservation);
+    expect(current?.observed_health).toBe("degraded");
+    expect(current?.capabilities_json).toBe(before?.capabilities_json);
+
+    live = evidence("engine-observation");
+    clock += 46_000;
+    let releaseProbe!: () => void;
+    let probeStarted!: () => void;
+    const started = new Promise<void>((resolve) => (probeStarted = resolve));
+    const gate = new Promise<void>((resolve) => (releaseProbe = resolve));
+    const racing = new AdminService(
+      db,
+      async () => {
+        probeStarted();
+        await gate;
+        return live;
+      },
+      () => clock,
+      false,
+      async () => "fixture-portainer-key",
+    );
+    const pending = racing.refreshPortainerObservations();
+    await started;
+    await db.run(
+      "UPDATE provider_connections SET version=version+1 WHERE id=?",
+      [discovery.result.connectionId],
+    );
+    releaseProbe();
+    await pending;
+    current = await db.get(
+      "SELECT capabilities_json,observed_at_ms,observed_health,admission FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(current?.admission).toBe("enabled");
+    expect(current?.observed_at_ms).toBe(lastGoodObservation);
+    expect(current?.observed_health).toBe("degraded");
+    expect(current?.capabilities_json).toBe(before?.capabilities_json);
+
+    clock += 46_000;
+    await db.run("UPDATE nodes SET admission='draining' WHERE id=?", [node.id]);
+    const probesBeforeDrain = probeCount;
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      checked: 0,
+      refreshed: 0,
+    });
+    current = await db.get(
+      "SELECT capabilities_json,observed_at_ms,observed_health,admission FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(current?.admission).toBe("draining");
+    expect(current?.observed_at_ms).toBe(lastGoodObservation);
+    expect(current?.observed_health).toBe("degraded");
+    expect(current?.capabilities_json).toBe(before?.capabilities_json);
+    expect(probeCount).toBe(probesBeforeDrain);
+
+    clock += 46_000;
+    await db.run("UPDATE nodes SET admission='enabled' WHERE id=?", [node.id]);
+    const probesBeforeDisable = probeCount;
+    await db.run("UPDATE nodes SET admission='disabled' WHERE id=?", [node.id]);
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      checked: 0,
+      refreshed: 0,
+    });
+    current = await db.get(
+      "SELECT capabilities_json,observed_at_ms,observed_health,admission FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(current?.admission).toBe("disabled");
+    expect(current?.observed_at_ms).toBe(lastGoodObservation);
+    expect(current?.capabilities_json).toBe(before?.capabilities_json);
+    expect(probeCount).toBe(probesBeforeDisable);
+
+    clock += 46_000;
+    await db.run("UPDATE nodes SET admission='enabled' WHERE id=?", [node.id]);
+    const expiryCaps = JSON.parse(before!.capabilities_json) as Record<
+      string,
+      unknown
+    >;
+    expiryCaps.expiresAt = new Date(clock - 1).toISOString();
+    const expiredJson = JSON.stringify(expiryCaps);
+    await db.run(
+      "UPDATE nodes SET capabilities_json=?,observed_at_ms=? WHERE id=?",
+      [expiredJson, clock - 60_000, node.id],
+    );
+    const beforeExpiredProbe = probeCount;
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      checked: 1,
+      refreshed: 0,
+      expired: 1,
+    });
+    current = await db.get(
+      "SELECT capabilities_json,observed_at_ms,observed_health,admission FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(current?.observed_at_ms).toBe(BigInt(clock - 60_000));
+    expect(current?.capabilities_json).toBe(expiredJson);
+    expect(current?.observed_health).toBe("unknown");
+    expect(probeCount).toBe(beforeExpiredProbe);
+  });
+
+  it("rotates beyond a failed observation batch without advancing its success timestamp", async () => {
+    const { db, adminId } = await fixture();
+    let clock = Date.now();
+    const expectedEngines = new Map<string, string>();
+    let failedEndpoints = new Set<string>();
+    const probedEndpoints: string[] = [];
+    const service = new AdminService(
+      db,
+      async ({ endpointUrl }) => {
+        probedEndpoints.push(endpointUrl);
+        const engine = expectedEngines.get(endpointUrl) ?? "unknown-engine";
+        return evidence(
+          failedEndpoints.has(endpointUrl) ? "mismatched-engine" : engine,
+        );
+      },
+      () => clock,
+      false,
+      async () => "fixture-portainer-key",
+    );
+    const network = await service.createProfile("network", {
+      name: "Fair observation network",
+      config: {
+        allowedEgress: [],
+        allowedIngressSourceCidrs: [],
+        ipv6: "disabled",
+      },
+      authorizedConsumerIds: [adminId],
+    });
+    const report = {
+      runId: randomUUID(),
+      sha256: createHash("sha256").update("fairness fixture").digest("hex"),
+      scopes: Object.fromEntries(
+        [
+          "resourceLimits",
+          "firewallInput",
+          "firewallForward",
+          "ipv6",
+          "sshBootstrap",
+          "cleanupRecovery",
+        ].map((name) => [
+          name,
+          {
+            status: "passed" as const,
+            summary: `checked ${name}`,
+            evidenceRef: `fixture:${name}`,
+          },
+        ]),
+      ),
+    };
+    const endpoints: string[] = [];
+    for (let index = 0; index < 17; index++) {
+      const endpointUrl = `https://portainer-fair-${String(index).padStart(2, "0")}.test`;
+      const engineId = `engine-fair-${String(index).padStart(2, "0")}`;
+      endpoints.push(endpointUrl);
+      expectedEngines.set(endpointUrl, engineId);
+      const discovery = (await service.discover({
+        endpointUrl,
+        environmentId: "1",
+        secretVersionRef: secret,
+        apiKey: "fixture-api-key",
+      })) as { result: { connectionId: string; engineId: string } };
+      const machine = await service.createMachine({
+        name: `Fair observation runtime ${index}`,
+        hostOs: "linux",
+        architecture: "amd64",
+        capacity: { cpuMillis: 3000, memoryMiB: 3000, scratchMiB: 1000 },
+        operatorId: adminId,
+      });
+      const node = await service.registerNode({
+        name: `Fair observation node ${index}`,
+        machineId: machine.id,
+        connectionId: discovery.result.connectionId,
+        operatorId: adminId,
+      });
+      const configured = await service.configureNodeRuntime({
+        nodeId: node.id,
+        expectedVersion: 1,
+        operatorId: adminId,
+        requestId: randomUUID(),
+        config: {
+          accessHost: "192.0.2.30",
+          networkCidrBase: "172.25.0.0/16",
+          userlandProxy: false,
+          managementDenyRevisionId: randomUUID(),
+          managementDenyRules: [],
+          runtimeAgent: {
+            id: randomUUID(),
+            baseUrl: `https://agent-fair-${index}.test`,
+            tokenSecretRef: secret,
+            caSecretRef: secret,
+            clientCertSecretRef: secret,
+            clientKeySecretRef: secret,
+          },
+        },
+      });
+      await service.attestNodeCapabilities({
+        nodeId: node.id,
+        expectedVersion: configured.version,
+        engineId,
+        dockerVersion: "29.5.2",
+        portainerVersion: "2.45.2",
+        architecture: "amd64",
+        checkedAt: new Date(clock).toISOString(),
+        report,
+        networkProfileRevisionIds: [network.revisionId],
+        operatorId: adminId,
+        requestId: randomUUID(),
+      });
+      await db.run("UPDATE nodes SET observed_at_ms=0 WHERE id=?", [node.id]);
+    }
+
+    clock += 1_000;
+    const firstBatch = await new SQLiteMachineNodeStore(
+      db,
+      () => clock,
+    ).duePortainerObservations(clock);
+    expect(firstBatch).toHaveLength(16);
+    failedEndpoints = new Set(firstBatch.map((node) => node.endpointUrl));
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      checked: 16,
+      refreshed: 0,
+      unhealthy: 16,
+    });
+    const failedNodes = await db.all<{
+      endpoint_ref: string;
+      observed_at_ms: bigint;
+    }>(
+      "SELECT r.endpoint_ref,n.observed_at_ms FROM nodes n JOIN provider_connections c ON c.id=n.provider_connection_id JOIN provider_connection_revisions r ON r.id=c.current_revision_id",
+    );
+    expect(
+      failedNodes
+        .filter((node) => failedEndpoints.has(node.endpoint_ref))
+        .every((node) => node.observed_at_ms === 0n),
+    ).toBe(true);
+
+    failedEndpoints.clear();
+    probedEndpoints.length = 0;
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      checked: 16,
+      refreshed: 16,
+      unhealthy: 0,
+    });
+    expect(probedEndpoints).toContain(endpoints[16]);
+    const laterNode = await db.get<{
+      observed_at_ms: bigint;
+      observed_health: string;
+    }>(
+      "SELECT n.observed_at_ms,n.observed_health FROM nodes n JOIN provider_connections c ON c.id=n.provider_connection_id JOIN provider_connection_revisions r ON r.id=c.current_revision_id WHERE r.endpoint_ref=?",
+      [endpoints[16]],
+    );
+    expect(laterNode).toMatchObject({
+      observed_at_ms: BigInt(clock),
+      observed_health: "healthy",
+    });
+  });
+
   it("persists discovery before probing, rejects failed evidence, deduplicates Engine identity, and CAS-activates same-Engine revisions", async () => {
     const { dir, db, adminId } = await fixture();
     const failed = new AdminService(db, async () => {
@@ -444,24 +865,21 @@ describe("D10 Portainer identity and D11a catalog", () => {
       },
       authorizedConsumerIds: [adminId],
     });
-    const storageValidation = await service.scheduleValidation({
-      ...validationRequest,
-      versionId: secondVersion.versionId,
-      imageArtifactId: secondVersion.artifactId,
-      storage: [
-        {
-          storageProfileId: storageProfile.id,
-          authorizedSubpath: "fixture",
-          mountPath: "/workspace/input",
-          mode: "read_only",
-        },
-      ],
-    });
-    expect(storageValidation).toMatchObject({
-      scheduler: "blocked",
-      allocationId: null,
-      blockReason: "node_storage_capability_unverified",
-    });
+    await expect(
+      service.scheduleValidation({
+        ...validationRequest,
+        versionId: secondVersion.versionId,
+        imageArtifactId: secondVersion.artifactId,
+        storage: [
+          {
+            storageProfileId: storageProfile.id,
+            authorizedSubpath: "fixture",
+            mountPath: "/workspace/input",
+            mode: "read_only",
+          },
+        ],
+      }),
+    ).rejects.toThrow("Persistent validation mounts are unsupported");
     const cache = await service.prewarmImageCache({
       nodeId: node.id,
       artifactId: draft.artifactId,
@@ -493,6 +911,37 @@ describe("D10 Portainer identity and D11a catalog", () => {
         [cache.operationId],
       ),
     ).toEqual({ image_artifact_id: draft.artifactId });
+    const cacheStore = new SQLiteImageCacheStore(db, () => Date.now());
+    const receipt = await cacheStore.operationReceipt(
+      node.id,
+      cache.operationId,
+    );
+    expect(receipt).toMatchObject({
+      operationId: cache.operationId,
+      nodeId: node.id,
+      artifactId: draft.artifactId,
+      kind: "image-cache.pull",
+      state: "planned",
+      cache: {
+        desiredState: "present",
+        observedState: "unknown",
+      },
+      diagnostic: null,
+    } satisfies Partial<ImageCacheOperationReceipt>);
+    expect(Object.keys(receipt ?? {}).sort()).toEqual([
+      "artifactId",
+      "attemptCount",
+      "cache",
+      "diagnostic",
+      "kind",
+      "nextCheckAtMs",
+      "nodeId",
+      "operationId",
+      "state",
+    ]);
+    expect(
+      await cacheStore.operationReceipt(randomUUID(), cache.operationId),
+    ).toBeUndefined();
     const repeatedCachePlans = await Promise.all(
       [0, 1, 2].map(() =>
         service.prewarmImageCache({
@@ -514,6 +963,120 @@ describe("D10 Portainer identity and D11a catalog", () => {
         )?.n,
       ),
     ).toBe(1);
+
+    const pinnedCacheTarget = await db.get<{
+      runtime_identity_id: string;
+      connection_revision_id: string;
+    }>(
+      "SELECT runtime_identity_id,connection_revision_id FROM operations WHERE id=?",
+      [cache.operationId],
+    );
+    expect(pinnedCacheTarget).toBeDefined();
+    let cacheClock = Date.now();
+    await db.run(
+      "UPDATE installations SET controller_epoch=2 WHERE singleton=1",
+    );
+    const restartedStore = new SQLiteImageCacheStore(
+      db,
+      () => cacheClock,
+      1_000,
+    );
+    const [plannedRecovery] = await restartedStore.claimDue();
+    expect(plannedRecovery).toMatchObject({
+      operationId: cache.operationId,
+      kind: "image-cache.pull",
+      controllerEpoch: 2,
+      runtimeIdentityId: pinnedCacheTarget!.runtime_identity_id,
+      artifactId: draft.artifactId,
+      digest: `sha256:${"b".repeat(64)}`,
+    });
+    await db.run(
+      "UPDATE installations SET controller_epoch=3 WHERE singleton=1",
+    );
+    const nextRestartStore = new SQLiteImageCacheStore(
+      db,
+      () => cacheClock,
+      1_000,
+    );
+    expect(await nextRestartStore.claimDue()).toHaveLength(0);
+    expect(await nextRestartStore.assertCurrent(plannedRecovery!)).toBe(false);
+    expect(
+      await nextRestartStore.recordReady(
+        plannedRecovery!,
+        `sha256:${"b".repeat(64)}`,
+        17,
+      ),
+    ).toBe(false);
+
+    cacheClock += 1_001;
+    const expiredLeaseStore = new SQLiteImageCacheStore(
+      db,
+      () => cacheClock,
+      1_000,
+    );
+    const [expiredRecovery] = await expiredLeaseStore.claimDue();
+    expect(expiredRecovery).toMatchObject({
+      operationId: cache.operationId,
+      controllerEpoch: 3,
+      runtimeIdentityId: pinnedCacheTarget!.runtime_identity_id,
+      connectionRevisionId: pinnedCacheTarget!.connection_revision_id,
+      artifactId: draft.artifactId,
+      digest: `sha256:${"b".repeat(64)}`,
+    });
+    expect(expiredRecovery!.ownerToken).not.toBe(plannedRecovery!.ownerToken);
+    expect(expiredRecovery!.version).toBeGreaterThan(plannedRecovery!.version);
+
+    const staleEvictionOwner = {
+      ...expiredRecovery!,
+      kind: "image-cache.evict" as const,
+      deleteAttempted: true,
+      deleteConfirmed: true,
+      deleteImageId: "sha256:deleted-image-id",
+    };
+    await db.batchTransaction([
+      {
+        kind: "run",
+        sql: `UPDATE operations SET kind='image-cache.evict',state='unknown',owner_token=NULL,
+                locked_until_ms=NULL,result_json=json_object('deleteAttempted',1,'deleteConfirmed',1,'deleteImageId',?),
+                version=version+1,next_check_at_ms=?,updated_at_ms=? WHERE id=?`,
+        params: [
+          staleEvictionOwner.deleteImageId,
+          cacheClock,
+          cacheClock,
+          cache.operationId,
+        ],
+      },
+      {
+        kind: "run",
+        sql: "UPDATE image_caches SET desired_state='absent',observed_state='evicting',local_ref=? WHERE node_id=? AND image_artifact_id=?",
+        params: [`sha256:${"b".repeat(64)}`, node.id, draft.artifactId],
+      },
+      {
+        kind: "run",
+        sql: "UPDATE installations SET controller_epoch=4 WHERE singleton=1",
+      },
+    ]);
+    const recoveryAfterDeleteUnknown = await new SQLiteImageCacheStore(
+      db,
+      () => cacheClock,
+      1_000,
+    ).claimDue();
+    expect(recoveryAfterDeleteUnknown).toHaveLength(1);
+    expect(recoveryAfterDeleteUnknown[0]).toMatchObject({
+      operationId: cache.operationId,
+      kind: "image-cache.evict",
+      controllerEpoch: 4,
+      runtimeIdentityId: pinnedCacheTarget!.runtime_identity_id,
+      artifactId: draft.artifactId,
+      digest: `sha256:${"b".repeat(64)}`,
+      deleteAttempted: true,
+      deleteConfirmed: true,
+      deleteImageId: "sha256:deleted-image-id",
+    });
+    expect(
+      await expiredLeaseStore.markDeleteConfirmed(staleEvictionOwner),
+    ).toBe(false);
+
     await expect(
       service.planCacheEviction({
         nodeId: node.id,
@@ -651,6 +1214,37 @@ describe("D10 Portainer identity and D11a catalog", () => {
           await db.get<{ n: bigint }>(
             "SELECT count(*) n FROM operations WHERE node_id=? AND image_artifact_id=? AND kind='image-cache.evict'",
             [node.id, raceVersion.artifactId],
+          )
+        )?.n,
+      ),
+    ).toBe(0);
+
+    const afterPlanVersion = await extraVersion(
+      "cache-reference-after-plan",
+      "f",
+    );
+    await readyCache(afterPlanVersion.artifactId, `sha256:${"f".repeat(64)}`);
+    const plannedEviction = await service.planCacheEviction({
+      nodeId: node.id,
+      artifactId: afterPlanVersion.artifactId,
+    });
+    expect(plannedEviction.state).toBe("queued");
+    const lateReference = await service.scheduleValidation({
+      ...validationRequest,
+      versionId: afterPlanVersion.versionId,
+      imageArtifactId: afterPlanVersion.artifactId,
+    });
+    expect(lateReference).toMatchObject({
+      scheduler: "blocked",
+      allocationId: null,
+      operationId: null,
+    });
+    expect(
+      Number(
+        (
+          await db.get<{ n: bigint }>(
+            "SELECT count(*) n FROM allocations WHERE image_artifact_id=? AND cleanup_status<>'complete'",
+            [afterPlanVersion.artifactId],
           )
         )?.n,
       ),

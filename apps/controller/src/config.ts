@@ -8,7 +8,9 @@ const ConfigSchema = z
       .default("info"),
     DATA_DIR: z.string().min(1),
     GUI_DIR: z.string().default("/app/gui"),
-    EXECUTION_MODE: z.enum(["disabled", "simulator"]).default("disabled"),
+    EXECUTION_MODE: z
+      .enum(["disabled", "simulator", "portainer"])
+      .default("disabled"),
     SIMULATOR_DATA_DIR: z.string().min(1).optional(),
     HITCHLET_SECRET_KEY_FILE: z.string().min(1).optional(),
     PORTAINER_ALLOW_LOOPBACK_HTTP: z
@@ -26,6 +28,15 @@ const ConfigSchema = z
         code: "custom",
         path: ["SIMULATOR_DATA_DIR"],
         message: "required when EXECUTION_MODE=simulator",
+      });
+    if (
+      config.EXECUTION_MODE === "portainer" &&
+      !config.HITCHLET_SECRET_KEY_FILE
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["HITCHLET_SECRET_KEY_FILE"],
+        message: "required when EXECUTION_MODE=portainer",
       });
     if (
       !config.COOKIE_SECURE &&
