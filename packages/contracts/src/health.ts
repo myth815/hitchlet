@@ -3,8 +3,9 @@ import { z } from "zod";
 export const HealthResponseSchema = z
   .object({
     status: z.literal("ok"),
-    stage: z.literal("D00"),
-    simulator: z.literal("not_implemented"),
+    stage: z.literal("D05"),
+    executionMode: z.enum(["disabled", "simulator"]),
+    recoveryState: z.enum(["ready", "recovering", "unavailable"]),
   })
   .strict();
 

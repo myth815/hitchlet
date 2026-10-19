@@ -348,7 +348,8 @@ TypeScript合同按用途划分：消费者及租客GUI只导入contracts/public
 | POST /tickets/{id}/cancel | 理由可选；不依赖已存在 Lease | 未预留可直接 released，否则生成回收意图；重复幂等 |
 | POST /tickets/{id}/access | generation | 仅 owner+已接用有效租约；短期端点/凭据、过期时间与指纹；no-store |
 | GET /tickets/{id}/events | EventCursor after、limit | CursorPage<ResourceEvent>；按id排序的脱敏时间线，读取不续租 |
-| GET /events | after / Last-Event-ID、允许的过滤 | SSE输出相同ResourceEvent信封，至少一次；按id去重，游标过期410，重取快照后接续 |
+| GET /events | after、limit、可选ticketId | 200 CursorPage<ResourceEvent> JSON；仅返回调用者可见事件，按十进制字符串ID稳定排序 |
+| GET /events/stream | after或Last-Event-ID、可选ticketId | SSE输出相同ResourceEvent信封；以十进制字符串ID续传，断线后可从游标补读；不是状态提交或回收的前置条件 |
 | POST /scheduling/explain | 与申请相同的合同 | 200 可行性/排除原因；不锁资源，不保证随后一定分到 |
 | GET /images、GET /image-versions/{id} | 授权目录筛选 | 可申请镜像、架构、规格、接入与限制 |
 

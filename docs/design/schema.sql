@@ -1,4 +1,4 @@
--- Independent compute resource service: SQLite starting schema, v1.3.
+-- Independent compute resource service: current SQLite schema, v1.3 + D05.
 -- This file is a design artifact, not a deployed migration runner.
 -- SQL syntax requires SQLite >= 3.37 (STRICT) with JSON functions enabled.
 -- Production requires the fixed SQLite 3.51.3+ baseline; passing these schema
@@ -74,6 +74,7 @@ CREATE TABLE consumer_credentials (
 CREATE TABLE gui_sessions (
   id TEXT PRIMARY KEY,
   consumer_id TEXT NOT NULL REFERENCES consumers(id) ON DELETE RESTRICT,
+  source_credential_id TEXT REFERENCES consumer_credentials(id) ON DELETE RESTRICT,
   token_hash TEXT NOT NULL UNIQUE CHECK (length(token_hash) = 64),
   csrf_token_hash TEXT NOT NULL CHECK (length(csrf_token_hash) = 64),
   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
@@ -929,6 +930,8 @@ BEGIN SELECT RAISE(ABORT, 'child pool requires infrastructure VM'); END;
 
 INSERT INTO schema_migrations(version, description, applied_at_ms)
 VALUES (1, 'Independent resource service v1.3 starting schema', CAST(unixepoch('now') AS INTEGER) * 1000);
+INSERT INTO schema_migrations(version, description, applied_at_ms)
+VALUES (2, 'Bind browser sessions to issuing credentials', CAST(unixepoch('now') AS INTEGER) * 1000);
 
 COMMIT;
 

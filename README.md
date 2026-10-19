@@ -10,7 +10,7 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 
 ## 当前状态
 
-**基础工程、Ticket 账本与可恢复 Simulator 已通过审核。** 仓库包含 Fastify 健康 API、状态 GUI、最小 health SDK、公开协议校验、单 worker SQLite，以及受理／原子预留／准备／清理的应用模块和持久操作恢复。75 项实现测试已通过；租用 HTTP API、完整 SDK／GUI 和实际 Provider 尚未交付，目前未达到 M0。Simulator 仅用于开发验证。具体进度与验证边界见[实施记录](docs/IMPLEMENTATION.md)。
+**M0 模拟闭环已通过审核。** 仓库包含 Ticket HTTP API、TypeScript 消费者 SDK、中文 GUI、公开协议校验、单 worker SQLite 与可恢复 Simulator。115 项实现测试通过，并完成真实浏览器的申请、接用、续租、归还、原请求恢复和窄屏验收。当前仅支持显式模拟环境，尚无真实 Docker/SSH 资源；M1、M2 未完成。具体进度与验证边界见[实施记录](docs/IMPLEMENTATION.md)。
 
 首个交付目标是 **Docker，通过 Portainer 接入**。Hyper-V 与 Tart 只保留扩展设计，按实际需求后置，不作为 Docker 版本发布的前提。
 
@@ -51,7 +51,7 @@ node docs/design/verify-schema.cjs
 
 ## 本地运行
 
-需要 Node.js 24 LTS 与 pnpm 10。运行 `pnpm install` 后执行 `pnpm dev`，默认打开 GUI `http://localhost:5173`，健康 API 为 `http://localhost:3000/healthz`。使用 Docker 时复制 `.env.example` 为 `.env`，执行 `docker compose up --build` 并打开 `http://localhost:3000`。详见 [D00 运行说明](docs/runbook.md)。
+需要 Node.js 24 LTS 与 pnpm 10。按 [M0 运行手册](docs/runbook.md)安装依赖、显式初始化 Simulator 并领取测试凭据，再启动 API 与 GUI。开发 GUI 使用 `http://localhost:5173`；构建后可由控制器同源发布。Compose 当前默认禁用执行器，不能据此接入真实 Docker 计算节点。
 
 ## 参与开发
 

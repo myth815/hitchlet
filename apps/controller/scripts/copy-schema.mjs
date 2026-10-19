@@ -1,6 +1,13 @@
 import { copyFile, mkdir } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-const source = resolve("../../docs/design/schema.sql");
-const target = resolve("dist/storage/migrations/001-initial.sql");
-await mkdir(dirname(target), { recursive: true });
-await copyFile(source, target);
+import { resolve } from "node:path";
+const source = resolve("src/storage/migrations");
+const target = resolve("dist/storage/migrations");
+await mkdir(target, { recursive: true });
+await copyFile(
+  resolve(source, "001-initial.sql"),
+  resolve(target, "001-initial.sql"),
+);
+await copyFile(
+  resolve(source, "002-session-credential-lineage.sql"),
+  resolve(target, "002-session-credential-lineage.sql"),
+);

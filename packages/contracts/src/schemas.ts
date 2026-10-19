@@ -9,6 +9,7 @@ import type {
   CursorPage,
 } from "./common.js";
 import type {
+  AuthenticatedPrincipal,
   AcquireRequest,
   AccessRequest,
   CancelRequest,
@@ -33,6 +34,15 @@ import type {
   AccessGrant,
   RenewRequest,
   RevokeRequest,
+  ImageSummary,
+  ImageArtifactView,
+  ImageVersionView,
+  AcquireReceipt,
+  RenewReceipt,
+  RenewOutcome,
+  ReadyTicketView,
+  ReleasedTicketView,
+  PreparedTicketCommand,
 } from "./consumer.js";
 
 const id = z.string().uuid();
@@ -193,6 +203,9 @@ export const RenewRequestSchema = z
     requestedTtlSec: positiveInt.max(31_536_000).optional(),
   })
   .strict();
+export const AccessCommandRequestSchema = z
+  .object({ generation: positiveInt })
+  .strict();
 export const ReleaseRequestSchema: z.ZodType<ReleaseRequest> = z
   .object({ generation: positiveInt, reclaimable: z.literal(true) })
   .strict();
@@ -204,6 +217,14 @@ export const RevokeRequestSchema = z
     generation: positiveInt.nullable(),
     expectedTicketVersion: positiveInt,
     reason: z.string().trim().min(1).max(1024),
+  })
+  .strict();
+export const AuthenticatedPrincipalSchema: z.ZodType<AuthenticatedPrincipal> = z
+  .object({
+    consumerId: id,
+    role: z.enum(["viewer", "consumer", "operator", "admin"]),
+    scopes: z.array(z.string()),
+    source: z.enum(["bearer", "session"]),
   })
   .strict();
 export const PageQuerySchema = z
@@ -297,6 +318,7 @@ export const ResourceEventSchema: z.ZodType<ResourceEvent> = z
     payload: z.json(),
   })
   .strict();
+export const ResourceEventPageSchema = CursorPageSchema(ResourceEventSchema);
 export const ApiErrorResponseSchema: z.ZodType<ApiErrorResponse> = z
   .object({
     error: z
@@ -418,7 +440,7 @@ export const CleanupBlockerViewSchema: z.ZodType<CleanupBlockerView> = z
     nextCheckAt: utc.nullable(),
   })
   .strict();
-export const TicketViewSchema = TicketSummarySchema.extend({
+const ticketViewObjectSchema = TicketSummarySchema.extend({
   acceptedRequest: AcceptedAcquireRequestSchema,
   pinnedProfileRevisions: z
     .object({
@@ -435,6 +457,50 @@ export const TicketViewSchema = TicketSummarySchema.extend({
   renewalPending: PendingRenewalViewSchema.nullable(),
   cleanupBlockedResources: z.array(CleanupBlockerViewSchema),
 }).strict();
+// The object schema performs full strict runtime validation; this annotation preserves exactOptionalPropertyTypes at the public DTO boundary.
+export const TicketViewSchema: z.ZodType<TicketView> =
+  ticketViewObjectSchema as z.ZodType<TicketView>;
+const activeLeaseShape = {
+  id,
+  generation: positiveInt,
+  version: positiveInt,
+  state: z.literal("active"),
+  claimBy: utc,
+  claimedAt: utc.nullable(),
+  expiresAt: utc,
+  renewUntil: utc,
+  revokedAt: utc.nullable(),
+};
+export const ReadyTicketViewSchema: z.ZodType<ReadyTicketView> =
+  ticketViewObjectSchema.extend({
+    phase: z.literal("ready"),
+    lease: z.object(activeLeaseShape).strict(),
+    placement: TicketPlacementViewSchema,
+  }) as z.ZodType<ReadyTicketView>;
+export const ReleasedTicketViewSchema: z.ZodType<ReleasedTicketView> =
+  ticketViewObjectSchema.extend({
+    phase: z.literal("released"),
+    terminalReason: z.enum([
+      "consumer_release",
+      "consumer_cancel",
+      "queue_timeout",
+      "provision_timeout",
+      "provision_failed",
+      "unclaimed_timeout",
+      "lease_expired",
+      "max_lifetime",
+      "resource_lost",
+      "admin_revoke",
+    ]),
+    cleanupStatus: z.enum(["not_needed", "complete"]),
+    releasedAt: utc,
+  }) as z.ZodType<ReleasedTicketView>;
+export const AcquireReceiptSchema: z.ZodType<AcquireReceipt> = z
+  .object({
+    ticket: TicketViewSchema,
+    idempotencyKey: z.string().min(1).max(200),
+  })
+  .strict() as z.ZodType<AcquireReceipt>;
 const renewalBaseShape = {
   id,
   leaseId: id,
@@ -486,6 +552,61 @@ const renewalDecisionSchema = z.discriminatedUnion("state", [
 ]);
 export const LeaseRenewalViewSchema: z.ZodType<LeaseRenewalView> =
   renewalDecisionSchema;
+export const RenewReceiptSchema: z.ZodType<RenewReceipt> = z
+  .object({
+    renewalId: id,
+    ticketId: id,
+    generation: positiveInt,
+    leaseId: id,
+    leaseVersion: positiveInt,
+    claimedAt: utc,
+    expiresAt: utc,
+    renewUntil: utc,
+    offlineEnforcement: z.enum(["confirmed", "not_guaranteed"]),
+    guardAcknowledgementId: id.nullable(),
+  })
+  .strict();
+export const RenewOutcomeSchema: z.ZodType<RenewOutcome> = z.discriminatedUnion(
+  "outcome",
+  [
+    z
+      .object({
+        outcome: z.literal("confirmed"),
+        renewalId: id,
+        receipt: RenewReceiptSchema,
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal("pending"),
+        renewal: z
+          .object({
+            ...renewalBaseShape,
+            state: z.literal("pending"),
+            reasonCode: z.null(),
+            confirmedReceipt: z.null(),
+          })
+          .strict(),
+        location: z.string().min(1),
+        lastConfirmedExpiresAt: utc,
+      })
+      .strict(),
+    z
+      .object({
+        outcome: z.literal("rejected"),
+        renewal: z
+          .object({
+            ...renewalBaseShape,
+            state: z.enum(["rejected", "cancelled"]),
+            reasonCode: z.string().min(1),
+            confirmedReceipt: z.null(),
+          })
+          .strict(),
+        reasonCode: z.string().min(1),
+      })
+      .strict(),
+  ],
+) as z.ZodType<RenewOutcome>;
 export const AccessGrantSchema: z.ZodType<AccessGrant> = z
   .object({
     ticketId: id,
@@ -531,8 +652,92 @@ export const AccessGrantSchema: z.ZodType<AccessGrant> = z
   })
   .strict();
 
+export const ImageSummarySchema: z.ZodType<ImageSummary> = z
+  .object({
+    id,
+    name: z.string().min(1),
+    description: z.string(),
+  })
+  .strict();
+export const ImageArtifactViewSchema: z.ZodType<ImageArtifactView> = z
+  .object({
+    id,
+    provider: z.enum(["portainer", "hyperv", "tart"]),
+    kind: z.enum(["container", "vm"]),
+    architecture: z.enum(["amd64", "arm64"]),
+    guestOs: z.enum(["linux", "windows", "macos"]),
+    digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    accessProtocols: z.array(z.enum(["ssh", "rdp"])),
+  })
+  .strict();
+export const ImageVersionViewSchema: z.ZodType<ImageVersionView> = z
+  .object({
+    id,
+    imageId: id,
+    version: z.string().min(1),
+    status: z.enum([
+      "draft",
+      "validating",
+      "published",
+      "blocked",
+      "deprecated",
+    ]),
+    minimumResources: ResourceAmountsSchema,
+    artifacts: z.array(ImageArtifactViewSchema),
+  })
+  .strict();
+export const ImageSummaryPageSchema = CursorPageSchema(ImageSummarySchema);
+const preparedCommon = {
+  schemaVersion: z.literal(1),
+  idempotencyKey: z.string().min(1).max(200),
+  ticketId: id,
+};
+const preparedTicketCommandUnion = z.discriminatedUnion("kind", [
+  z
+    .object({
+      schemaVersion: z.literal(1),
+      kind: z.literal("acquire"),
+      idempotencyKey: z.string().min(1).max(200),
+      request: AcquireRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...preparedCommon,
+      kind: z.literal("renew"),
+      request: RenewRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...preparedCommon,
+      kind: z.literal("release"),
+      request: ReleaseRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...preparedCommon,
+      kind: z.literal("cancel"),
+      request: CancelRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      ...preparedCommon,
+      kind: z.literal("access"),
+      request: AccessCommandRequestSchema,
+    })
+    .strict(),
+]);
+// The raw union above is the runtime/OpenAPI authority and is compared with the DTO below.
+// This public bridge only removes Zod's optional-property `undefined` output widening under exactOptionalPropertyTypes.
+export const PreparedTicketCommandSchema: z.ZodType<PreparedTicketCommand> =
+  preparedTicketCommandUnion as z.ZodType<PreparedTicketCommand>;
+
 // Zod 4 exposes native JSON Schema conversion for the registered public schemas.
 export const PublicSchemas = {
+  AuthenticatedPrincipal: AuthenticatedPrincipalSchema,
   AcquireRequest: AcquireRequestSchema,
   ResourceAmounts: ResourceAmountsSchema,
   RequestedResources: RequestedResourcesSchema,
@@ -540,6 +745,7 @@ export const PublicSchemas = {
   StorageRequest: StorageRequestSchema,
   LeaseRequest: LeaseRequestSchema,
   RenewRequest: RenewRequestSchema,
+  AccessCommandRequest: AccessCommandRequestSchema,
   ReleaseRequest: ReleaseRequestSchema,
   CancelRequest: CancelRequestSchema,
   RevokeRequest: RevokeRequestSchema,
@@ -547,10 +753,14 @@ export const PublicSchemas = {
   TicketListQuery: TicketListQuerySchema,
   EventQuery: EventQuerySchema,
   ResourceEvent: ResourceEventSchema,
+  ResourceEventPage: ResourceEventPageSchema,
   TicketSummary: TicketSummarySchema,
   TicketSummaryPage: TicketSummaryPageSchema,
   AcceptedAcquireRequest: AcceptedAcquireRequestSchema,
   TicketView: TicketViewSchema,
+  ReadyTicketView: ReadyTicketViewSchema,
+  ReleasedTicketView: ReleasedTicketViewSchema,
+  AcquireReceipt: AcquireReceiptSchema,
   LeaseView: LeaseViewSchema,
   TicketPlacementView: TicketPlacementViewSchema,
   TicketHealthView: TicketHealthViewSchema,
@@ -558,7 +768,14 @@ export const PublicSchemas = {
   PendingRenewalView: PendingRenewalViewSchema,
   CleanupBlockerView: CleanupBlockerViewSchema,
   LeaseRenewalView: LeaseRenewalViewSchema,
+  RenewReceipt: RenewReceiptSchema,
+  RenewOutcome: RenewOutcomeSchema,
   AccessGrant: AccessGrantSchema,
+  ImageSummary: ImageSummarySchema,
+  ImageArtifactView: ImageArtifactViewSchema,
+  ImageVersionView: ImageVersionViewSchema,
+  ImageSummaryPage: ImageSummaryPageSchema,
+  PreparedTicketCommand: PreparedTicketCommandSchema,
   ApiErrorResponse: ApiErrorResponseSchema,
 } as const;
 export function toPublicJsonSchema() {
@@ -591,6 +808,7 @@ type Fits<Contract, Schema> = [Normalize<Contract>] extends [
     : false
   : false;
 export type SchemaContractChecks = [
+  Assert<Fits<AuthenticatedPrincipal, typeof AuthenticatedPrincipalSchema>>,
   Assert<Fits<ResourceAmounts, typeof ResourceAmountsSchema>>,
   Assert<Fits<AcceleratorRequirement, typeof AcceleratorRequirementSchema>>,
   Assert<Fits<RequestedResources, typeof RequestedResourcesSchema>>,
@@ -622,8 +840,27 @@ export type SchemaContractChecks = [
   Assert<Fits<LeaseRenewalView, typeof LeaseRenewalViewSchema>>,
   Assert<Fits<AccessGrant, typeof AccessGrantSchema>>,
   Assert<Fits<ApiErrorResponse, typeof ApiErrorResponseSchema>>,
+  Assert<Fits<ImageSummary, typeof ImageSummarySchema>>,
+  Assert<Fits<ImageArtifactView, typeof ImageArtifactViewSchema>>,
+  Assert<Fits<ImageVersionView, typeof ImageVersionViewSchema>>,
+  Assert<Fits<AcquireReceipt, typeof AcquireReceiptSchema>>,
+  Assert<Fits<RenewReceipt, typeof RenewReceiptSchema>>,
+  Assert<Fits<RenewOutcome, typeof RenewOutcomeSchema>>,
+  Assert<Fits<ReadyTicketView, typeof ReadyTicketViewSchema>>,
+  Assert<Fits<ReleasedTicketView, typeof ReleasedTicketViewSchema>>,
+  Assert<Fits<PreparedTicketCommand, typeof preparedTicketCommandUnion>>,
 ];
 export const schemaContractChecks: SchemaContractChecks = [
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
+  true,
   true,
   true,
   true,

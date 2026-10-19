@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import Database from "better-sqlite3";
+import { SQLiteIdentityStore } from "../dist/storage/identity-store.js";
 import {
   openStorage,
   openStorageWithWorker,
@@ -36,7 +38,7 @@ describe("SQLite storage worker", () => {
     expect(tables).toHaveLength(41);
     expect(
       await storage.get(
-        "SELECT version FROM schema_migrations WHERE version = 1",
+        "SELECT version FROM schema_migrations WHERE version = 2",
       ),
     ).toBeDefined();
     const version = await storage.get<{ version: string }>(
@@ -48,7 +50,7 @@ describe("SQLite storage worker", () => {
     opened.push(restarted);
     expect(
       await restarted.get("SELECT count(*) AS count FROM schema_migrations"),
-    ).toMatchObject({ count: 1n });
+    ).toMatchObject({ count: 2n });
   });
 
   it("enforces foreign keys, immutable rows, and active grant cleanup guards", async () => {
@@ -191,10 +193,91 @@ describe("SQLite storage worker", () => {
 
   it("builds the same migration bytes from the single source file", async () => {
     const { readFile } = await import("node:fs/promises");
-    const source = await readFile(resolve("../../docs/design/schema.sql"));
+    const source = await readFile(
+      resolve("src/storage/migrations/001-initial.sql"),
+    );
     const built = await readFile(
       resolve("dist/storage/migrations/001-initial.sql"),
     );
     expect(built.equals(source)).toBe(true);
+    const sourceUpgrade = await readFile(
+      resolve("src/storage/migrations/002-session-credential-lineage.sql"),
+    );
+    const builtUpgrade = await readFile(
+      resolve("dist/storage/migrations/002-session-credential-lineage.sql"),
+    );
+    expect(builtUpgrade.equals(sourceUpgrade)).toBe(true);
+  });
+
+  it("upgrades a v1 data directory in place without replacing its ledger", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "hitchlet-upgrade-v1-"));
+    dirs.push(dir);
+    const source = await import("node:fs/promises").then(({ readFile }) =>
+      readFile(resolve("src/storage/migrations/001-initial.sql"), "utf8"),
+    );
+    const raw = new Database(join(dir, "hitchlet.sqlite"));
+    raw.exec(source);
+    raw
+      .prepare(
+        "INSERT INTO consumers(id,name,kind,role,authorization_json,quota_json,created_at_ms,updated_at_ms) VALUES('legacy-consumer','Legacy','human','consumer','{}','{}',1,1)",
+      )
+      .run();
+    raw
+      .prepare(
+        "INSERT INTO gui_sessions(id,consumer_id,token_hash,csrf_token_hash,created_at_ms,expires_at_ms) VALUES('legacy-session','legacy-consumer',?,?,1,9999999999999)",
+      )
+      .run("a".repeat(64), "b".repeat(64));
+    raw
+      .prepare(
+        "INSERT INTO events(id,aggregate_type,aggregate_id,aggregate_version,event_type,consumer_id,occurred_at_ms,payload_json) VALUES(?,?,?,?,?,?,?,?)",
+      )
+      .run(
+        9007199254740993n,
+        "ticket",
+        "legacy-ticket",
+        1,
+        "legacy.event",
+        "legacy-consumer",
+        1,
+        "{}",
+      );
+    raw.close();
+    const storage = await openStorage(dir);
+    opened.push(storage);
+    expect(
+      await storage.get("SELECT count(*) AS count FROM schema_migrations"),
+    ).toMatchObject({ count: 2n });
+    expect(
+      await storage.get<{ user_version: bigint }>("PRAGMA user_version"),
+    ).toMatchObject({ user_version: 2n });
+    expect(
+      await storage.get(
+        "SELECT name FROM pragma_table_info('gui_sessions') WHERE name='source_credential_id'",
+      ),
+    ).toBeDefined();
+    expect(
+      await storage.get<{ name: string }>(
+        "SELECT name FROM consumers WHERE id='legacy-consumer'",
+      ),
+    ).toMatchObject({ name: "Legacy" });
+    expect(
+      await storage.get<{ id: bigint }>(
+        "SELECT id FROM events WHERE id=9007199254740993",
+      ),
+    ).toMatchObject({ id: 9007199254740993n });
+    expect(
+      await storage.get<{ source_credential_id: string | null }>(
+        "SELECT source_credential_id FROM gui_sessions WHERE id='legacy-session'",
+      ),
+    ).toMatchObject({ source_credential_id: null });
+    expect(
+      await new SQLiteIdentityStore(storage).session("a".repeat(64)),
+    ).toBeUndefined();
+    await expect(
+      storage.run(
+        "INSERT INTO gui_sessions(id,consumer_id,token_hash,csrf_token_hash,created_at_ms,expires_at_ms,source_credential_id) VALUES('bad-session','legacy-consumer',?,?,1,9999999999999,'missing-credential')",
+        ["c".repeat(64), "d".repeat(64)],
+      ),
+    ).rejects.toMatchObject({ code: "STORAGE_CONSTRAINT" });
   });
 });

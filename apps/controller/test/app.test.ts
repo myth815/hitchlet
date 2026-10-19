@@ -30,9 +30,52 @@ describe("controller app", () => {
       expect(health.statusCode).toBe(200);
       expect(health.json()).toEqual({
         status: "ok",
-        stage: "D00",
-        simulator: "not_implemented",
+        stage: "D05",
+        executionMode: "disabled",
+        recoveryState: "ready",
       });
+      const openapi = await app.inject({ url: "/v1/openapi.json" });
+      expect(openapi.statusCode).toBe(200);
+      const document = openapi.json() as {
+        paths: Record<string, Record<string, unknown>>;
+        components: { schemas: Record<string, unknown> };
+      };
+      expect(Object.keys(document.paths)).toEqual(
+        expect.arrayContaining([
+          "/v1/auth/session",
+          "/v1/auth/me",
+          "/v1/events/stream",
+          "/v1/tickets/{ticketId}/revoke",
+          "/v1/tickets",
+          "/v1/tickets/{ticketId}/release",
+          "/v1/tickets/{ticketId}/cancel",
+          "/v1/tickets/{ticketId}/renew",
+          "/v1/tickets/{ticketId}/renewals/{renewalId}",
+          "/v1/tickets/{ticketId}/access",
+          "/v1/tickets/{ticketId}/events",
+          "/v1/events",
+          "/v1/images",
+          "/v1/image-versions/{versionId}",
+        ]),
+      );
+      const refs: string[] = [];
+      const visit = (value: unknown) => {
+        if (Array.isArray(value)) value.forEach(visit);
+        else if (typeof value === "object" && value !== null)
+          Object.entries(value).forEach(([key, item]) => {
+            if (key === "$ref" && typeof item === "string") refs.push(item);
+            else visit(item);
+          });
+      };
+      visit(document);
+      for (const ref of refs) {
+        expect(ref.startsWith("#/components/schemas/")).toBe(true);
+        expect(
+          document.components.schemas[
+            ref.slice("#/components/schemas/".length)
+          ],
+        ).toBeDefined();
+      }
       expect((await app.inject({ url: "/assets/app.js" })).body).toContain(
         "console.log",
       );

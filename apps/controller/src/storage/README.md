@@ -7,13 +7,13 @@ SQLite's EXCLUSIVE locking mode for its lifetime. A second controller opening
 the same local database fails during startup. Closing the returned handle waits
 for the worker to close SQLite and release that lock.
 
-The authoritative initial schema remains `docs/design/schema.sql`. The
-controller build copies those exact bytes to `dist/storage/migrations/001-initial.sql`;
-the storage test checks for drift. The `schema_migrations` table is the authority
-for whether and which migrations have applied. `PRAGMA user_version` is set to
-the latest applied schema version as a SQLite metadata mirror; it does not
-decide whether the initial migration ran. A schema with an unknown migration
-version fails closed.
+`src/storage/migrations/001-initial.sql` is the frozen v1 baseline. Migration
+002 adds the browser session's issuing credential foreign key; older sessions
+have no lineage and are rejected. `docs/design/schema.sql` shows the complete
+current schema. The controller build copies both migrations into `dist`, and
+the storage tests check baseline bytes and the v1-to-v2 upgrade. The
+`schema_migrations` table is authoritative; `PRAGMA user_version` mirrors the
+latest applied version. Unknown migration versions fail closed.
 
 The API offers parameterized `run`, `get`, `all`, and `batchTransaction` calls.
 Each batch entry declares `run`, `get`, or `all`; entries are data, not callbacks.

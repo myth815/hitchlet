@@ -2,22 +2,22 @@
 
 实现基线：[设计 v1.3](design/README.md)。当前目标保持 M2（Docker 正式交付）；Hyper-V、Tart 和云扩容不在本轮实现范围。模拟器通过不代表真实 Docker 或宿主通过。
 
-本轮状态：Luna / high 完成 D03、D04，经主审修正和独立复验；批次2通过，批次3接续 D05。Simulator 证据不代表 Docker 或真实机器通过。
+本轮状态：批次1–3已通过主审与独立复验，M0 模拟闭环完成。接续批次4（D10、D11a）；M1、M2 未完成。Simulator 证据不代表 Docker 或真实机器通过。
 
 ## 工作方式与固定批次
 
 开发由 GPT-6 Luna 子智能体承担，初始思考预算 low，使用正常速度。主智能体检查差异、接口一致性和测试结果，再允许进入依赖它的下一批。必要时可提高 Luna 的思考预算；如果仍不能胜任，停止并向用户报告。子智能体不继续委派，不增加无限细分的任务树。
 
-| 批次              | 设计任务             | 确定产物                                                            | 审核门槛                                                                  | 当前状态               |
-| ----------------- | -------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------- |
-| 1 基础工程        | D00                  | pnpm 工程、API/GUI 启动、配置、日志、构建测试、Docker 部署骨架      | 安装、类型检查、测试和构建实际通过；缺失配置有明确错误                    | 已审核通过             |
-| 2 领域与账本      | D01–D03              | 运行时合同、SQLite 迁移/worker、状态机、配额与原子资源预留          | 合同一致；并发末份容量不超售；冻结请求、事务与版本约束通过                | 已审核通过             |
-| 3 模拟闭环        | D04–D05              | 持久操作与恢复、Simulator、租约 API/SDK、基础 GUI                   | 重启恢复、创建回执丢失、删除失败、续租竞态、归属鉴权与浏览器闭环；完成 M0 | D04 已审核；D05 待开发 |
-| 4 Docker 接入准备 | D10、D11a            | Portainer 身份与修订、节点能力、草稿镜像目录和验证调度              | 错误 Engine 拒绝；草稿不能被消费者租用；固定制品和授权修订                | 未开始                 |
-| 5 Docker 租用闭环 | D10b、D12、D11b、D13 | 最小 Runtime Agent 网络执行、独立容器生命周期、验证后发布、恢复回收 | 实际 Docker 网络/限额/存储隔离与失败清理通过；完成 M1                     | 未开始                 |
-| 6 宿主与节能策略  | D20–D22a             | Host 观测、人机共用、依赖与保留量、电源 dry-run                     | 未知或有人登录阻止关机；竞态处理；未实测能力不启用                        | 未开始                 |
-| 7 运维与交付界面  | D23–D24              | 备份恢复、升级、凭据轮换、完整 GUI/SDK 与接入手册                   | 真实恢复演练、权限/存储回归、浏览器 E2E 与干净环境安装                    | 未开始                 |
-| 8 正式验收        | D25；D22b 逐机可选   | 实际节点能力矩阵与发布证据                                          | 对照设计 Docker DoD 逐项取证；未验证机器保持试用/禁用或手动电源           | 未开始                 |
+| 批次              | 设计任务             | 确定产物                                                            | 审核门槛                                                                  | 当前状态         |
+| ----------------- | -------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------- |
+| 1 基础工程        | D00                  | pnpm 工程、API/GUI 启动、配置、日志、构建测试、Docker 部署骨架      | 安装、类型检查、测试和构建实际通过；缺失配置有明确错误                    | 已审核通过       |
+| 2 领域与账本      | D01–D03              | 运行时合同、SQLite 迁移/worker、状态机、配额与原子资源预留          | 合同一致；并发末份容量不超售；冻结请求、事务与版本约束通过                | 已审核通过       |
+| 3 模拟闭环        | D04–D05              | 持久操作与恢复、Simulator、租约 API/SDK、基础 GUI                   | 重启恢复、创建回执丢失、删除失败、续租竞态、归属鉴权与浏览器闭环；完成 M0 | 已审核通过（M0） |
+| 4 Docker 接入准备 | D10、D11a            | Portainer 身份与修订、节点能力、草稿镜像目录和验证调度              | 错误 Engine 拒绝；草稿不能被消费者租用；固定制品和授权修订                | 未开始           |
+| 5 Docker 租用闭环 | D10b、D12、D11b、D13 | 最小 Runtime Agent 网络执行、独立容器生命周期、验证后发布、恢复回收 | 实际 Docker 网络/限额/存储隔离与失败清理通过；完成 M1                     | 未开始           |
+| 6 宿主与节能策略  | D20–D22a             | Host 观测、人机共用、依赖与保留量、电源 dry-run                     | 未知或有人登录阻止关机；竞态处理；未实测能力不启用                        | 未开始           |
+| 7 运维与交付界面  | D23–D24              | 备份恢复、升级、凭据轮换、完整 GUI/SDK 与接入手册                   | 真实恢复演练、权限/存储回归、浏览器 E2E 与干净环境安装                    | 未开始           |
+| 8 正式验收        | D25；D22b 逐机可选   | 实际节点能力矩阵与发布证据                                          | 对照设计 Docker DoD 逐项取证；未验证机器保持试用/禁用或手动电源           | 未开始           |
 
 每批可分配少量具有明确文件边界的工作，例如领域与存储、HTTP 与 SDK、GUI；不把这些实现分工演变成新的层级计划。依赖未通过审核不跨批开发。故障修复在原批次内完成。
 
@@ -70,7 +70,7 @@ D01/D02 基础已提交为 `a363d8e` 并同步公开仓库。D03 的首个 Luna 
 
 D03 当前差异覆盖纯 Ticket/租期/容量规则、持久目录解析与 AcceptedAcquireRequest 冻结、消费者范围幂等、节点/制品/已验证能力筛选、SQLite 原子预留与版本/配额/池预算重检，以及一次性 provision contract 绑定和取消竞态。SQLite 适配集中于 controller 的 `SQLiteTicketStore`；应用层负责校验、冻结、筛选与编排。`local_only` 受理和预留均排除 cloud 来源机器；Node 的 `supportedAccess` 与 Artifact recipe 的 `accessProtocols` 都必须匹配请求。CPU、内存、网络执行要求 verified；要求临时盘硬限制时 `scratchHardLimit` 也必须 verified；GPU/加速器未支持时明确拒绝。子池仅在基础 infrastructure Allocation 仍运行且已提交父 Claim 覆盖子池总预算时可预留。离线候选仅在持久 PowerPolicy、能力、最新观测及匹配的停机操作/回执/安全唤醒证据满足条件时可预留；D03 不执行唤醒或 Provider 操作。
 
-Node 24.22.0 / pnpm 10.28.2 最终检查：`pnpm typecheck` 通过；`pnpm test` 通过（contracts 8、controller 44、SDK 3、GUI 2，共 57）；`pnpm build` 通过并复制最新 `docs/design/schema.sql`；`pnpm format:check` 与 `git diff --check` 通过。Controller 测试使用真实迁移 SQLite worker 与固定时钟，覆盖末份容量/并发幂等/两类消费者配额竞态、draining 排队、verified 硬能力与过期时间、加速器拒绝、local/cloud 边界、连接协议交集、root-child 预算和已停止父分配、reserve 事务回滚、unknown/quarantined claim、离线有证据预留后健康上线绑定、取消/换绑与版本 fencing。以上是 D03 实现测试，不证明 HTTP/鉴权/OpenAPI、Simulator、Provider/VM 或真实机器电源能力；M0/M1/M2 仍未完成。
+Node 24.22.0 / pnpm 10.28.2 最终检查：`pnpm typecheck` 通过；`pnpm test` 通过（contracts 8、controller 44、SDK 3、GUI 2，共 57）；`pnpm build` 通过并复制当时的初始 `docs/design/schema.sql`；`pnpm format:check` 与 `git diff --check` 通过。D05 后运行 migration 权威改为 `apps/controller/src/storage/migrations/`，`docs/design/schema.sql` 是当前完整 schema 快照。Controller 测试使用真实迁移 SQLite worker 与固定时钟，覆盖末份容量/并发幂等/两类消费者配额竞态、draining 排队、verified 硬能力与过期时间、加速器拒绝、local/cloud 边界、连接协议交集、root-child 预算和已停止父分配、reserve 事务回滚、unknown/quarantined claim、离线有证据预留后健康上线绑定、取消/换绑与版本 fencing。以上是 D03 实现测试，不证明 HTTP/鉴权/OpenAPI、Simulator、Provider/VM 或真实机器电源能力；M0/M1/M2 仍未完成。
 
 主审独立复现最初5项反向验收失败，退回同一 Luna / high 修正；同时关闭本地范围、连接协议和父分配有效性缺口。最终由主智能体独立执行上述全部门禁，57项通过，原设计类型示例和86项SQL检查亦通过。D03放行的是尚未暴露HTTP的应用/账本模块；后续 D04 将预留与持久执行意图原子关联，并在调用执行端前写入意图。D04主审证据见下。
 
@@ -83,3 +83,35 @@ Node 24.22.0 / pnpm 10.28.2 最终复验：`pnpm typecheck`、`pnpm test`（cont
 Controller D04 测试覆盖 queued→reserved→provisioning→ready→终止清理、创建回执丢失及逐对象 receipt 丢失恢复、部分创建伴生资源逐项回收、删除失败保留容量并续接、错误 runtime identity/不完整 inventory 保持 unknown、取消或 deadline 边界下迟到创建/ready 不复活、worker lease 过期与旧 CAS、最终清理 DB 事务失败、两票隔离及 NAS reference 仅解绑。显式 Simulator 测试验证 `portainer` 和缺省 `unconfigured` Node 均不被模拟执行，要求硬 scratch 时完整 `ResourceContract` 传入执行端并校验实际 `EffectiveResources`；耗尽 cleanup 后低频 inspect 保留 Claim，带原因的内部 retry 可恢复。另以显式 Simulator 配置运行 `pnpm dev`：实际修改源码触发编译并重启 controller，loopback `/healthz` 两次返回 200；Ctrl-C 后重新打开同一 SQLite 数据目录成功（controller epoch=3），证明锁已释放。该 smoke 不证明 API 租用端点。
 
 D04已通过主审。主智能体独立复现模拟模式隔离、完整资源合同和重试耗尽后的查实缺口，退回同一Luna修正后复验通过；真实挂起旧create、取消与清理后再放行旧调用的用例，同时核对SQLite与外部目录，无迟到重建。最终独立运行75项测试、类型/构建/格式/设计检查，并实测编译后watch重启、health 200、SIGINT exit=0及同库重开（epoch=2）；测试源码注释已恢复。本批不实现严格离线租约执行、续租/API、HTTP/auth、真实 Provider、Docker/iptables、NAS 实际挂载、VM/Host 或电源控制；Simulator 的离线租约守卫明确为 unsupported。D05未完成，M0/M1/M2仍未完成。
+
+## 批次 3：D05 API、SDK 与 GUI（已审核，M0）
+
+开发由 Luna / high 在既定 API、SDK、GUI 边界内完成，主智能体审核、故障注入与独立复验后放行。保持模块化单体和 GUI → SDK → contracts 的依赖；HTTP 不写 SQL，应用编排与持久投影、身份、续租和幂等存储分开。未增加真实 Provider、VM 或宿主电源执行。
+
+交付包括 Ticket acquire/list/get、renew/getRenewal、release/cancel/revoke、access、授权镜像查询、owner-filtered JSON events/SSE、ETag、共享 schema 驱动 OpenAPI，以及 cookie session 登录/恢复/退出。operator 撤销先按 image/node 授权核对，再读取跨 owner 票据或重放，留下原因审计；不存在与越权均为404。预期请求错误、版本与配额冲突使用共享错误信封；非法 JSON 为400，语义输入为422，内部持久合同损坏仍为500。
+
+终止命令在同一事务提交 Ticket、清理意图、事件、审计和幂等完成标记；提交后丢响应可按原键恢复，不把任意终止态当作本请求成功。相同键并发续租返回同一持久提案；不同键竞争 pending 提案为409。confirmed receipt 不随后续终止改写。deadline 等值拒绝，到期终止保留 Claim，查实清理后才释放容量；Simulator 不伪造离线守卫 ACK。
+
+初始化命令显式创建空 Simulator 安装，拒绝重置已有账本，分别一次性显示 sample consumer 与初始 admin bearer。服务恢复账本后开启调度、续租裁决、到期与清理。只有绑定当前 installation 且身份和连接均确认为 Simulator 的 fixture 才刷新模拟观测及能力有效期，跨120秒/1小时仍可继续试用；真实或未配置 Node 不被刷新。默认执行模式 disabled。运行步骤和本地 GUI 静态目录见 [M0 手册](runbook.md)。
+
+SQLite 迁移001保留已公开 D04 的原始字节；新增迁移002，以明确外键把 GUI session 关联来源 credential。升级保留 Consumer、Ticket、Event 和迁移账本，旧来源为空的 session 失效。运行迁移权威位于 controller/src/storage/migrations；设计 schema.sql 是当前 v2 完整快照。会话为 HttpOnly/SameSite cookie，写入要求 CSRF；来源 bearer 吊销/过期或 Consumer 停用也使会话失效。SSE 会重新验证身份，logout 与服务关闭均能终止流。
+
+中文响应式 GUI 实现授权镜像、Ticket 列表/详情/分页、显式申请/接用/续租/领取访问材料/取消/确认归还，以及原请求恢复。打开详情与轮询不会自动接用或延期；退出也不归还票据。写入前由 SDK onPrepared 保存原命令；每个 consumer 在当前 tab 的 sessionStorage 保留最多8个未决命令，满额拒绝新发送，不驱逐旧记录；SDK 共享 schema 验证后原键原体恢复。token 不保存；访问材料仅在内存短暂显示，退出、详情变化或终止时清除。Simulator 和离线租约不受支持均明确显示。
+
+最终独立复验（2026-10-20，Node 24.22.0 / pnpm 10.28.2）：
+
+| 检查                                     | 结果与边界                                                                                                                                                                                            |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 全工作区严格类型、构建、格式与 diff 检查 | 通过                                                                                                                                                                                                  |
+| 实现测试                                 | contracts 8、SDK 19、controller 80、GUI 8，共115项通过；controller 使用真实 SQLite worker，GUI DOM 测试通过 SDK 注入 HTTP                                                                             |
+| 原设计检查                               | TypeScript 接口/示例通过；SQLite 86项/41张表通过                                                                                                                                                      |
+| 迁移与身份                               | v1→v2 保留旧数据及大于2^53 Event ID；旧 session 失效；owner、operator scope、CSRF、credential 吊销、viewer scopes、登录限速通过                                                                       |
+| HTTP 与持久故障                          | 静态 GUI 启用时401/400/422/500均为共享信封；相同键异体409；终止提交后丢响应恢复；相同键并发续租；期限、权限和损坏合同通过                                                                             |
+| 实际进程与 SDK                           | 初始化/拒绝重置、HTTP申请→ready、renew 202后控制器重启、原提案恢复与回执不变、模拟访问、释放查实及同库重开全部通过                                                                                    |
+| 实际浏览器                               | cookie登录与刷新、申请→ready、手动claim/renew、模拟access、双确认归还→released、退出不归还通过；暂停临时控制器、发送申请后离开页面，再恢复原键仅有1张Ticket；390px实际iframe中的列表/详情布局通过     |
+| Linux打包                                | 使用本地缓存的同版本官方 Node bookworm 完整基础镜像构建并运行，非root、Node24.22、SQLite3.53.4、两版迁移、GUI/JS资源、401信封、Simulator ready→released及正常退出通过；容器无外部网络、无宿主数据挂载 |
+| 标准slim镜像构建                         | Docker Hub固定版本元数据HEAD超时，未进入编译。正式Dockerfile未改；完整基础镜像验证不冒充slim构建成功，后续网络恢复需补验                                                                              |
+
+主审实际浏览器暴露并关闭了默认 window.fetch 接收者绑定、静态插件提前编译造成错误处理中间件失效，以及 Simulator 观测过期的运行缺口。GUI 访问材料在终止后清除、等待与账号切换取消、恢复记录满额不驱逐也已回归。临时浏览器、服务、容器、测试目录和测试凭据均已清理，个人机器标识和真实秘密未进入仓库。
+
+M0 放行仅代表可恢复模拟租用闭环。M1、M2 仍需 Portainer、真实网络隔离/限额/挂载、Host 观测和正式验收证据；既有 WSL 业务未迁移。电源补充仍留在 D22a/D22b，当前未发送 WOL、关机或插座控制命令。批次4按原计划接续 D10 和 D11a，不提前开发 VM。

@@ -113,16 +113,31 @@ async function open(): Promise<void> {
     );
     db.exec(sql);
   }
-  const applied = db
+  let applied = db
     .prepare(
       "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
     )
     .get() as { version: bigint } | undefined;
-  if (applied?.version !== 1n)
+  if (applied?.version === 1n) {
+    const sql = await readFile(
+      join(
+        dirname(fileURLToPath(import.meta.url)),
+        "migrations/002-session-credential-lineage.sql",
+      ),
+      "utf8",
+    );
+    db.exec(sql);
+    applied = db
+      .prepare(
+        "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
+      )
+      .get() as { version: bigint } | undefined;
+  }
+  if (applied?.version !== 2n)
     throw new Error(
       `Unsupported schema version ${String(applied?.version ?? "none")}`,
     );
-  db.pragma("user_version = 1");
+  db.pragma("user_version = 2");
   const fk = db.pragma("foreign_keys", { simple: true });
   const sync = db.pragma("synchronous", { simple: true });
   if ((fk !== 1 && fk !== 1n) || (sync !== 2 && sync !== 2n))

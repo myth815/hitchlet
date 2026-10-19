@@ -10,6 +10,10 @@ const ConfigSchema = z
     GUI_DIR: z.string().default("/app/gui"),
     EXECUTION_MODE: z.enum(["disabled", "simulator"]).default("disabled"),
     SIMULATOR_DATA_DIR: z.string().min(1).optional(),
+    COOKIE_SECURE: z
+      .enum(["true", "false"])
+      .default("true")
+      .transform((value) => value === "true"),
   })
   .superRefine((config, context) => {
     if (config.EXECUTION_MODE === "simulator" && !config.SIMULATOR_DATA_DIR)
@@ -17,6 +21,15 @@ const ConfigSchema = z
         code: "custom",
         path: ["SIMULATOR_DATA_DIR"],
         message: "required when EXECUTION_MODE=simulator",
+      });
+    if (
+      !config.COOKIE_SECURE &&
+      !["localhost", "127.0.0.1", "::1"].includes(config.HOST)
+    )
+      context.addIssue({
+        code: "custom",
+        path: ["COOKIE_SECURE"],
+        message: "false is allowed only when HOST is loopback",
       });
   })
   .strict();
@@ -30,6 +43,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     "GUI_DIR",
     "EXECUTION_MODE",
     "SIMULATOR_DATA_DIR",
+    "COOKIE_SECURE",
   ] as const;
   const selected = Object.fromEntries(
     keys.flatMap((key) => (env[key] === undefined ? [] : [[key, env[key]]])),

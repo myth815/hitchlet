@@ -81,6 +81,11 @@ export class SQLiteOperationStore {
       },
       {
         kind: "run",
+        sql: "UPDATE operations SET state='cancelled',version=version+1,updated_at_ms=? WHERE id IN (SELECT operation_id FROM lease_renewals WHERE lease_id IN (SELECT id FROM leases WHERE ticket_id=?) AND state='cancelled') AND kind='lease.renew' AND state='planned'",
+        params: [now, id],
+      },
+      {
+        kind: "run",
         sql: "UPDATE operations SET state='cancelled',version=version+1,owner_token=NULL,locked_until_ms=NULL,updated_at_ms=? WHERE allocation_id=(SELECT id FROM allocations WHERE ticket_id=?) AND kind='allocation.provision' AND state='planned'",
         params: [now, id],
       },

@@ -26,6 +26,7 @@ export type {
   PageQuery,
 } from "./common.js";
 export type {
+  AuthenticatedPrincipal,
   EventQuery,
   ResourceEvent,
   AcceptedLeaseRequest,

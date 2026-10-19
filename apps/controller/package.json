@@ -8,6 +8,7 @@
     "typecheck": "pnpm --filter @hitchlet/contracts build && tsc --noEmit -p tsconfig.json",
     "test": "pnpm --filter @hitchlet/contracts build && pnpm build && vitest run",
     "dev": "node scripts/dev-watch.mjs",
+    "init:simulator": "pnpm --filter @hitchlet/contracts build && pnpm build && node dist/init-simulator.js",
     "start": "node dist/server.js"
   },
   "dependencies": {

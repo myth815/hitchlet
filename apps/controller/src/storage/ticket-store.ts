@@ -1,5 +1,6 @@
 import type { Storage } from "./index.js";
 import { createHash } from "node:crypto";
+import type { IdempotencyCompletionRef } from "./termination-context.js";
 
 type Row = Record<string, string | number | bigint | null>;
 
@@ -58,6 +59,12 @@ export class SQLiteTicketStore {
       [consumerId],
     );
   }
+  queuedCount(consumerId: string): Promise<Row | undefined> {
+    return this.storage.get<Row>(
+      "SELECT count(*) AS count FROM tickets WHERE consumer_id=? AND phase='queued'",
+      [consumerId],
+    );
+  }
   imageAlias(imageId: string, alias: string): Promise<Row | undefined> {
     return this.storage.get<Row>(
       "SELECT a.image_version_id FROM image_aliases a JOIN image_versions v ON v.id=a.image_version_id WHERE a.image_id=? AND a.alias=? AND v.status='published'",
@@ -104,6 +111,32 @@ export class SQLiteTicketStore {
   networkDenyBaseline(): Promise<Row | undefined> {
     return this.storage.get<Row>(
       "SELECT id,management_deny_rules_json FROM platform_network_deny_revisions ORDER BY revision DESC LIMIT 1",
+    );
+  }
+  refreshSimulatorFixtureObservation(
+    installationId: string,
+    now: number,
+  ): Promise<unknown> {
+    const observedAt = new Date(now).toISOString();
+    const expiresAt = new Date(now + 3600000).toISOString();
+    return this.storage.run(
+      `UPDATE nodes SET observed_at_ms=?,capabilities_json=json_set(capabilities_json,'$.observedAt',?,'$.expiresAt',?),version=version+1,updated_at_ms=?
+      WHERE id IN (
+        SELECT n.id FROM nodes n
+        JOIN machines m ON m.id=n.machine_id
+        JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id
+        JOIN provider_connection_revisions pcr ON pcr.id=pc.current_revision_id AND pcr.verified_runtime_identity_id=n.runtime_identity_id
+        JOIN runtime_identities ri ON ri.id=n.runtime_identity_id
+        WHERE m.source='local' AND n.backend_kind='portainer' AND n.observed_health='healthy'
+          AND json_extract(n.config_json,'$.executionMode')='simulator'
+          AND json_extract(n.config_json,'$.simulatorFixtureInstallationId')=?
+          AND json_extract(n.capabilities_json,'$.providerVersion')='simulator'
+          AND pcr.endpoint_ref='simulator://local'
+          AND json_extract(pcr.evidence_json,'$.executionMode')='simulator'
+          AND ri.native_id='hitchlet-simulator'
+          AND (n.observed_at_ms+30000<=? OR json_extract(n.capabilities_json,'$.expiresAt')<=?)
+      )`,
+      [now, observedAt, expiresAt, now, installationId, now, observedAt],
     );
   }
   async createQueuedTicket(input: {
@@ -297,8 +330,14 @@ export class SQLiteTicketStore {
   }
   cancelTarget(ticketId: string, consumerId: string): Promise<Row | undefined> {
     return this.storage.get<Row>(
-      "SELECT phase,version FROM tickets WHERE id=? AND consumer_id=?",
+      "SELECT t.phase,t.version,t.consumer_id,a.generation FROM tickets t LEFT JOIN allocations a ON a.ticket_id=t.id WHERE t.id=? AND t.consumer_id=?",
       [ticketId, consumerId],
+    );
+  }
+  revokeTarget(ticketId: string): Promise<Row | undefined> {
+    return this.storage.get<Row>(
+      "SELECT t.phase,t.version,t.consumer_id,t.request_json,t.image_version_id,i.image_id,a.generation,a.node_id,a.machine_id FROM tickets t JOIN image_versions i ON i.id=t.image_version_id LEFT JOIN allocations a ON a.ticket_id=t.id WHERE t.id=?",
+      [ticketId],
     );
   }
   cancelQueued(input: {
@@ -307,6 +346,8 @@ export class SQLiteTicketStore {
     version: number;
     now: number;
     reason: string;
+    audit?: { actorId: string; requestId: string; reason: string };
+    completion?: IdempotencyCompletionRef;
   }): Promise<unknown[]> {
     return this.storage.batchTransaction([
       {
@@ -322,6 +363,7 @@ export class SQLiteTicketStore {
         ],
         expectChanges: 1,
       },
+      ...(input.completion ? [completionStatement(input.completion, 200)] : []),
       {
         kind: "run",
         sql: "INSERT INTO events(aggregate_type,aggregate_id,aggregate_version,event_type,consumer_id,occurred_at_ms,payload_json) VALUES('ticket',?,?,'ticket.terminated',?,?,?)",
@@ -333,6 +375,21 @@ export class SQLiteTicketStore {
           JSON.stringify({ reason: input.reason }),
         ],
       },
+      ...(input.audit
+        ? [
+            {
+              kind: "run" as const,
+              sql: "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) VALUES('controller',?,'ticket.revoke','ticket',?,?,?,?)",
+              params: [
+                input.audit.actorId,
+                input.ticketId,
+                input.audit.requestId,
+                input.now,
+                JSON.stringify({ reason: input.audit.reason }),
+              ],
+            },
+          ]
+        : []),
     ]);
   }
   cancelAllocated(input: {
@@ -343,6 +400,10 @@ export class SQLiteTicketStore {
     now: number;
     reason: string;
     operationId: string;
+    generation?: number;
+    expectedGeneration?: number | null;
+    audit?: { actorId: string; requestId: string; reason: string };
+    completion?: IdempotencyCompletionRef;
   }): Promise<unknown[]> {
     return this.storage.batchTransaction([
       {
@@ -361,8 +422,14 @@ export class SQLiteTicketStore {
       },
       {
         kind: "run",
-        sql: "UPDATE allocations SET desired_state='absent',control_version=control_version+1,version=version+1,updated_at_ms=? WHERE ticket_id=? AND generation=1 AND desired_state<>'absent'",
-        params: [input.now, input.ticketId],
+        sql: "UPDATE allocations SET desired_state='absent',control_version=control_version+1,version=version+1,updated_at_ms=? WHERE ticket_id=? AND generation=? AND desired_state<>'absent' AND (?=0 OR generation=?)",
+        params: [
+          input.now,
+          input.ticketId,
+          input.generation ?? 1,
+          input.expectedGeneration === undefined ? 0 : 1,
+          input.expectedGeneration ?? 0,
+        ],
         expectChanges: 1,
       },
       {
@@ -373,6 +440,11 @@ export class SQLiteTicketStore {
       {
         kind: "run",
         sql: "UPDATE lease_renewals SET state='cancelled',rejection_json=json_object('code','termination_requested'),version=version+1,updated_at_ms=? WHERE lease_id IN (SELECT id FROM leases WHERE ticket_id=?) AND state='pending'",
+        params: [input.now, input.ticketId],
+      },
+      {
+        kind: "run",
+        sql: "UPDATE operations SET state='cancelled',version=version+1,updated_at_ms=? WHERE id IN (SELECT operation_id FROM lease_renewals WHERE lease_id IN (SELECT id FROM leases WHERE ticket_id=?) AND state='cancelled') AND kind='lease.renew' AND state='planned'",
         params: [input.now, input.ticketId],
       },
       {
@@ -408,6 +480,22 @@ export class SQLiteTicketStore {
           JSON.stringify({ reason: input.reason }),
         ],
       },
+      ...(input.completion ? [completionStatement(input.completion, 202)] : []),
+      ...(input.audit
+        ? [
+            {
+              kind: "run" as const,
+              sql: "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) VALUES('controller',?,'ticket.revoke','ticket',?,?,?,?)",
+              params: [
+                input.audit.actorId,
+                input.ticketId,
+                input.audit.requestId,
+                input.now,
+                JSON.stringify({ reason: input.audit.reason }),
+              ],
+            },
+          ]
+        : []),
     ]);
   }
 
@@ -486,10 +574,9 @@ export class SQLiteTicketStore {
       },
       {
         kind: "run",
-        sql: "INSERT INTO operations(id,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,1,?,'allocation.provision','provision',?,'planned',?,?,?, ?,?,?)",
+        sql: "INSERT INTO operations(id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,1,?,'allocation.provision','provision',?,'planned',?,?,?, ?,?,?)",
         params: [
           input.operationId,
-          input.installationId,
           input.allocationId,
           input.runtimeIdentityId,
           input.connectionRevisionId,
@@ -564,4 +651,29 @@ export class SQLiteTicketStore {
       },
     ]);
   }
+}
+
+function completionStatement(
+  completion: IdempotencyCompletionRef,
+  status: 200 | 202,
+): {
+  kind: "run";
+  sql: string;
+  params: readonly (string | number)[];
+  expectChanges: 1;
+} {
+  return {
+    kind: "run",
+    sql: "UPDATE idempotency_keys SET response_status=?,safe_response_json=? WHERE consumer_id=? AND route_scope=? AND idempotency_key=? AND request_hash=? AND ticket_id=? AND safe_response_json IS NULL",
+    params: [
+      status,
+      JSON.stringify({ ticketId: completion.ticketId }),
+      completion.consumerId,
+      completion.routeScope,
+      completion.key,
+      completion.requestHash,
+      completion.ticketId,
+    ],
+    expectChanges: 1,
+  };
 }

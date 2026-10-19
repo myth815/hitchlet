@@ -57,6 +57,15 @@ export interface EventQuery {
   readonly ticketId?: Id;
 }
 
+/** Authenticated browser/API identity summary; never includes credential material. */
+export interface AuthenticatedPrincipal {
+  /** Consumer identity UUID; safe to expose for UI ownership partitioning. */
+  readonly consumerId: Id;
+  readonly role: "viewer" | "consumer" | "operator" | "admin";
+  readonly scopes: readonly string[];
+  readonly source: "bearer" | "session";
+}
+
 /** 精确版本只填 versionId；按别名选择填 imageId+alias。服务端受理时固定实际版本。 */
 export type ImageSelector =
   | {

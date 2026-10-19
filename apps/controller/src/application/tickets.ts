@@ -14,6 +14,13 @@ import {
 } from "../domain/ticket.js";
 import { StorageError, type Storage } from "../storage/index.js";
 import { SQLiteTicketStore } from "../storage/ticket-store.js";
+import type { TerminationContext } from "../storage/termination-context.js";
+import {
+  conflict,
+  notFound,
+  preconditionFailed,
+  queueLimitExceeded,
+} from "./errors.js";
 
 type Row = Record<string, string | number | bigint | null>;
 export interface TicketServiceOptions {
@@ -52,15 +59,14 @@ export class TicketService {
     const parsed = AcquireRequestSchema.parse(input);
     const request = parsed as unknown as AcquireRequest;
     if ((request.resources.accelerators?.length ?? 0) > 0)
-      throw new Error("Accelerator requests are not supported");
+      throw new RangeError("Accelerator requests are not supported");
     const canonical = stable(request);
     const hash = digest(canonical);
     const existing = await this.store.idempotency(consumerId, key);
     if (existing) return this.replay(existing, hash);
 
     const consumer = await this.store.consumer(consumerId);
-    if (!consumer || consumer.status !== "active")
-      throw new Error("Consumer is not active");
+    if (!consumer || consumer.status !== "active") throw notFound();
     const auth = object(
       parseJson(consumer.authorization_json, "consumer authorization"),
     );
@@ -73,9 +79,9 @@ export class TicketService {
     if ("versionId" in image) versionId = image.versionId;
     else {
       if (!permits(auth.imageIds, image.imageId))
-        throw new Error("Image is not authorized");
+        throw new RangeError("Image is not authorized");
       const alias = await this.store.imageAlias(image.imageId, image.alias);
-      if (!alias) throw new Error("Image alias is not published");
+      if (!alias) throw new RangeError("Image alias is not published");
       versionId = String(alias.image_version_id);
     }
     const imageRow = await this.store.imageVersion(versionId);
@@ -86,12 +92,12 @@ export class TicketService {
       !permits(auth.imageIds, imageRow.image_id) ||
       (imageRow.owner_consumer_id && imageRow.owner_consumer_id !== consumerId)
     )
-      throw new Error("Image version is unavailable or unauthorized");
+      throw new RangeError("Image version is unavailable or unauthorized");
     const networkId = request.networkProfileId;
     if (!permits(auth.networkProfileIds, networkId))
-      throw new Error("Network profile is not authorized");
+      throw new RangeError("Network profile is not authorized");
     const network = await this.store.networkRevision(networkId);
-    if (!network?.id) throw new Error("Network profile is unavailable");
+    if (!network?.id) throw new RangeError("Network profile is unavailable");
     const storageRows: {
       grantId: string;
       profileId: string;
@@ -105,18 +111,19 @@ export class TicketService {
     }[] = [];
     for (const item of request.storage ?? []) {
       if (!permits(auth.storageProfileIds, item.storageProfileId))
-        throw new Error("Storage profile is not authorized");
+        throw new RangeError("Storage profile is not authorized");
       const p = await this.store.storageRevision(item.storageProfileId);
       if (!p?.current_revision_id || typeof p.config_json !== "string")
-        throw new Error("Storage profile is unavailable");
+        throw new RangeError("Storage profile is unavailable");
       const config = object(
         parseJson(p.config_json, "storage revision config"),
       );
       const root = typeof config.sourceRef === "string" ? config.sourceRef : "";
       const allowedModes = stringList(config.allowedModes);
       const allowedSubpaths = stringList(config.allowedSubpaths);
+      if (!root)
+        throw new Error("Storage profile source configuration is unavailable");
       if (
-        !root ||
         !allowedModes.includes(item.mode) ||
         !safeSubpath(item.authorizedSubpath) ||
         !allowedSubpaths.some(
@@ -125,7 +132,7 @@ export class TicketService {
             item.authorizedSubpath.startsWith(`${prefix.replace(/\/$/, "")}/`),
         )
       )
-        throw new Error(
+        throw new RangeError(
           "Storage request exceeds the frozen profile authorization",
         );
       storageRows.push({
@@ -158,7 +165,7 @@ export class TicketService {
     const nodeScope =
       auth.nodeIds === "all" ? undefined : list(auth.nodeIds, []);
     if (nodeScope && !nodeScope.length)
-      throw new Error("Consumer has no authorized nodes");
+      throw new RangeError("Consumer has no authorized nodes");
     const directory = await this.store.authorizedDirectory(
       versionId,
       nodeScope,
@@ -177,7 +184,7 @@ export class TicketService {
       ...new Set(directory.map((r) => String(r.architecture))),
     ];
     if (!authorizedNodes.length)
-      throw new Error("No authorized node can run this image version");
+      throw new RangeError("No authorized node can run this image version");
     const explicitPolicy =
       request.lease?.expiryPolicyId ??
       (typeof quota.defaultExpiryPolicyId === "string"
@@ -295,6 +302,17 @@ export class TicketService {
     } catch (error) {
       const won = await this.store.idempotency(consumerId, key);
       if (won) return this.replay(won, hash);
+      if (
+        error instanceof StorageError &&
+        error.code === "STORAGE_CAS_FAILED"
+      ) {
+        const currentConsumer = await this.store.consumer(consumerId);
+        if (!currentConsumer || currentConsumer.status !== "active")
+          throw notFound();
+      }
+      const queued = await this.store.queuedCount(consumerId);
+      if (queued && Number(queued.count) >= maxQueued)
+        throw queueLimitExceeded();
       throw error;
     }
   }
@@ -526,16 +544,32 @@ export class TicketService {
     await this.store.bind({ ...input, now });
   }
 
+  /** Refresh only the explicitly seeded, installation-bound Simulator fixture. */
+  async refreshSimulatorFixtureObservation(): Promise<void> {
+    const installationId = this.options.installationId;
+    if (!installationId) return;
+    await this.store.refreshSimulatorFixtureObservation(
+      installationId,
+      this.now(),
+    );
+  }
+
   async cancel(
     ticketId: string,
     consumerId: string,
     reason: TerminalReason = "consumer_cancel",
+    context: TerminationContext = {},
   ): Promise<void> {
     if (!reason.trim())
       throw new RangeError("Cancellation reason must not be empty");
     const now = this.now();
     const ticket = await this.store.cancelTarget(ticketId, consumerId);
-    if (!ticket) throw new Error("Ticket is unavailable");
+    if (!ticket) throw notFound();
+    if (
+      context.expectedTicketVersion !== undefined &&
+      Number(ticket.version) !== context.expectedTicketVersion
+    )
+      throw preconditionFailed("ticket_version_conflict");
     const phase = String(ticket.phase) as TicketPhase;
     const terminal = terminalReasonFor(phase, reason);
     if (terminal.phase === "released") {
@@ -545,23 +579,106 @@ export class TicketService {
         version: Number(ticket.version),
         now,
         reason,
+        ...(context.audit ? { audit: context.audit } : {}),
+        ...(context.completion ? { completion: context.completion } : {}),
       });
       return;
     }
+    if (
+      context.expectedGeneration !== undefined &&
+      context.expectedGeneration !== Number(ticket.generation)
+    )
+      throw preconditionFailed("generation_conflict");
     await this.store.cancelAllocated({
       ticketId,
       consumerId,
       phase,
       version: Number(ticket.version),
+      generation:
+        typeof ticket.generation === "number" ||
+        typeof ticket.generation === "bigint"
+          ? Number(ticket.generation)
+          : 1,
       now,
       reason,
       operationId: this.id(),
+      ...(context.expectedGeneration !== undefined
+        ? { expectedGeneration: context.expectedGeneration }
+        : {}),
+      ...(context.audit ? { audit: context.audit } : {}),
+      ...(context.completion ? { completion: context.completion } : {}),
     });
   }
 
+  async revoke(
+    ticketId: string,
+    input: {
+      operatorId: string;
+      admin: boolean;
+      termination: TerminationContext;
+    },
+  ): Promise<void> {
+    await this.authorizeRevoke(ticketId, input.operatorId, input.admin);
+    const target = await this.store.revokeTarget(ticketId);
+    if (!target) throw notFound();
+    if (
+      input.termination.expectedTicketVersion !== undefined &&
+      Number(target.version) !== input.termination.expectedTicketVersion
+    )
+      throw preconditionFailed("ticket_version_conflict");
+    const phase = String(target.phase);
+    const generation =
+      typeof target.generation === "number" ||
+      typeof target.generation === "bigint"
+        ? Number(target.generation)
+        : null;
+    if (
+      (phase === "queued" && input.termination.expectedGeneration !== null) ||
+      (phase !== "queued" &&
+        (generation === null ||
+          input.termination.expectedGeneration !== generation))
+    )
+      throw preconditionFailed("generation_conflict");
+    if (phase === "released" || phase === "releasing") return;
+    await this.cancel(
+      ticketId,
+      String(target.consumer_id),
+      "admin_revoke",
+      input.termination,
+    );
+  }
+
+  async authorizeRevoke(
+    ticketId: string,
+    operatorId: string,
+    admin: boolean,
+  ): Promise<void> {
+    const target = await this.store.revokeTarget(ticketId);
+    if (!target) throw notFound();
+    if (admin) return;
+    const operator = await this.store.consumer(operatorId);
+    if (!operator || operator.status !== "active") throw notFound();
+    const auth = object(
+      parseJson(operator.authorization_json, "operator authorization"),
+    );
+    if (!permits(auth.imageIds, target.image_id)) throw notFound();
+    const request = AcceptedAcquireRequestSchema.parse(
+      parseJson(target.request_json, "accepted ticket request"),
+    );
+    if (target.node_id !== null || target.machine_id !== null) {
+      if (!permits(auth.nodeIds, target.node_id)) throw notFound();
+    } else {
+      const nodeBound =
+        auth.nodeIds === "all" ||
+        (Array.isArray(request.allowedNodeIds) &&
+          request.allowedNodeIds.length > 0 &&
+          request.allowedNodeIds.every((id) => permits(auth.nodeIds, id)));
+      if (!nodeBound) throw notFound();
+    }
+  }
+
   private replay(row: Row, hash: string): AcquireResult {
-    if (row.request_hash !== hash)
-      throw new Error("Idempotency key was reused with a different request");
+    if (row.request_hash !== hash) throw conflict("idempotency_key_reused");
     if (typeof row.ticket_id !== "string")
       throw new Error("Idempotent response is incomplete");
     return { ticketId: row.ticket_id, phase: "queued", replayed: true };

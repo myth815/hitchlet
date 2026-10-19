@@ -384,7 +384,7 @@ describe("SQLite Ticket admission", () => {
         "same",
         request(901),
       ),
-    ).rejects.toThrow(/different request/);
+    ).rejects.toMatchObject({ code: "idempotency_key_reused" });
     const other = await service.acquire(
       "10000000-0000-4000-8000-000000000002",
       "same",
