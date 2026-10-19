@@ -183,8 +183,49 @@ export interface PowerPolicy {
   readonly maximumWakeAttempts: number;
   /** 本平台停机受理后、进入可唤醒推断的最短保护间隔，单位秒。 */
   readonly expectedOffGuardSeconds: number; // 默认 120；仅适用于有持久化 shutdown accepted 回执的机器。
-  /** v1 固定 false；不允许插座强制断电。 */
-  readonly permitForcedPhysicalPowerOff: false; // v1 不实现插座断电恢复。
+  /** 正常节能关机固定 false；故障切电仅由独立 faultRecovery 策略授权。 */
+  readonly permitForcedPhysicalPowerOff: false;
+  /** 可选故障恢复；省略表示禁用，与空闲关机和普通 WOL 分开决策。 */
+  readonly faultRecovery?: FaultRecoveryPolicy;
+}
+
+/** 机器级故障的交流电恢复策略；不是租客或 Provider 可自行触发的动作。 */
+export type FaultRecoveryPolicy = {
+  /** 明确关闭故障切电。 */
+  readonly mode: 'disabled';
+} | {
+  /** 使用已登记的独占插座切电并恢复；优先执行有界 WOL/局部恢复。 */
+  readonly mode: 'smart_plug_cycle';
+  /** 固定供电对象与设备身份，不从租客请求接收地址或凭据。 */
+  readonly plugBindingId: Id;
+  /** 默认 operator；automatic_verified 须有独立证据排除受保护占用并通过逐机验收。 */
+  readonly authorization: 'operator' | 'automatic_verified';
+  /** 断电后最短等待秒数；当前安装默认 600，不因进程重启重新开始计时。 */
+  readonly minimumOffSeconds: number;
+  /** 同一故障事件只允许一个切电周期；失败转人工处理，不循环重启。 */
+  readonly maximumCyclesPerIncident: 1;
+};
+
+/** 带外电源设备与一台机器的专属绑定；属于宿主控制，不是第四种资源后端。 */
+export interface SmartPlugBinding extends Versioned {
+  /** 绑定记录的稳定标识。 */
+  readonly id: Id;
+  /** 唯一供电对象；同一插座不得同时绑定多台机器。 */
+  readonly machineId: Id;
+  /** 首个适配器；后续其他插座沿用相同恢复用例。 */
+  readonly adapter: 'xiaomi_miio_lan';
+  /** 实物核对的设备身份；型号不能单独作为身份。 */
+  readonly device: { readonly model: 'cuco.plug.v3'; readonly deviceId: string; readonly macAddress: string };
+  /** 安装内管理端点引用，不进入公开消费者 DTO。 */
+  readonly endpointRef: string;
+  /** 固定 token 版本引用；不保存或输出 token 明文。 */
+  readonly credentialVersionRef: Id;
+  /** 已核实只给目标机器供电；未验证不得执行切电。 */
+  readonly dedicatedSupply: Verification;
+  /** 固件/系统设置及实际交流电恢复后自动开机的验证结论。 */
+  readonly acPowerOn: Verification;
+  /** 独立于 WOL 的端到端恢复证据。 */
+  readonly verificationReportIds: readonly Id[];
 }
 
 /** 不同电源动作的独立验证结果；睡眠唤醒不等同于关机后冷启动。 */
@@ -241,7 +282,7 @@ export interface Machine extends Versioned {
   /** 供人查看的名称；不能代替稳定标识。 */
   readonly name: string;
   /** 受管理的部署站点标识。 */
-  readonly siteId: Id;
+  readonly siteId: string; // 安装内逻辑站点键；默认 local，也可使用管理员定义的其他非空键。
   /** 物理宿主操作系统族。 */
   readonly hostOs: HostOs;
   /** CPU 架构；必须与实际执行环境匹配。 */

@@ -194,6 +194,7 @@ CREATE TABLE image_artifacts (
   minimum_memory_mib INTEGER NOT NULL CHECK (minimum_memory_mib >= 0),
   minimum_scratch_mib INTEGER NOT NULL CHECK (minimum_scratch_mib >= 0),
   requirements_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(requirements_json)),
+  -- access_recipe_json.accessProtocols must match ImageArtifact.accessProtocols.
   access_recipe_json TEXT NOT NULL CHECK (json_valid(access_recipe_json)),
   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
   UNIQUE (image_version_id, backend_kind, architecture, variant),
@@ -970,6 +971,10 @@ COMMIT;
 -- 12. off_expected is controller-owned evidence of accepted normal shutdown,
 --     not an observed power fact. WOL after its guard requires the same cycle,
 --     no contradictory fresh observation and a validated wake capability.
+--     Smart-plug fault recovery is a separate machine Operation. Its exact
+--     binding, off readback, restore-not-before time and restore-on obligation
+--     survive Ticket cancellation and controller restart. Normal idle shutdown
+--     never upgrades to forced AC removal. Claims remain occupied until proof.
 -- 13. RuntimeAgent installs/verifies network policy from frozen profile+platform
 --     baseline before starting tenant code. Policy rules remain managed owned
 --     resources until teardown; inability to verify is a fail-closed barrier.

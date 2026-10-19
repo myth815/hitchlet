@@ -36,6 +36,12 @@ import type {
 } from "./consumer.js";
 
 const id = z.string().uuid();
+const siteKey = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[^\u0000-\u001f\u007f]+$/);
 const positiveInt = z.number().safe().int().positive();
 const nonnegativeInt = z.number().safe().int().nonnegative();
 const boundedPage = z.number().safe().int().min(1).max(200);
@@ -149,7 +155,7 @@ export const AcquireRequestSchema = z
       .min(1)
       .optional(),
     locality: z.literal("local_only").optional(),
-    siteIds: z.array(id).optional(),
+    siteIds: z.array(siteKey).optional(),
     allowedMachineIds: z.array(id).min(1).optional(),
     allowedNodeIds: z.array(id).min(1).optional(),
     requiredLabels: z.record(z.string(), z.string().max(256)).optional(),
@@ -337,7 +343,7 @@ export const AcceptedAcquireRequestSchema = z
       .tuple([z.enum(["portainer", "hyperv", "tart"])])
       .rest(z.enum(["portainer", "hyperv", "tart"])),
     locality: z.literal("local_only"),
-    siteIds: z.array(id),
+    siteIds: z.array(siteKey),
     allowedMachineIds: z.tuple([id]).rest(id).optional(),
     allowedNodeIds: z.tuple([id]).rest(id).optional(),
     requiredLabels: z.record(z.string(), z.string()),

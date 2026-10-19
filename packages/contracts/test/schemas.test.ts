@@ -146,6 +146,19 @@ const grantFields = {
 };
 
 describe("public runtime contracts", () => {
+  it("accepts logical site keys and rejects empty or control-character site keys", () => {
+    expect(
+      AcquireRequestSchema.safeParse({ ...request, siteIds: ["local"] })
+        .success,
+    ).toBe(true);
+    expect(
+      AcquireRequestSchema.safeParse({ ...request, siteIds: [""] }).success,
+    ).toBe(false);
+    expect(
+      AcquireRequestSchema.safeParse({ ...request, siteIds: ["bad\nsite"] })
+        .success,
+    ).toBe(false);
+  });
   it("rejects unknown writes, invalid numbers, incompatible kind/isolation and mixed selectors", () => {
     expect(
       AcquireRequestSchema.safeParse({ ...request, unexpected: true }).success,

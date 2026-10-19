@@ -153,7 +153,7 @@ export interface AcquireRequest {
   /** 放置范围，首版默认且仅允许 local_only。 */
   readonly locality?: Locality;
   /** 允许站点；省略或空数组表示所有已授权本地站点。 */
-  readonly siteIds?: readonly Id[];
+  readonly siteIds?: readonly string[];
   /** 允许机器集合；省略不附加限制，显式集合必须非空。 */
   readonly allowedMachineIds?: NonEmptyReadonlyArray<Id>;
   /** 允许节点集合；省略不附加限制，显式集合必须非空。 */
@@ -384,7 +384,7 @@ export interface AcceptedAcquireRequest {
   /** 放置范围，首版默认且仅允许 local_only。 */
   readonly locality: Locality;
   /** 允许站点；省略或空数组表示所有已授权本地站点。 */
-  readonly siteIds: readonly Id[];
+  readonly siteIds: readonly string[];
   /** 允许机器集合；省略不附加限制，显式集合必须非空。 */
   readonly allowedMachineIds?: NonEmptyReadonlyArray<Id>;
   /** 受理时已与Consumer节点授权取交集；省略表示当时明确授权all，不重读后续放宽的配置。 */
