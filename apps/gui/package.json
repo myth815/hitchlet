@@ -1,0 +1,25 @@
+{
+  "name": "@hitchlet/gui",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "pnpm --filter @hitchlet/contracts build && pnpm --filter @hitchlet/sdk build && tsc --noEmit -p tsconfig.json",
+    "test": "pnpm --filter @hitchlet/contracts build && pnpm --filter @hitchlet/sdk build && vitest run",
+    "dev": "vite --host 0.0.0.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@hitchlet/sdk": "workspace:*",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@vitejs/plugin-react": "5.0.4",
+    "jsdom": "26.1.0",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "typescript": "5.9.3",
+    "vite": "7.3.5",
+    "vitest": "3.2.4"
+  }
+}

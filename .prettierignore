@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+**/dist
+coverage
+# The design package is a user-maintained baseline with its own established format.
+docs/design
+# pnpm owns lockfile formatting.
+pnpm-lock.yaml
+
+# Preserve formatting in the established project overview.
+README.md

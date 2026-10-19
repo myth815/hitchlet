@@ -10,7 +10,7 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 
 ## 当前状态
 
-**设计阶段。** 本仓库包含 v1.3 设计基线、TypeScript 接口、SQLite 模型与设计验证脚本，尚无可运行的控制服务、SDK、GUI 或 Provider 实现。
+**D00 基础工程已建立。** 仓库现在包含 Fastify 健康 API、显示当前阶段与限制的 GUI、最小 health SDK、工作区构建与 Compose 部署；Simulator、Ticket、数据库和 Provider 尚未实现。D00 不等于 M0 或项目完成。
 
 首个交付目标是 **Docker，通过 Portainer 接入**。Hyper-V 与 Tart 只保留扩展设计，按实际需求后置，不作为 Docker 版本发布的前提。
 
@@ -48,6 +48,10 @@ node docs/design/verify-schema.cjs
 ```
 
 脚本只在系统临时目录中创建测试数据库，不连接真实计算节点。当前 86 项检查验证数据库约束与示例事务，不代表实际后端、并发调度或电源控制已通过验收。
+
+## 本地运行
+
+需要 Node.js 24 LTS 与 pnpm 10。运行 `pnpm install` 后执行 `pnpm dev`，默认打开 GUI `http://localhost:5173`，健康 API 为 `http://localhost:3000/healthz`。使用 Docker 时复制 `.env.example` 为 `.env`，执行 `docker compose up --build` 并打开 `http://localhost:3000`。详见 [D00 运行说明](docs/runbook.md)。
 
 ## 参与开发
 
