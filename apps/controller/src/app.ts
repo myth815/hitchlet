@@ -35,12 +35,46 @@ import { TicketCommandService } from "./application/commands.js";
 import { LeaseService } from "./application/leases.js";
 import { AccessService } from "./application/access.js";
 import { ApplicationError } from "./application/errors.js";
+import { AdminService } from "./application/admin.js";
+import {
+  PortainerConnectionInputSchema,
+  ConnectionActivationSchema,
+  ConnectionActivationReceiptSchema,
+  MachineInputSchema,
+  NodeInputSchema,
+  NetworkProfileInputSchema,
+  NetworkProfileRevisionSchema,
+  StorageProfileInputSchema,
+  StorageProfileRevisionSchema,
+  ImageDraftSchema,
+  ImageVersionDraftSchema,
+  DraftArtifactSchema,
+  ImageValidationRequestSchema,
+  CacheArtifactSchema,
+  ProviderConnectionViewSchema,
+  NodeViewSchema,
+  AdminProfileViewSchema,
+  AdminValidationViewSchema,
+  ProviderOperationReceiptSchema,
+  MachineReceiptSchema,
+  NodeReceiptSchema,
+  ProfileWriteReceiptSchema,
+  DraftCreationReceiptSchema,
+  DraftVersionViewSchema,
+  ArtifactReceiptSchema,
+  ValidationScheduleReceiptSchema,
+  CachePlanReceiptSchema,
+} from "./http/admin-protocol.js";
+import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
+import { probePortainer } from "./providers/portainer-probe.js";
+import { LocalSecretStore } from "./storage/secret-store.js";
 import { StorageError } from "./storage/index.js";
 import { z, ZodError, type ZodType } from "zod";
 
 export interface AppRuntime {
   readonly storage?: Storage;
   readonly recoveryState?: () => "ready" | "recovering" | "unavailable";
+  readonly secrets?: LocalSecretStore;
 }
 type Row = Record<string, string | number | bigint | null>;
 export async function buildApp(
@@ -142,6 +176,328 @@ export async function buildApp(
     const ticketCommands = new TicketCommandService(runtime.storage, queries);
     const leases = new LeaseService(runtime.storage);
     const access = new AccessService(runtime.storage);
+    const admin = new AdminService(
+      runtime.storage,
+      probePortainer,
+      Date.now,
+      config.PORTAINER_ALLOW_LOOPBACK_HTTP,
+      runtime.secrets
+        ? (versionRef) => runtime.secrets!.get(versionRef)
+        : undefined,
+    );
+    const requireAdmin = async (
+      request: Parameters<typeof auth.authenticate>[0],
+      write = false,
+    ) => {
+      const actor = await identify(request, write);
+      const fullAdminScopes = roleScopes("admin");
+      if (
+        actor.role !== "admin" ||
+        actor.scopes.length !== fullAdminScopes.length ||
+        fullAdminScopes.some((scope) => !actor.scopes.includes(scope))
+      )
+        throw new AuthFailure("forbidden");
+      return actor;
+    };
+    app.post("/v1/provider-connections", async (request, reply) => {
+      await requireAdmin(request, true);
+      const body = parseInput(PortainerConnectionInputSchema, request.body);
+      const result = await admin.discover(body);
+      reply.header("Cache-Control", "no-store");
+      return reply.code(202).send(ProviderOperationReceiptSchema.parse(result));
+    });
+    app.post<{ Params: { operationId: string } }>(
+      "/v1/provider-discovery/:operationId/retry",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const result = await admin.retryDiscovery(request.params.operationId);
+        if (!result)
+          return reply.code(404).send(apiError(request.id, "not_found", false));
+        reply.header("Cache-Control", "no-store");
+        return reply
+          .code(200)
+          .send(ProviderOperationReceiptSchema.parse(result));
+      },
+    );
+    app.get<{ Params: { operationId: string } }>(
+      "/v1/provider-discovery/:operationId",
+      async (request, reply) => {
+        await requireAdmin(request);
+        const receipt = await admin.discoveryReceipt(
+          request.params.operationId,
+        );
+        if (!receipt)
+          return reply.code(404).send(apiError(request.id, "not_found", false));
+        reply.header("Cache-Control", "no-store");
+        return ProviderOperationReceiptSchema.parse(receipt);
+      },
+    );
+    app.post<{ Params: { connectionId: string } }>(
+      "/v1/provider-connections/:connectionId/revisions",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const body = parseInput(PortainerConnectionInputSchema, request.body);
+        const result = await admin.proposeConnectionRevision({
+          connectionId: request.params.connectionId,
+          ...body,
+        });
+        reply.header("Cache-Control", "no-store");
+        return reply
+          .code(202)
+          .send(ProviderOperationReceiptSchema.parse(result));
+      },
+    );
+    app.post<{ Params: { operationId: string } }>(
+      "/v1/provider-connection-proposals/:operationId/retry",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const result = await admin.retryConnectionRevision(
+          request.params.operationId,
+        );
+        if (!result)
+          return reply.code(404).send(apiError(request.id, "not_found", false));
+        reply.header("Cache-Control", "no-store");
+        return reply
+          .code(200)
+          .send(ProviderOperationReceiptSchema.parse(result));
+      },
+    );
+    app.get<{ Params: { operationId: string } }>(
+      "/v1/provider-connection-proposals/:operationId",
+      async (request, reply) => {
+        await requireAdmin(request);
+        const receipt = await admin.connectionRevisionReceipt(
+          request.params.operationId,
+        );
+        if (!receipt)
+          return reply.code(404).send(apiError(request.id, "not_found", false));
+        reply.header("Cache-Control", "no-store");
+        return ProviderOperationReceiptSchema.parse(receipt);
+      },
+    );
+    app.post<{ Params: { connectionId: string } }>(
+      "/v1/provider-connections/:connectionId/activate-revision",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const expected = ifMatchVersion(request.headers["if-match"]);
+        const body = parseInput(ConnectionActivationSchema, request.body);
+        return reply.send(
+          ConnectionActivationReceiptSchema.parse(
+            await admin.activateConnectionRevision(
+              request.params.connectionId,
+              body.revisionId,
+              expected,
+            ),
+          ),
+        );
+      },
+    );
+    app.post("/v1/machines", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      const body = parseInput(MachineInputSchema, request.body);
+      return reply.code(201).send(
+        MachineReceiptSchema.parse(
+          await admin.createMachine({
+            ...body,
+            operatorId: actor.consumerId,
+          }),
+        ),
+      );
+    });
+    app.post("/v1/nodes", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      const body = parseInput(NodeInputSchema, request.body);
+      return reply
+        .code(201)
+        .send(
+          NodeReceiptSchema.parse(
+            await admin.registerNode({ ...body, operatorId: actor.consumerId }),
+          ),
+        );
+    });
+    app.get("/v1/provider-connections", async (request) => {
+      await requireAdmin(request);
+      return ProviderConnectionViewSchema.array().parse(
+        await admin.listConnections(),
+      );
+    });
+    app.get("/v1/nodes", async (request) => {
+      await requireAdmin(request);
+      return NodeViewSchema.array().parse(await admin.listNodes());
+    });
+    app.post("/v1/network-profiles", async (request, reply) => {
+      await requireAdmin(request, true);
+      const body = parseInput(NetworkProfileInputSchema, request.body);
+      return reply.code(201).send(
+        ProfileWriteReceiptSchema.parse(
+          await admin.createProfile("network", {
+            name: body.name,
+            config: body.policy,
+            authorizedConsumerIds: body.authorizedConsumerIds,
+          }),
+        ),
+      );
+    });
+    app.post("/v1/storage-profiles", async (request, reply) => {
+      await requireAdmin(request, true);
+      const body = parseInput(StorageProfileInputSchema, request.body);
+      return reply.code(201).send(
+        ProfileWriteReceiptSchema.parse(
+          await admin.createProfile("storage", {
+            name: body.name,
+            protocol: body.protocol,
+            config: body.config,
+            secretVersionRef: body.secretVersionRef,
+            authorizedConsumerIds: body.authorizedConsumerIds,
+          }),
+        ),
+      );
+    });
+    app.post<{ Params: { profileId: string } }>(
+      "/v1/network-profiles/:profileId/revisions",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const expected = ifMatchVersion(request.headers["if-match"]);
+        const body = parseInput(NetworkProfileRevisionSchema, request.body);
+        return reply
+          .code(201)
+          .send(
+            ProfileWriteReceiptSchema.parse(
+              await admin.newProfileRevision(
+                "network",
+                request.params.profileId,
+                expected,
+                { config: body.policy },
+              ),
+            ),
+          );
+      },
+    );
+    app.post<{ Params: { profileId: string } }>(
+      "/v1/storage-profiles/:profileId/revisions",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const expected = ifMatchVersion(request.headers["if-match"]);
+        const body = parseInput(StorageProfileRevisionSchema, request.body);
+        return reply
+          .code(201)
+          .send(
+            ProfileWriteReceiptSchema.parse(
+              await admin.newProfileRevision(
+                "storage",
+                request.params.profileId,
+                expected,
+                body,
+              ),
+            ),
+          );
+      },
+    );
+    app.get("/v1/network-profiles", async (request) => {
+      await requireAdmin(request);
+      return AdminProfileViewSchema.array().parse(
+        await admin.listProfiles("network"),
+      );
+    });
+    app.get("/v1/storage-profiles", async (request) => {
+      await requireAdmin(request);
+      return AdminProfileViewSchema.array().parse(
+        await admin.listProfiles("storage"),
+      );
+    });
+    app.post("/v1/images", async (request, reply) => {
+      await requireAdmin(request, true);
+      const body = parseInput(ImageDraftSchema, request.body);
+      const { description, ...draft } = body;
+      return reply.code(201).send(
+        DraftCreationReceiptSchema.parse(
+          await admin.createDraft({
+            ...draft,
+            ...(typeof description === "string" ? { description } : {}),
+          }),
+        ),
+      );
+    });
+    app.post<{ Params: { imageId: string } }>(
+      "/v1/images/:imageId/versions",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const body = parseInput(ImageVersionDraftSchema, request.body);
+        return reply.code(201).send(
+          DraftCreationReceiptSchema.parse(
+            await admin.createVersion({
+              imageId: request.params.imageId,
+              ...body,
+            }),
+          ),
+        );
+      },
+    );
+    app.post<{ Params: { versionId: string } }>(
+      "/v1/image-versions/:versionId/artifacts",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const body = parseInput(DraftArtifactSchema, request.body);
+        return reply
+          .code(201)
+          .send(
+            ArtifactReceiptSchema.parse(
+              await admin.addDraftArtifact(request.params.versionId, body),
+            ),
+          );
+      },
+    );
+    app.get<{ Params: { validationId: string } }>(
+      "/v1/image-validations/:validationId",
+      async (request) => {
+        await requireAdmin(request);
+        const row = await admin.getValidation(request.params.validationId);
+        if (!row) throw new ApplicationError("not_found");
+        return AdminValidationViewSchema.parse(row);
+      },
+    );
+    app.post<{ Params: { versionId: string } }>(
+      "/v1/image-versions/:versionId/validate",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        const body = parseInput(ImageValidationRequestSchema, request.body);
+        return reply.code(202).send(
+          ValidationScheduleReceiptSchema.parse(
+            await admin.scheduleValidation({
+              ...(body as ImageValidationRequest),
+              versionId: request.params.versionId,
+              requestedBy: actor.consumerId,
+            }),
+          ),
+        );
+      },
+    );
+    app.post<{ Params: { nodeId: string } }>(
+      "/v1/nodes/:nodeId/image-cache/prewarm",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const body = parseInput(CacheArtifactSchema, request.body);
+        const plan = await admin.prewarmImageCache({
+          nodeId: request.params.nodeId,
+          artifactId: body.artifactId,
+        });
+        if (plan.state === "conflict") throw new ApplicationError("conflict");
+        return reply.code(202).send(CachePlanReceiptSchema.parse(plan));
+      },
+    );
+    app.post<{ Params: { nodeId: string } }>(
+      "/v1/nodes/:nodeId/image-cache/gc",
+      async (request, reply) => {
+        await requireAdmin(request, true);
+        const body = parseInput(CacheArtifactSchema, request.body);
+        const plan = await admin.planCacheEviction({
+          nodeId: request.params.nodeId,
+          artifactId: body.artifactId,
+        });
+        if (plan.state === "conflict") throw new ApplicationError("conflict");
+        return reply.code(202).send(CachePlanReceiptSchema.parse(plan));
+      },
+    );
     const eventStreams = new Set<() => void>();
     const loginFailures = new Map<string, { count: number; since: number }>();
     const closeEventStreams = () => {
@@ -499,6 +855,15 @@ export async function buildApp(
       return ImageSummaryPageSchema.parse({ items, nextCursor });
     });
     app.get<{ Params: { versionId: string } }>(
+      "/v1/admin/image-versions/:versionId",
+      async (request) => {
+        await requireAdmin(request);
+        const draft = await admin.getDraftVersion(request.params.versionId);
+        if (!draft) throw new ApplicationError("not_found");
+        return DraftVersionViewSchema.parse(draft);
+      },
+    );
+    app.get<{ Params: { versionId: string } }>(
       "/v1/image-versions/:versionId",
       async (request, reply) => {
         const actor = await identify(request);
@@ -844,4 +1209,13 @@ function readProtocols(value: unknown): ("ssh" | "rdp")[] {
   return recipe.accessProtocols.filter(
     (item): item is "ssh" | "rdp" => item === "ssh" || item === "rdp",
   );
+}
+function ifMatchVersion(value: string | string[] | undefined): number {
+  if (typeof value !== "string")
+    throw new RangeError("If-Match entity version is required");
+  const match = /^"?(\d+)"?$/.exec(value);
+  const version = match ? Number(match[1]) : Number.NaN;
+  if (!Number.isSafeInteger(version) || version < 1)
+    throw new RangeError("If-Match entity version is invalid");
+  return version;
 }

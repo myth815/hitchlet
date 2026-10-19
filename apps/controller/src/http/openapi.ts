@@ -1,4 +1,6 @@
 import { toPublicJsonSchema } from "@hitchlet/contracts";
+import { z } from "zod";
+import { AdminSchemas } from "./admin-protocol.js";
 
 export function openApiDocument() {
   const converted = toPublicJsonSchema() as {
@@ -55,6 +57,13 @@ export function openApiDocument() {
     schema: unknown,
     required = true,
   ) => ({ name, in: location, required, schema });
+  const pathId = (name: string) =>
+    parameter(name, "path", { type: "string", format: "uuid" });
+  const ifMatch = () =>
+    parameter("If-Match", "header", {
+      type: "string",
+      pattern: '^\\"?[1-9][0-9]*\\"?$',
+    });
   const body = (name: string) => ({ required: true, content: json(ref(name)) });
   const operation = (
     summary: string,
@@ -69,6 +78,30 @@ export function openApiDocument() {
       ...errors,
     },
     ...extra,
+  });
+  const adminOperation = (
+    summary: string,
+    successCode = "200",
+    requestSchema: z.ZodType | undefined,
+    responseSchema: z.ZodType,
+    parameters: Record<string, unknown>[] = [],
+  ) => ({
+    summary,
+    description: "Requires a full-scope administrator bearer or session.",
+    security,
+    ...(parameters.length ? { parameters } : {}),
+    ...(requestSchema
+      ? {
+          requestBody: {
+            required: true,
+            content: json(z.toJSONSchema(requestSchema)),
+          },
+        }
+      : {}),
+    responses: {
+      [successCode]: response(summary, z.toJSONSchema(responseSchema)),
+      ...errors,
+    },
   });
   return {
     openapi: "3.1.0",
@@ -306,6 +339,30 @@ export function openApiDocument() {
             ),
           ],
         }),
+        post: adminOperation(
+          "Register a digest-pinned draft image",
+          "201",
+          AdminSchemas.ImageDraftSchema,
+          AdminSchemas.DraftCreationReceiptSchema,
+        ),
+      },
+      "/v1/images/{imageId}/versions": {
+        post: adminOperation(
+          "Register another immutable architecture/version under an existing image",
+          "201",
+          AdminSchemas.ImageVersionDraftSchema,
+          AdminSchemas.DraftCreationReceiptSchema,
+          [pathId("imageId")],
+        ),
+      },
+      "/v1/admin/image-versions/{versionId}": {
+        get: adminOperation(
+          "Read an internal draft image version and artifacts",
+          "200",
+          undefined,
+          AdminSchemas.DraftVersionViewSchema,
+          [pathId("versionId")],
+        ),
       },
       "/v1/image-versions/{versionId}": {
         get: operation(
@@ -320,6 +377,187 @@ export function openApiDocument() {
               }),
             ],
           },
+        ),
+      },
+      "/v1/provider-connections": {
+        get: adminOperation(
+          "List Portainer connections and verified revisions",
+          "200",
+          undefined,
+          z.array(AdminSchemas.ProviderConnectionViewSchema),
+        ),
+        post: adminOperation(
+          "Persist and run a read-only Portainer discovery",
+          "202",
+          AdminSchemas.PortainerConnectionInputSchema,
+          AdminSchemas.ProviderOperationReceiptSchema,
+        ),
+      },
+      "/v1/provider-discovery/{operationId}/retry": {
+        post: adminOperation(
+          "Retry a persisted Portainer discovery",
+          "200",
+          undefined,
+          AdminSchemas.ProviderOperationReceiptSchema,
+          [pathId("operationId")],
+        ),
+      },
+      "/v1/provider-discovery/{operationId}": {
+        get: adminOperation(
+          "Read a safe Portainer discovery operation receipt",
+          "200",
+          undefined,
+          AdminSchemas.ProviderOperationReceiptSchema,
+          [pathId("operationId")],
+        ),
+      },
+      "/v1/provider-connections/{connectionId}/revisions": {
+        post: adminOperation(
+          "Probe and persist a same-Engine connection revision",
+          "202",
+          AdminSchemas.PortainerConnectionInputSchema,
+          AdminSchemas.ProviderOperationReceiptSchema,
+          [pathId("connectionId")],
+        ),
+      },
+      "/v1/provider-connection-proposals/{operationId}/retry": {
+        post: adminOperation(
+          "Retry a persisted same-Engine connection revision proposal",
+          "200",
+          undefined,
+          AdminSchemas.ProviderOperationReceiptSchema,
+          [pathId("operationId")],
+        ),
+      },
+      "/v1/provider-connection-proposals/{operationId}": {
+        get: adminOperation(
+          "Read a safe connection revision operation receipt",
+          "200",
+          undefined,
+          AdminSchemas.ProviderOperationReceiptSchema,
+          [pathId("operationId")],
+        ),
+      },
+      "/v1/provider-connections/{connectionId}/activate-revision": {
+        post: adminOperation(
+          "CAS-activate a verified connection revision",
+          "200",
+          AdminSchemas.ConnectionActivationSchema,
+          AdminSchemas.ConnectionActivationReceiptSchema,
+          [pathId("connectionId"), ifMatch()],
+        ),
+      },
+      "/v1/machines": {
+        post: adminOperation(
+          "Register a conservative manual machine budget",
+          "201",
+          AdminSchemas.MachineInputSchema,
+          AdminSchemas.MachineReceiptSchema,
+        ),
+      },
+      "/v1/nodes": {
+        get: adminOperation(
+          "List registered nodes",
+          "200",
+          undefined,
+          z.array(AdminSchemas.NodeViewSchema),
+        ),
+        post: adminOperation(
+          "Register a Portainer node with admission disabled",
+          "201",
+          AdminSchemas.NodeInputSchema,
+          AdminSchemas.NodeReceiptSchema,
+        ),
+      },
+      "/v1/network-profiles": {
+        get: adminOperation(
+          "List network profile revisions",
+          "200",
+          undefined,
+          z.array(AdminSchemas.AdminProfileViewSchema),
+        ),
+        post: adminOperation(
+          "Create a network profile and immutable revision",
+          "201",
+          AdminSchemas.NetworkProfileInputSchema,
+          AdminSchemas.ProfileWriteReceiptSchema,
+        ),
+      },
+      "/v1/storage-profiles": {
+        get: adminOperation(
+          "List storage profile revisions",
+          "200",
+          undefined,
+          z.array(AdminSchemas.AdminProfileViewSchema),
+        ),
+        post: adminOperation(
+          "Create a storage profile and immutable revision",
+          "201",
+          AdminSchemas.StorageProfileInputSchema,
+          AdminSchemas.ProfileWriteReceiptSchema,
+        ),
+      },
+      "/v1/network-profiles/{profileId}/revisions": {
+        post: adminOperation(
+          "Create and CAS-activate a network profile revision",
+          "201",
+          AdminSchemas.NetworkProfileRevisionSchema,
+          AdminSchemas.ProfileWriteReceiptSchema,
+          [pathId("profileId"), ifMatch()],
+        ),
+      },
+      "/v1/storage-profiles/{profileId}/revisions": {
+        post: adminOperation(
+          "Create and CAS-activate a storage profile revision",
+          "201",
+          AdminSchemas.StorageProfileRevisionSchema,
+          AdminSchemas.ProfileWriteReceiptSchema,
+          [pathId("profileId"), ifMatch()],
+        ),
+      },
+      "/v1/image-versions/{versionId}/artifacts": {
+        post: adminOperation(
+          "Register an immutable draft artifact",
+          "201",
+          AdminSchemas.DraftArtifactSchema,
+          AdminSchemas.ArtifactReceiptSchema,
+          [pathId("versionId")],
+        ),
+      },
+      "/v1/image-versions/{versionId}/validate": {
+        post: adminOperation(
+          "Schedule a fixed-contract internal validation run",
+          "202",
+          AdminSchemas.ImageValidationRequestSchema,
+          AdminSchemas.ValidationScheduleReceiptSchema,
+          [pathId("versionId")],
+        ),
+      },
+      "/v1/image-validations/{validationId}": {
+        get: adminOperation(
+          "Read an internal image validation run",
+          "200",
+          undefined,
+          AdminSchemas.AdminValidationViewSchema,
+          [pathId("validationId")],
+        ),
+      },
+      "/v1/nodes/{nodeId}/image-cache/prewarm": {
+        post: adminOperation(
+          "Persist an exact-artifact cache pull intent",
+          "202",
+          AdminSchemas.CacheArtifactSchema,
+          AdminSchemas.CachePlanReceiptSchema,
+          [pathId("nodeId")],
+        ),
+      },
+      "/v1/nodes/{nodeId}/image-cache/gc": {
+        post: adminOperation(
+          "Persist an unreferenced cache eviction intent",
+          "202",
+          AdminSchemas.CacheArtifactSchema,
+          AdminSchemas.CachePlanReceiptSchema,
+          [pathId("nodeId")],
         ),
       },
     },

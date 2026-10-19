@@ -9,6 +9,8 @@
     "test": "pnpm --filter @hitchlet/contracts build && pnpm build && vitest run",
     "dev": "node scripts/dev-watch.mjs",
     "init:simulator": "pnpm --filter @hitchlet/contracts build && pnpm build && node dist/init-simulator.js",
+    "init:admin": "pnpm --filter @hitchlet/contracts build && pnpm build && node dist/init-admin.js",
+    "secret:add": "pnpm --filter @hitchlet/contracts build && pnpm build && node dist/secret-cli.js add",
     "start": "node dist/server.js"
   },
   "dependencies": {

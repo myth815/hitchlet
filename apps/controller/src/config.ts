@@ -10,6 +10,11 @@ const ConfigSchema = z
     GUI_DIR: z.string().default("/app/gui"),
     EXECUTION_MODE: z.enum(["disabled", "simulator"]).default("disabled"),
     SIMULATOR_DATA_DIR: z.string().min(1).optional(),
+    HITCHLET_SECRET_KEY_FILE: z.string().min(1).optional(),
+    PORTAINER_ALLOW_LOOPBACK_HTTP: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((value) => value === "true"),
     COOKIE_SECURE: z
       .enum(["true", "false"])
       .default("true")
@@ -43,6 +48,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     "GUI_DIR",
     "EXECUTION_MODE",
     "SIMULATOR_DATA_DIR",
+    "HITCHLET_SECRET_KEY_FILE",
+    "PORTAINER_ALLOW_LOOPBACK_HTTP",
     "COOKIE_SECURE",
   ] as const;
   const selected = Object.fromEntries(

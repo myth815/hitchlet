@@ -1,6 +1,25 @@
 import type { ResourceAmounts, ResourceContract } from "@hitchlet/contracts";
 import type { EffectiveResources } from "@hitchlet/contracts/internal";
 
+export type PortainerEvidence = Readonly<{
+  engineId: string;
+  dockerVersion: string;
+  apiVersion: string;
+  minimumApiVersion: string;
+  os: string;
+  architecture: string;
+  portainerVersion: string;
+  cpuCount: number;
+  memoryBytes: number;
+  containerCount: number;
+  unmanagedContainerCount: number;
+}>;
+export type PortainerProbe = (input: {
+  endpointUrl: string;
+  environmentId: string;
+  apiKey: string;
+}) => Promise<PortainerEvidence>;
+
 export type { EffectiveResources };
 
 export type NetworkDestination = Readonly<{

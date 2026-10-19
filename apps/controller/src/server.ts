@@ -5,6 +5,7 @@ import { OperationWorker } from "./application/operations.js";
 import { TicketService } from "./application/tickets.js";
 import { LeaseService } from "./application/leases.js";
 import { PersistentSimulator } from "./providers/simulator.js";
+import { LocalSecretStore } from "./storage/secret-store.js";
 
 const config = loadConfig(process.env);
 const storage = await openStorage(config.DATA_DIR);
@@ -79,7 +80,17 @@ try {
     }, 2_000);
     timer.unref();
   }
-  app = await buildApp(config, { storage, recoveryState: () => recoveryState });
+  const secrets = config.HITCHLET_SECRET_KEY_FILE
+    ? await LocalSecretStore.open(
+        config.DATA_DIR,
+        config.HITCHLET_SECRET_KEY_FILE,
+      )
+    : undefined;
+  app = await buildApp(config, {
+    storage,
+    recoveryState: () => recoveryState,
+    ...(secrets ? { secrets } : {}),
+  });
   app.addHook("onClose", async () => {
     if (timer) clearInterval(timer);
     await storage.close();

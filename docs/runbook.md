@@ -1,5 +1,40 @@
 # M0 local Simulator runbook
 
+## Real installation bootstrap and Portainer credential handling
+
+`pnpm --filter @hitchlet/controller init:admin` bootstraps only the installation identity and one administrator credential in an empty data directory. Capture the one-time `hcl_...` output in a password manager. It does not seed a Simulator, runtime identity, node, capability, or network baseline. A non-empty database is rejected.
+
+Create a separate 32-byte master-key file on the controller host, protect it from other users, and back it up separately from the SQLite directory. For example, on Linux:
+
+```sh
+umask 077
+openssl rand 32 > /etc/hitchlet/secret-master.key
+```
+
+Set `HITCHLET_SECRET_KEY_FILE=/etc/hitchlet/secret-master.key` for the controller. Import a Portainer API key without placing its value in command arguments or shell history:
+
+```sh
+read -rs PORTAINER_API_KEY
+printf '%s' "$PORTAINER_API_KEY" | DATA_DIR=/var/lib/hitchlet HITCHLET_SECRET_KEY_FILE=/etc/hitchlet/secret-master.key pnpm --filter @hitchlet/controller secret:add
+unset PORTAINER_API_KEY
+```
+
+The command prints a version reference. Pass only that reference to the management API; the controller resolves the encrypted value locally. The API response and SQLite ledger never contain the key. HTTPS verifies certificates by default. For a private CA, configure the Node runtime's `NODE_EXTRA_CA_CERTS` with the CA file; do not disable certificate verification. Portainer endpoint URLs must be origin-root URLs with no path, query, or fragment because Portainer's environment proxy routes are rooted at `/api`; explicitly configure a reverse proxy at that root if needed. Plain HTTP requires the explicit `PORTAINER_ALLOW_LOOPBACK_HTTP=true` development setting and a loopback URL. The master key is not recoverable from the SQLite backup.
+
+## D10/D11a management workflow
+
+Use a separate empty installation for real registration. Start the built controller with its `DATA_DIR`, `HITCHLET_SECRET_KEY_FILE`, and `EXECUTION_MODE=disabled`. Authenticate management requests with the full administrator bearer, or an administrator session with CSRF on writes. Restricted administrator credentials cannot manage resources. `GET /v1/openapi.json` describes the request and response schemas.
+
+1. `POST /v1/provider-connections` with `endpointUrl`, decimal-string `environmentId`, and `secretVersionRef`. It persists a read-only discovery operation before probing. The 202 receipt includes `operationId`, `state`, and a safe `result`; check for `succeeded` rather than treating 202 as verified. A failed probe remains `unknown` and does not register an identity or node. Read `GET /v1/provider-discovery/{operationId}` and retry with `POST /v1/provider-discovery/{operationId}/retry`; retries retain the saved target and secret version.
+2. To change an address or credential, `POST /v1/provider-connections/{connectionId}/revisions`. Read/retry its operation at `/v1/provider-connection-proposals/{operationId}` and the corresponding `/retry`. It must authenticate as the original Engine. Activate the verified revision explicitly at `/v1/provider-connections/{connectionId}/activate-revision` with `revisionId` and the current connection `If-Match` version. Existing operations retain their original revision.
+3. Register a conservative machine budget at `POST /v1/machines`, then its Portainer node at `POST /v1/nodes`. Both remain disabled/unknown. An infrastructure Hold protects an external Docker base; observed foreign containers add an unmanaged-work Hold. Registration does not verify hard limits, network rules, storage, human absence, or power control and does not enable ordinary renting.
+4. Create authorized network/storage profiles at `/v1/network-profiles` and `/v1/storage-profiles`; create immutable subsequent revisions at `/{profileId}/revisions` with `If-Match`. New current revisions do not rewrite existing frozen contracts. Storage profiles declare a fixed `sourceRef`, `allowedSubpaths`, `allowedModes`, protocol, and optional secret version; consumers cannot submit arbitrary host mount options.
+5. `POST /v1/images` creates a logical image and its first draft. Add subsequent versions at `/v1/images/{imageId}/versions` and artifacts at `/v1/image-versions/{versionId}/artifacts`. Read drafts through `/v1/admin/image-versions/{versionId}`. Consumer image/version routes keep their existing published-only DTOs. A pinned digest/platform declaration is not manifest verification or publication.
+6. `POST /v1/image-versions/{versionId}/validate` accepts the explicit image artifact, node, network profile, storage requests, resource contract, and bounded deadline. It freezes the selection and uses the shared capacity ledger, without a consumer Ticket, Lease, or access endpoint. Missing verified capabilities return a persisted blocked run, not running/success. Read `/v1/image-validations/{validationId}`.
+7. Node `/image-cache/prewarm` and `/image-cache/gc` routes only persist exact-artifact plans in this batch. Repeating the same action reuses its active operation; an opposite active action returns409. GC excludes pinned/referenced artifacts and rechecks in its transaction. Actual pull/inspect/delete and another reference check at execution are required in batch5; `queued` or `unknown` never means a ready cache.
+
+No real allocation executor or publishing endpoint is enabled in this batch. Do not enable a node by editing SQLite or reuse the Simulator as proof of Docker isolation. The next batch adds real network enforcement and the validation/create/cleanup/publish loop in a dedicated experimental environment. Hyper-V, Tart, WOL, and smart-plug actions remain outside these registration steps.
+
 This runbook starts the controller against an explicitly initialized local
 Simulator. It does not configure Docker, Portainer, VM isolation, host power,
 or real SSH access. The GUI acceptance status is recorded in

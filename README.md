@@ -10,7 +10,7 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 
 ## 当前状态
 
-**M0 模拟闭环已通过审核。** 仓库包含 Ticket HTTP API、TypeScript 消费者 SDK、中文 GUI、公开协议校验、单 worker SQLite 与可恢复 Simulator。115 项实现测试通过，并完成真实浏览器的申请、接用、续租、归还、原请求恢复和窄屏验收。当前仅支持显式模拟环境，尚无真实 Docker/SSH 资源；M1、M2 未完成。具体进度与验证边界见[实施记录](docs/IMPLEMENTATION.md)。
+**M0 模拟闭环与 Docker 接入准备已通过审核。** 仓库包含 Ticket HTTP API、TypeScript 消费者 SDK、中文 GUI、公开协议校验、单 worker SQLite 与可恢复 Simulator；也可登记 Portainer 身份与连接修订、管理草稿镜像和内部验证/缓存计划。122 项实现测试通过，模拟闭环完成实际浏览器验收，Portainer 只读登记完成独立真实环境验收。尚不能交付真实 Docker/SSH 租客资源；M1、M2 未完成。具体进度与验证边界见[实施记录](docs/IMPLEMENTATION.md)。
 
 首个交付目标是 **Docker，通过 Portainer 接入**。Hyper-V 与 Tart 只保留扩展设计，按实际需求后置，不作为 Docker 版本发布的前提。
 

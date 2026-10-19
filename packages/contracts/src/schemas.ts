@@ -333,7 +333,7 @@ export const ApiErrorResponseSchema: z.ZodType<ApiErrorResponse> = z
   })
   .strict();
 
-const resourceContractSchema = z
+export const ResourceContractSchema = z
   .object({
     request: ResourceAmountsSchema,
     limit: ResourceAmountsSchema,
@@ -341,7 +341,15 @@ const resourceContractSchema = z
     isolation: z.enum(["shared_kernel", "virtual_machine"]),
     accelerators: z.array(AcceleratorRequirementSchema),
   })
-  .strict();
+  .strict()
+  .refine(
+    (contract) =>
+      contract.request.cpuMillis <= contract.limit.cpuMillis &&
+      contract.request.memoryMiB <= contract.limit.memoryMiB &&
+      contract.request.scratchMiB <= contract.limit.scratchMiB,
+    "Requested resources must not exceed execution limits",
+  );
+const resourceContractSchema = ResourceContractSchema;
 const acceptedLeaseSchema: z.ZodType<AcceptedLeaseRequest> = z
   .object({
     requestedSeconds: positiveInt,
