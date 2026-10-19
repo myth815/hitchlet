@@ -10,7 +10,7 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 
 ## 当前状态
 
-**基础工程与合同／存储基础已建立。** 仓库包含 Fastify 健康 API、状态 GUI、最小 health SDK、公开协议校验和单 worker SQLite 存储。数据库模块已通过迁移与事务测试，但尚未接入 Ticket 服务；Simulator、资源调度和 Provider 仍待实现，目前未达到 M0。
+**基础工程、合同与 Ticket 账本已通过审核。** 仓库包含 Fastify 健康 API、状态 GUI、最小 health SDK、公开协议校验、单 worker SQLite，以及受理／幂等／原子资源预留／一次性配置绑定的应用模块。57 项实现测试已通过；租用 HTTP API、可恢复 Simulator 和实际 Provider 尚未交付，目前未达到 M0。具体进度与验证边界见[实施记录](docs/IMPLEMENTATION.md)。
 
 首个交付目标是 **Docker，通过 Portainer 接入**。Hyper-V 与 Tart 只保留扩展设计，按实际需求后置，不作为 Docker 版本发布的前提。
 
