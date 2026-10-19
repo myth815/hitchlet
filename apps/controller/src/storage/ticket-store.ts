@@ -1,4 +1,5 @@
 import type { Storage } from "./index.js";
+import { createHash } from "node:crypto";
 
 type Row = Record<string, string | number | bigint | null>;
 
@@ -15,6 +16,11 @@ export interface ReservationWrite {
   readonly machineId: string;
   readonly machineVersion: number;
   readonly runtimeIdentityId: string;
+  readonly connectionRevisionId: string;
+  readonly executionMode: "simulator" | "portainer" | "unconfigured";
+  readonly operationId: string;
+  readonly installationId: string | null;
+  readonly controllerEpoch: number;
   readonly artifactId: string;
   readonly poolId: string;
   readonly poolVersion: number;
@@ -224,7 +230,7 @@ export class SQLiteTicketStore {
     architectures: readonly string[];
   }): Promise<Row[]> {
     return this.storage.all<Row>(
-      `SELECT n.id AS node_id,n.version AS node_version,n.machine_id,n.runtime_identity_id,n.backend_kind,n.pool_id,n.capabilities_json,n.config_json,n.observed_at_ms,m.version AS machine_version,m.site_id,m.labels_json AS machine_labels,m.admission AS machine_admission,m.observed_power,m.power_lifecycle,m.power_cycle_id,m.power_transition_id,m.shutdown_operation_id,m.accepted_shutdown_receipt_id,m.out_of_band_evidence_id,m.wake_not_before_ms,m.shutdown_accepted_at_ms,m.power_transition_deadline_ms,m.wake_attempt_count,m.updated_at_ms AS machine_updated_at_ms,m.desired_power,m.capabilities_json AS machine_capabilities,power_policy.config_json AS power_policy_json,p.version AS pool_version,p.parent_allocation_id,p.total_cpu_millis,p.total_memory_mib,p.total_scratch_mib,p.system_cpu_millis,p.system_memory_mib,p.system_scratch_mib,a.id AS artifact_id,a.architecture,a.guest_os,a.environment_kind,a.requirements_json,a.minimum_cpu_millis,a.minimum_memory_mib,a.minimum_scratch_mib,a.access_recipe_json,EXISTS(SELECT 1 FROM operations o JOIN agent_commands c ON c.operation_id=o.id AND c.kind='machine.shutdown' JOIN agents ag ON ag.id=c.agent_id AND ag.machine_id=m.id JOIN agent_receipts r ON r.command_id=c.id AND r.agent_id=c.agent_id WHERE o.id=m.shutdown_operation_id AND o.machine_id=m.id AND o.kind='machine.shutdown' AND o.state IN ('running','succeeded') AND r.id=m.accepted_shutdown_receipt_id AND r.phase='accepted' AND r.observed_at_ms>=m.shutdown_accepted_at_ms AND r.received_at_ms<=m.power_transition_deadline_ms) AS shutdown_evidence
+      `SELECT n.id AS node_id,n.version AS node_version,n.machine_id,n.runtime_identity_id,n.backend_kind,n.pool_id,n.capabilities_json,n.config_json,n.observed_at_ms,m.version AS machine_version,m.site_id,m.labels_json AS machine_labels,m.admission AS machine_admission,m.observed_power,m.power_lifecycle,m.power_cycle_id,m.power_transition_id,m.shutdown_operation_id,m.accepted_shutdown_receipt_id,m.out_of_band_evidence_id,m.wake_not_before_ms,m.shutdown_accepted_at_ms,m.power_transition_deadline_ms,m.wake_attempt_count,m.updated_at_ms AS machine_updated_at_ms,m.desired_power,m.capabilities_json AS machine_capabilities,power_policy.config_json AS power_policy_json,p.version AS pool_version,p.parent_allocation_id,p.total_cpu_millis,p.total_memory_mib,p.total_scratch_mib,p.system_cpu_millis,p.system_memory_mib,p.system_scratch_mib,a.id AS artifact_id,a.architecture,a.guest_os,a.environment_kind,a.requirements_json,a.minimum_cpu_millis,a.minimum_memory_mib,a.minimum_scratch_mib,a.access_recipe_json,pcr.id AS connection_revision_id,EXISTS(SELECT 1 FROM operations o JOIN agent_commands c ON c.operation_id=o.id AND c.kind='machine.shutdown' JOIN agents ag ON ag.id=c.agent_id AND ag.machine_id=m.id JOIN agent_receipts r ON r.command_id=c.id AND r.agent_id=c.agent_id WHERE o.id=m.shutdown_operation_id AND o.machine_id=m.id AND o.kind='machine.shutdown' AND o.state IN ('running','succeeded') AND r.id=m.accepted_shutdown_receipt_id AND r.phase='accepted' AND r.observed_at_ms>=m.shutdown_accepted_at_ms AND r.received_at_ms<=m.power_transition_deadline_ms) AS shutdown_evidence
       FROM nodes n JOIN machines m ON m.id=n.machine_id LEFT JOIN policies power_policy ON power_policy.id=m.policy_id AND power_policy.kind='machine' JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.enabled=1 AND pc.runtime_identity_id=n.runtime_identity_id JOIN provider_connection_revisions pcr ON pcr.id=pc.current_revision_id AND pcr.verified_runtime_identity_id=n.runtime_identity_id JOIN capacity_pools p ON p.id=n.pool_id JOIN image_artifacts a ON a.image_version_id=? AND a.backend_kind=n.backend_kind WHERE n.admission='enabled' AND (n.observed_health='healthy' OR (n.observed_health='unknown' AND (m.observed_power IN ('off','sleeping') OR (m.observed_power='unknown' AND m.power_lifecycle='off_expected')))) AND m.admission='enabled' AND m.source='local' AND (m.observed_power IN ('on','off','sleeping') OR (m.observed_power='unknown' AND m.power_lifecycle='off_expected')) AND n.backend_kind IN (${query.providers.map(() => "?").join(",")}) AND m.site_id IN (${query.siteIds.map(() => "?").join(",")}) AND n.id IN (${query.nodeIds.map(() => "?").join(",")}) AND m.id IN (${query.machineIds.map(() => "?").join(",")}) AND a.environment_kind=? AND a.architecture IN (${query.architectures.map(() => "?").join(",")}) ORDER BY n.id,a.architecture`,
       [
         query.imageVersion,
@@ -305,8 +311,9 @@ export class SQLiteTicketStore {
     return this.storage.batchTransaction([
       {
         kind: "run",
-        sql: "UPDATE tickets SET phase='released',terminal_reason='consumer_cancel',released_at_ms=?,version=version+1,updated_at_ms=? WHERE id=? AND consumer_id=? AND phase='queued' AND version=?",
+        sql: "UPDATE tickets SET phase='released',terminal_reason=?,released_at_ms=?,version=version+1,updated_at_ms=? WHERE id=? AND consumer_id=? AND phase='queued' AND version=?",
         params: [
+          input.reason,
           input.now,
           input.now,
           input.ticketId,
@@ -317,7 +324,7 @@ export class SQLiteTicketStore {
       },
       {
         kind: "run",
-        sql: "INSERT INTO events(aggregate_type,aggregate_id,aggregate_version,event_type,consumer_id,occurred_at_ms,payload_json) VALUES('ticket',?,?,'ticket.cancelled',?,?,?)",
+        sql: "INSERT INTO events(aggregate_type,aggregate_id,aggregate_version,event_type,consumer_id,occurred_at_ms,payload_json) VALUES('ticket',?,?,'ticket.terminated',?,?,?)",
         params: [
           input.ticketId,
           input.version + 1,
@@ -335,12 +342,14 @@ export class SQLiteTicketStore {
     version: number;
     now: number;
     reason: string;
+    operationId: string;
   }): Promise<unknown[]> {
     return this.storage.batchTransaction([
       {
         kind: "run",
-        sql: "UPDATE tickets SET phase='releasing',terminal_reason='consumer_cancel',cleanup_status='pending',termination_requested_at_ms=?,version=version+1,updated_at_ms=? WHERE id=? AND consumer_id=? AND phase=? AND version=?",
+        sql: "UPDATE tickets SET phase='releasing',terminal_reason=?,cleanup_status='pending',termination_requested_at_ms=?,version=version+1,updated_at_ms=? WHERE id=? AND consumer_id=? AND phase=? AND version=?",
         params: [
+          input.reason,
           input.now,
           input.now,
           input.ticketId,
@@ -363,7 +372,34 @@ export class SQLiteTicketStore {
       },
       {
         kind: "run",
-        sql: "INSERT INTO events(aggregate_type,aggregate_id,aggregate_version,event_type,consumer_id,occurred_at_ms,payload_json) VALUES('ticket',?,?,'ticket.cancelled',?,?,?)",
+        sql: "UPDATE lease_renewals SET state='cancelled',rejection_json=json_object('code','termination_requested'),version=version+1,updated_at_ms=? WHERE lease_id IN (SELECT id FROM leases WHERE ticket_id=?) AND state='pending'",
+        params: [input.now, input.ticketId],
+      },
+      {
+        kind: "run",
+        sql: "UPDATE operations SET state='cancelled',version=version+1,owner_token=NULL,locked_until_ms=NULL,updated_at_ms=? WHERE allocation_id=(SELECT id FROM allocations WHERE ticket_id=?) AND kind='allocation.provision' AND state='planned'",
+        params: [input.now, input.ticketId],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO operations(id,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms) SELECT ?,o.installation_id,a.id,a.runtime_identity_id,o.connection_revision_id,a.image_artifact_id,a.generation,a.control_version,o.controller_epoch,'allocation.cleanup','cleanup',a.id||':cleanup:'||a.generation||':'||a.control_version,'planned',?,json_object('reason',?,'purpose','tenant','executionMode',json_extract(o.intent_json,'$.executionMode')),?,?,?,? FROM allocations a JOIN operations o ON o.allocation_id=a.id AND o.kind='allocation.provision' WHERE a.ticket_id=?",
+        params: [
+          input.operationId,
+          createHash("sha256")
+            .update(`${input.ticketId}:cleanup`)
+            .digest("hex"),
+          input.reason,
+          input.now,
+          input.now + 30000,
+          input.now,
+          input.now,
+          input.ticketId,
+        ],
+        expectChanges: 1,
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO events(aggregate_type,aggregate_id,aggregate_version,event_type,consumer_id,occurred_at_ms,payload_json) VALUES('ticket',?,?,'ticket.terminated',?,?,?)",
         params: [
           input.ticketId,
           input.version + 1,
@@ -446,6 +482,35 @@ export class SQLiteTicketStore {
           input.now,
           input.now,
           input.deadline,
+        ],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO operations(id,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,1,?,'allocation.provision','provision',?,'planned',?,?,?, ?,?,?)",
+        params: [
+          input.operationId,
+          input.installationId,
+          input.allocationId,
+          input.runtimeIdentityId,
+          input.connectionRevisionId,
+          input.artifactId,
+          input.generation,
+          input.controllerEpoch,
+          `${input.allocationId}:provision:${input.generation}:1`,
+          createHash("sha256")
+            .update(
+              `${input.allocationId}:${input.ticketId}:${input.generation}`,
+            )
+            .digest("hex"),
+          JSON.stringify({
+            ticketId: input.ticketId,
+            purpose: "tenant",
+            executionMode: input.executionMode,
+          }),
+          input.now,
+          input.deadline,
+          input.now,
+          input.now,
         ],
       },
       {

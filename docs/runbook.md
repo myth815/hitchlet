@@ -6,4 +6,8 @@ For the single-container deployment, copy `.env.example` to `.env`, then run `do
 
 `GET /healthz` returns the service status, current stage (`D00`), and `simulator: not_implemented`. This confirms process health only; it does not check compute nodes or allocate resources. Stop with Ctrl-C locally or `docker compose down` in deployment. Container shutdown closes Fastify cleanly.
 
-D00 is infrastructure groundwork only. It does not complete M0 or the wider design in `docs/design/README.md` section 19; Simulator workflows and persistence belong to later batches.
+D04 Simulator is explicitly opt-in. Keep `EXECUTION_MODE=disabled` for ordinary local runs. To exercise the simulator, set `EXECUTION_MODE=simulator` and set `SIMULATOR_DATA_DIR` to a writable directory separate from `DATA_DIR`, then start with `pnpm dev`. Only Nodes whose internal `config_json.executionMode` is explicitly `simulator` create simulator work. Missing mode is treated as `unconfigured`; `portainer` is pinned to its Operation and is never claimed by the Simulator. This internal setting does not add a public ProviderKind and does not enable a real Portainer worker.
+
+The external simulator directory is its own durable resource ledger; do not point it at the SQLite control directory. Simulator recovery can test operation ordering and cleanup evidence but does not configure Docker, iptables, storage mounts, VM isolation, or lease enforcement. Reset only disposable simulator data after stopping the controller.
+
+D00 is infrastructure groundwork only. D04 adds persistent simulator workflows but does not complete M0 or the wider design in `docs/design/README.md` section 19. Real provider integration and lease API workflows remain later work.

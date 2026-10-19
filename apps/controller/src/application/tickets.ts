@@ -18,6 +18,8 @@ import { SQLiteTicketStore } from "../storage/ticket-store.js";
 type Row = Record<string, string | number | bigint | null>;
 export interface TicketServiceOptions {
   readonly storage: Storage;
+  readonly installationId?: string;
+  readonly controllerEpoch?: number;
   readonly now?: () => number;
   readonly id?: () => string;
   readonly queueTimeoutSeconds?: number;
@@ -91,6 +93,7 @@ export class TicketService {
     const network = await this.store.networkRevision(networkId);
     if (!network?.id) throw new Error("Network profile is unavailable");
     const storageRows: {
+      grantId: string;
       profileId: string;
       revisionId: string;
       path: string;
@@ -126,6 +129,7 @@ export class TicketService {
           "Storage request exceeds the frozen profile authorization",
         );
       storageRows.push({
+        grantId: this.id(),
         profileId: item.storageProfileId,
         revisionId: String(p.current_revision_id),
         path: item.authorizedSubpath,
@@ -239,7 +243,7 @@ export class TicketService {
       ),
       acceptedAt: new Date(now).toISOString(),
       storage: storageRows.map((s) => ({
-        grantId: this.id(),
+        grantId: s.grantId,
         grantRevision: 1,
         storageProfileRevisionId: s.revisionId,
         protocol: s.protocol,
@@ -284,7 +288,7 @@ export class TicketService {
         consumerVersion,
         maxQueued,
         storageRows,
-        storageGrantIds: storageRows.map(() => this.id()),
+        storageGrantIds: storageRows.map((s) => s.grantId),
         key,
       });
       return { ticketId, phase: "queued", replayed: false };
@@ -468,6 +472,11 @@ export class TicketService {
             machineId: String(candidate.machine_id),
             machineVersion: Number(candidate.machine_version),
             runtimeIdentityId: String(candidate.runtime_identity_id),
+            connectionRevisionId: String(candidate.connection_revision_id),
+            executionMode: executionMode(candidate.config_json),
+            operationId: this.id(),
+            installationId: this.options.installationId ?? null,
+            controllerEpoch: this.options.controllerEpoch ?? 1,
             artifactId: String(candidate.artifact_id),
             poolId,
             poolVersion: Number(poolVersion),
@@ -546,6 +555,7 @@ export class TicketService {
       version: Number(ticket.version),
       now,
       reason,
+      operationId: this.id(),
     });
   }
 
@@ -556,6 +566,27 @@ export class TicketService {
       throw new Error("Idempotent response is incomplete");
     return { ticketId: row.ticket_id, phase: "queued", replayed: true };
   }
+}
+
+function executionMode(
+  value: unknown,
+): "simulator" | "portainer" | "unconfigured" {
+  if (typeof value !== "string") return "unconfigured";
+  try {
+    const config: unknown = JSON.parse(value);
+    if (
+      typeof config === "object" &&
+      config !== null &&
+      !Array.isArray(config) &&
+      "executionMode" in config &&
+      (config.executionMode === "simulator" ||
+        config.executionMode === "portainer")
+    )
+      return config.executionMode;
+  } catch {
+    // Invalid or incomplete node configuration never enables the Simulator.
+  }
+  return "unconfigured";
 }
 
 function stable(value: unknown): string {

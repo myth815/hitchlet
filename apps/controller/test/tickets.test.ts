@@ -1,9 +1,11 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStorage } from "../dist/storage/index.js";
 import { TicketService } from "../dist/application/tickets.js";
+import { OperationWorker } from "../dist/application/operations.js";
+import { PersistentSimulator } from "../dist/providers/simulator.js";
 
 const dirs: string[] = [];
 const opened: Awaited<ReturnType<typeof openStorage>>[] = [];
@@ -164,8 +166,14 @@ async function fixture() {
       sql: "INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,access_recipe_json,created_at_ms) VALUES('a0000000-0000-4000-8000-000000000001','20000000-0000-4000-8000-000000000002','portainer','container','amd64','linux','alpine@sha256:x','sha256:abc',1,1,0,'{\"accessProtocols\":[\"ssh\",\"rdp\"]}',?)",
       params: [now],
     },
+    {
+      kind: "run",
+      sql: "UPDATE nodes SET config_json=json_object('executionMode','simulator') WHERE id='40000000-0000-4000-8000-000000000001'",
+    },
   ]);
   return {
+    dir,
+    now,
     storage,
     service: new TicketService({
       storage,
@@ -1050,5 +1058,980 @@ describe("SQLite Ticket admission", () => {
         "SELECT count(*) AS n FROM tickets WHERE consumer_id='10000000-0000-4000-8000-000000000001'",
       ),
     ).toMatchObject({ n: 0n });
+  });
+});
+
+describe("persistent simulator lifecycle", () => {
+  it("review: exhausted cleanup retains capacity but is still inspected at low frequency", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "review-exhausted",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const operation = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simRoot = join(dir, "sim-exhausted");
+    let clock = now;
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simRoot),
+      installationId: "test-installation",
+      now: () => clock,
+    }).run(operation?.id ?? "");
+    await service.cancel(
+      ticket.ticketId,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    const cleanup = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation?.allocationId],
+    );
+    const failing = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simRoot, "delete_failure"),
+      installationId: "test-installation",
+      now: () => clock,
+    });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await failing.run(cleanup?.id ?? "");
+      clock += 300_001;
+    }
+    expect(
+      await storage.get("SELECT state FROM operations WHERE id=?", [
+        cleanup?.id,
+      ]),
+    ).toMatchObject({ state: "failed" });
+    expect(
+      await storage.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).not.toMatchObject({ state: "released" });
+    const recoveredSimulator = new PersistentSimulator(simRoot);
+    const inspect = recoveredSimulator.inspect.bind(recoveredSimulator);
+    let inspections = 0;
+    recoveredSimulator.inspect = async (plan) => {
+      inspections++;
+      return inspect(plan);
+    };
+    await new OperationWorker({
+      storage,
+      execution: recoveredSimulator,
+      installationId: "test-installation",
+      now: () => clock,
+    }).reconcile();
+    expect(inspections).toBeGreaterThan(0);
+  });
+
+  it("review: an operator can retry exhausted cleanup with an audited reason", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "review-explicit-retry",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const provision = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simulatorPath = join(dir, "sim-explicit-retry");
+    let clock = now;
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simulatorPath),
+      installationId: "test-installation",
+      now: () => clock,
+    }).run(provision?.id ?? "");
+    await service.cancel(
+      ticket.ticketId,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    const cleanup = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation?.allocationId],
+    );
+    const failing = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simulatorPath, "delete_failure"),
+      installationId: "test-installation",
+      now: () => clock,
+    });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await failing.run(cleanup?.id ?? "");
+      clock += 300_001;
+    }
+    const recovered = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simulatorPath),
+      installationId: "test-installation",
+      now: () => clock,
+    });
+    await recovered.retryFailedOperation(
+      cleanup?.id ?? "",
+      "Delete failure was resolved by the operator",
+    );
+    expect(await recovered.reconcile()).toBe(1);
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "released" });
+    expect(
+      await storage.get(
+        "SELECT event_type,payload_json FROM events WHERE aggregate_id=? AND event_type='operation.retry_requested'",
+        [ticket.ticketId],
+      ),
+    ).toMatchObject({
+      event_type: "operation.retry_requested",
+      payload_json: expect.stringContaining(
+        "Delete failure was resolved by the operator",
+      ),
+    });
+  });
+
+  it("review: an actual delayed create cannot recreate resources after cancellation and cleanup", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "review-delayed-create",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const operation = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simulator = new PersistentSimulator(join(dir, "sim-delayed-create"));
+    const create = simulator.create.bind(simulator);
+    let unblock!: () => void;
+    let signalEntered!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      unblock = resolve;
+    });
+    const entered = new Promise<void>((resolve) => {
+      signalEntered = resolve;
+    });
+    simulator.create = async (plan, journal) => {
+      signalEntered();
+      await gate;
+      return create(plan, journal);
+    };
+    let clock = now;
+    const worker = new OperationWorker({
+      storage,
+      execution: simulator,
+      installationId: "test-installation",
+      now: () => clock,
+    });
+    const original = worker.run(operation?.id ?? "").catch(() => false);
+    try {
+      await entered;
+      await service.cancel(
+        ticket.ticketId,
+        "10000000-0000-4000-8000-000000000001",
+      );
+      clock += 31_000;
+      const cleanup = await storage.get<{ id: string }>(
+        "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+        [allocation?.allocationId],
+      );
+      await worker.run(cleanup?.id ?? "");
+      expect(
+        await storage.get("SELECT phase FROM tickets WHERE id=?", [
+          ticket.ticketId,
+        ]),
+      ).toMatchObject({ phase: "released" });
+    } finally {
+      unblock();
+    }
+    await original;
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "released" });
+    expect(
+      await storage.get(
+        "SELECT count(*) AS n FROM managed_resources WHERE allocation_id=? AND observed_state='present'",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ n: 0n });
+    const externalFiles = await readdir(
+      join(dir, "sim-delayed-create", "resources"),
+      { recursive: true },
+    );
+    expect(
+      externalFiles.filter(
+        (file) => file.endsWith(".json") && !file.endsWith("revoked.json"),
+      ),
+    ).toHaveLength(0);
+  });
+
+  it("review: simulator never executes a node explicitly assigned to a real backend", async () => {
+    const { service, storage, dir, now } = await fixture();
+    await storage.run(
+      "UPDATE nodes SET config_json=json_object('executionMode','portainer'),version=version+1",
+    );
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "review-real-node",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const operation = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(join(dir, "sim-real-node")),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(operation?.id ?? "");
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).not.toMatchObject({ phase: "ready" });
+    expect(
+      await storage.get(
+        "SELECT count(*) AS n FROM managed_resources WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ n: 0n });
+  });
+
+  it("review: simulator does not execute a node with no explicit execution mode", async () => {
+    const { service, storage, dir, now } = await fixture();
+    await storage.run("UPDATE nodes SET config_json='{}',version=version+1");
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "review-unconfigured-node",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const operation = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const intent = await storage.get<{ intent_json: string }>(
+      "SELECT intent_json FROM operations WHERE id=?",
+      [operation?.id],
+    );
+    expect(intent?.intent_json).toContain('"executionMode":"unconfigured"');
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(join(dir, "sim-unconfigured-node")),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(operation?.id ?? "");
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).not.toMatchObject({ phase: "ready" });
+    expect(
+      await storage.get(
+        "SELECT count(*) AS n FROM managed_resources WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ n: 0n });
+  });
+
+  it("review: provider receives the full frozen resource contract, including required enforcement", async () => {
+    const { service, storage, dir, now } = await fixture();
+    await storage.run(
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.scratchHardLimit','verified'),version=version+1",
+    );
+    const base = request();
+    await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "review-provider-resources",
+      {
+        ...base,
+        resources: {
+          ...base.resources,
+          scratchMiB: 1024,
+          scratchEnforcement: "required",
+        },
+      },
+    );
+    const allocation = await service.reserveNext();
+    const operation = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simulator = new PersistentSimulator(join(dir, "sim-full-contract"));
+    const create = simulator.create.bind(simulator);
+    let resources: unknown;
+    simulator.create = async (plan, journal) => {
+      resources = plan.resources;
+      return create(plan, journal);
+    };
+    await new OperationWorker({
+      storage,
+      execution: simulator,
+      installationId: "test-installation",
+      now: () => now,
+    }).run(operation?.id ?? "");
+    expect(resources).toMatchObject({
+      scratchEnforcement: "required",
+      isolation: "shared_kernel",
+      request: { ...base.resources, scratchMiB: 1024 },
+      limit: { ...base.resources, scratchMiB: 1024 },
+    });
+  });
+
+  it("reserves with an operation intent, recovers ready state, then cleans up before releasing capacity", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "sim-lifecycle",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    expect(allocation).toBeTruthy();
+    const operation = await storage.get<{
+      id: string;
+      kind: string;
+      state: string;
+    }>("SELECT id,kind,state FROM operations WHERE allocation_id=?", [
+      allocation?.allocationId,
+    ]);
+    expect(operation).toMatchObject({
+      kind: "allocation.provision",
+      state: "planned",
+    });
+    const simDir = join(dir, "simulator-external");
+    const first = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now,
+    });
+    expect(await first.run(operation?.id ?? "")).toBe(true);
+    const opAfterRun = await storage.get(
+      "SELECT state,result_json FROM operations WHERE id=?",
+      [operation?.id],
+    );
+    expect(opAfterRun).toMatchObject({ state: "succeeded" });
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "ready" });
+    expect(
+      await storage.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ state: "committed" });
+
+    await storage.close();
+    const recovered = await openStorage(dir);
+    opened.push(recovered);
+    const restartWorker = new OperationWorker({
+      storage: recovered,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now + 1,
+    });
+    expect(await restartWorker.reconcile()).toBe(0);
+    const restartedService = new TicketService({
+      storage: recovered,
+      now: () => now + 1,
+    });
+    await restartedService.cancel(
+      ticket.ticketId,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    const cleanup = await recovered.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation?.allocationId],
+    );
+    expect(cleanup?.id).toBeTruthy();
+    expect(await restartWorker.run(cleanup?.id ?? "")).toBe(true);
+    expect(
+      await recovered.get(
+        "SELECT phase,cleanup_status FROM tickets WHERE id=?",
+        [ticket.ticketId],
+      ),
+    ).toMatchObject({ phase: "released", cleanup_status: "complete" });
+    expect(
+      await recovered.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ state: "released" });
+  });
+
+  it("reconciles a partial external create after controller and simulator reconstruction", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "sim-partial",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const operation = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simDir = join(dir, "simulator-external");
+    const interrupted = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir, "create_after_first_object"),
+      installationId: "test-installation",
+      now: () => now,
+    });
+    await interrupted.run(operation?.id ?? "");
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "provisioning" });
+    await storage.close();
+    const recovered = await openStorage(dir);
+    opened.push(recovered);
+    const worker = new OperationWorker({
+      storage: recovered,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now + 2_000,
+    });
+    expect(await worker.reconcile()).toBe(1);
+    expect(
+      await recovered.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "ready" });
+    expect(
+      await recovered.get(
+        "SELECT count(*) AS n FROM managed_resources WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ n: 3n });
+  });
+
+  it("recognizes a completed create when its response is lost and the controller restarts", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "sim-response-lost",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const op = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simDir = join(dir, "simulator-external");
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir, "create_response_lost"),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(op?.id ?? "");
+    expect(
+      await storage.get("SELECT state FROM operations WHERE id=?", [op?.id]),
+    ).toMatchObject({ state: "unknown" });
+    const stale = await storage.get<{ version: bigint }>(
+      "SELECT version FROM operations WHERE id=?",
+      [op?.id],
+    );
+    await storage.run(
+      "UPDATE operations SET state='running',owner_token='stale-worker',locked_until_ms=?,version=version+1 WHERE id=?",
+      [now - 1, op?.id],
+    );
+    await storage.close();
+    const recovered = await openStorage(dir);
+    opened.push(recovered);
+    const worker = new OperationWorker({
+      storage: recovered,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now + 2_000,
+    });
+    expect(await worker.reconcile()).toBe(1);
+    expect(
+      await recovered.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "ready" });
+    expect(
+      await recovered.get(
+        "SELECT count(*) AS n FROM managed_resources WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ n: 3n });
+    await expect(
+      recovered.batchTransaction([
+        {
+          kind: "run",
+          sql: "UPDATE operations SET state='succeeded' WHERE id=? AND owner_token='stale-worker' AND version=?",
+          params: [op?.id, stale?.version],
+          expectChanges: 1,
+        },
+      ]),
+    ).rejects.toThrow(/Compare-and-swap/);
+  });
+
+  it("reconciles an external object written before its SQLite resource receipt", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "sim-resource-receipt-lost",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const operation = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simDir = join(dir, "simulator-receipt-lost");
+    const interrupted = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir, "create_receipt_lost"),
+      installationId: "test-installation",
+      now: () => now,
+    });
+    await interrupted.run(operation?.id ?? "");
+    expect(
+      await storage.get(
+        "SELECT count(*) AS n FROM managed_resources WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ n: 0n });
+    await storage.close();
+    const recovered = await openStorage(dir);
+    opened.push(recovered);
+    const worker = new OperationWorker({
+      storage: recovered,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now + 2_000,
+    });
+    expect(await worker.reconcile()).toBe(1);
+    expect(
+      await recovered.get(
+        "SELECT count(*) AS n FROM managed_resources WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ n: 3n });
+    expect(
+      await recovered.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "ready" });
+  });
+
+  it("fences a started create with no objects before cleanup can release its claim", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "sim-before-create",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const op = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simDir = join(dir, "simulator-external");
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir, "create_before_first_object"),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(op?.id ?? "");
+    expect(
+      await storage.get("SELECT state FROM operations WHERE id=?", [op?.id]),
+    ).toMatchObject({ state: "unknown" });
+    await storage.close();
+    const recovered = await openStorage(dir);
+    opened.push(recovered);
+    const restarted = new TicketService({
+      storage: recovered,
+      now: () => now + 2_000,
+    });
+    await restarted.cancel(
+      ticket.ticketId,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    const cleanup = await recovered.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation?.allocationId],
+    );
+    await new OperationWorker({
+      storage: recovered,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now + 2_000,
+    }).run(cleanup?.id ?? "");
+    expect(
+      await recovered.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "released" });
+    expect(
+      await recovered.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ state: "released" });
+  });
+
+  it("cancellation after a partial create fences late readiness and removes only its allocation", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "sim-cancel-partial",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const op = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simDir = join(dir, "simulator-external");
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir, "create_after_first_object"),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(op?.id ?? "");
+    await service.cancel(
+      ticket.ticketId,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    const cleanup = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation?.allocationId],
+    );
+    const worker = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now + 2_000,
+    });
+    await worker.run(cleanup?.id ?? "");
+    expect(
+      await storage.get(
+        "SELECT phase,terminal_reason FROM tickets WHERE id=?",
+        [ticket.ticketId],
+      ),
+    ).toMatchObject({ phase: "released", terminal_reason: "consumer_cancel" });
+    expect(
+      await storage.get(
+        "SELECT count(*) AS n FROM managed_resources WHERE allocation_id=? AND observed_state='present'",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ n: 0n });
+  });
+
+  it("keeps capacity occupied when the final cleanup transaction fails, then resumes", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "sim-cleanup-db-failure",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const provision = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simDir = join(dir, "simulator-external");
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(provision?.id ?? "");
+    await service.cancel(
+      ticket.ticketId,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    const cleanup = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation?.allocationId],
+    );
+    await storage.run(
+      "CREATE TRIGGER block_ticket_release BEFORE UPDATE OF phase ON tickets WHEN NEW.phase='released' BEGIN SELECT RAISE(ABORT,'blocked release'); END",
+    );
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(cleanup?.id ?? "");
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "releasing" });
+    expect(
+      await storage.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ state: "committed" });
+    await storage.run("DROP TRIGGER block_ticket_release");
+    const recovered = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now + 2_000,
+    });
+    expect(await recovered.reconcile()).toBe(1);
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "released" });
+    expect(
+      await storage.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ state: "released" });
+  });
+
+  it("keeps capacity occupied when runtime identity or inventory completeness is unknown", async () => {
+    for (const fault of ["wrong_runtime", "incomplete_inventory"] as const) {
+      const { service, storage, dir, now } = await fixture();
+      const ticket = await service.acquire(
+        "10000000-0000-4000-8000-000000000001",
+        `unknown-${fault}`,
+        request(),
+      );
+      const allocation = await service.reserveNext();
+      const op = await storage.get<{ id: string }>(
+        "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+        [allocation?.allocationId],
+      );
+      await new OperationWorker({
+        storage,
+        execution: new PersistentSimulator(
+          join(dir, "simulator-external"),
+          fault,
+        ),
+        installationId: "test-installation",
+        now: () => now,
+      }).run(op?.id ?? "");
+      expect(
+        await storage.get("SELECT phase FROM tickets WHERE id=?", [
+          ticket.ticketId,
+        ]),
+      ).toMatchObject({ phase: "provisioning" });
+      expect(
+        await storage.get(
+          "SELECT state FROM capacity_claims WHERE allocation_id=?",
+          [allocation?.allocationId],
+        ),
+      ).toMatchObject({ state: "reserved" });
+      expect(
+        await storage.get("SELECT state FROM operations WHERE id=?", [op?.id]),
+      ).toMatchObject({ state: "unknown" });
+    }
+  });
+
+  it("keeps a failed deletion occupied and resumes cleanup after restart", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "delete-retry",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const create = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const simDir = join(dir, "simulator-external");
+    const worker = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now,
+    });
+    await worker.run(create?.id ?? "");
+    await service.cancel(
+      ticket.ticketId,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    const cleanup = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation?.allocationId],
+    );
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir, "delete_failure"),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(cleanup?.id ?? "");
+    expect(
+      await storage.get("SELECT phase,cleanup_status FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "releasing", cleanup_status: "blocked" });
+    expect(
+      await storage.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ state: "committed" });
+    const recovered = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now + 2_000,
+    });
+    expect(await recovered.reconcile()).toBe(1);
+    expect(
+      await storage.get("SELECT phase,cleanup_status FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "released", cleanup_status: "complete" });
+  });
+
+  it("treats a provisioning deadline equal to now as expired and never ready", async () => {
+    const { service, storage, dir, now } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "deadline-equality",
+      request(),
+    );
+    const allocation = await service.reserveNext();
+    const op = await storage.get<{ id: string; deadline_ms: bigint }>(
+      "SELECT id,deadline_ms FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const deadline = await storage.get<{ provision_deadline_ms: bigint }>(
+      "SELECT provision_deadline_ms FROM tickets WHERE id=?",
+      [ticket.ticketId],
+    );
+    const atDeadline = Number(deadline?.provision_deadline_ms);
+    const worker = new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(join(dir, "simulator-external")),
+      installationId: "test-installation",
+      now: () => atDeadline,
+    });
+    expect(atDeadline).toBe(Number(op?.deadline_ms));
+    expect(await worker.expireDue()).toBe(1);
+    expect(
+      await storage.get(
+        "SELECT phase,terminal_reason FROM tickets WHERE id=?",
+        [ticket.ticketId],
+      ),
+    ).toMatchObject({
+      phase: "releasing",
+      terminal_reason: "provision_timeout",
+    });
+    const cleanup = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation?.allocationId],
+    );
+    await worker.run(cleanup?.id ?? "");
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "released" });
+  });
+
+  it("releases only its own ticket and detaches a simulated NAS reference without destroying the external reference", async () => {
+    const { service, storage, dir, now } = await fixture();
+    await storage.run(
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.verifiedStorageProfileRevisionIds',json_array('b0000000-0000-4000-8000-000000000002')),version=version+1",
+    );
+    const first = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "ref-one",
+      {
+        ...request(),
+        storage: [
+          {
+            storageProfileId: "b0000000-0000-4000-8000-000000000001",
+            authorizedSubpath: "project-a",
+            mountPath: "/data",
+            mode: "read_write",
+          },
+        ],
+      },
+    );
+    const firstAllocation = await service.reserveNext();
+    expect(firstAllocation?.ticketId).toBe(first.ticketId);
+    const second = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "ref-two",
+      request(),
+    );
+    const secondAllocation = await service.reserveNext();
+    expect(secondAllocation?.ticketId).toBe(second.ticketId);
+    const simDir = join(dir, "simulator-external");
+    for (const allocation of [firstAllocation, secondAllocation]) {
+      const op = await storage.get<{ id: string }>(
+        "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+        [allocation?.allocationId],
+      );
+      await new OperationWorker({
+        storage,
+        execution: new PersistentSimulator(simDir),
+        installationId: "test-installation",
+        now: () => now,
+      }).run(op?.id ?? "");
+    }
+    const reference = await storage.get<{ id: string }>(
+      "SELECT id FROM managed_resources WHERE allocation_id=? AND ownership='reference'",
+      [firstAllocation?.allocationId],
+    );
+    expect(reference?.id).toBeTruthy();
+    await service.cancel(
+      first.ticketId,
+      "10000000-0000-4000-8000-000000000001",
+    );
+    const cleanup = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [firstAllocation?.allocationId],
+    );
+    await new OperationWorker({
+      storage,
+      execution: new PersistentSimulator(simDir),
+      installationId: "test-installation",
+      now: () => now,
+    }).run(cleanup?.id ?? "");
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        first.ticketId,
+      ]),
+    ).toMatchObject({ phase: "released" });
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        second.ticketId,
+      ]),
+    ).toMatchObject({ phase: "ready" });
+    expect(
+      await storage.get(
+        "SELECT ownership,cleanup_policy,observed_state FROM managed_resources WHERE id=?",
+        [reference?.id],
+      ),
+    ).toMatchObject({
+      ownership: "reference",
+      cleanup_policy: "keep",
+      observed_state: "absent",
+    });
+    expect(
+      await storage.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [secondAllocation?.allocationId],
+      ),
+    ).toMatchObject({ state: "committed" });
   });
 });

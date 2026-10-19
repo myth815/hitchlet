@@ -8,11 +8,29 @@ const ConfigSchema = z
       .default("info"),
     DATA_DIR: z.string().min(1),
     GUI_DIR: z.string().default("/app/gui"),
+    EXECUTION_MODE: z.enum(["disabled", "simulator"]).default("disabled"),
+    SIMULATOR_DATA_DIR: z.string().min(1).optional(),
+  })
+  .superRefine((config, context) => {
+    if (config.EXECUTION_MODE === "simulator" && !config.SIMULATOR_DATA_DIR)
+      context.addIssue({
+        code: "custom",
+        path: ["SIMULATOR_DATA_DIR"],
+        message: "required when EXECUTION_MODE=simulator",
+      });
   })
   .strict();
 export type Config = z.infer<typeof ConfigSchema>;
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
-  const keys = ["HOST", "PORT", "LOG_LEVEL", "DATA_DIR", "GUI_DIR"] as const;
+  const keys = [
+    "HOST",
+    "PORT",
+    "LOG_LEVEL",
+    "DATA_DIR",
+    "GUI_DIR",
+    "EXECUTION_MODE",
+    "SIMULATOR_DATA_DIR",
+  ] as const;
   const selected = Object.fromEntries(
     keys.flatMap((key) => (env[key] === undefined ? [] : [[key, env[key]]])),
   );

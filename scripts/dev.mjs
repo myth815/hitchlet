@@ -10,6 +10,7 @@ const env = {
 for (const args of [
   ["--filter", "@hitchlet/contracts", "build"],
   ["--filter", "@hitchlet/sdk", "build"],
+  ["--filter", "@hitchlet/controller", "build"],
 ]) {
   const result = spawnSync(executable, args, {
     env,

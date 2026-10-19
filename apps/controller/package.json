@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs",
     "typecheck": "pnpm --filter @hitchlet/contracts build && tsc --noEmit -p tsconfig.json",
     "test": "pnpm --filter @hitchlet/contracts build && pnpm build && vitest run",
-    "dev": "tsx watch src/server.ts",
+    "dev": "node scripts/dev-watch.mjs",
     "start": "node dist/server.js"
   },
   "dependencies": {
