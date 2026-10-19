@@ -1,4 +1,4 @@
-FROM node:24.22.0-bookworm-slim AS build
+FROM node:24.22.0-bookworm AS build
 RUN corepack enable && corepack prepare pnpm@10.28.2 --activate
 WORKDIR /workspace
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
@@ -8,7 +8,7 @@ COPY packages/contracts/package.json packages/contracts/package.json
 COPY packages/sdk/package.json packages/sdk/package.json
 RUN pnpm install --frozen-lockfile
 COPY . .
-RUN pnpm --filter @hitchlet/contracts build && pnpm --filter @hitchlet/gui build && pnpm --filter @hitchlet/controller build
+RUN pnpm --filter @hitchlet/contracts build && pnpm --filter @hitchlet/sdk build && pnpm --filter @hitchlet/gui build && pnpm --filter @hitchlet/controller build
 RUN pnpm deploy --legacy --filter @hitchlet/controller --prod /out/controller
 
 FROM node:24.22.0-bookworm-slim AS runtime

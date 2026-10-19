@@ -16,6 +16,8 @@
 
 [../contracts.ts](../contracts.ts) 保留为内部总索引。新消费者只从 `public.ts` 导入，避免误用包含管理地址、真实路径和秘密定位符的类型。所有模块依赖均为 `import type`；公开模块只依赖共享值类型，不反向依赖持久模型。
 
+运行时公开 DTO 的权威定义位于 `@hitchlet/contracts`：其 `public.ts` 维护包导出白名单，`schemas.ts` 提供 Zod 校验和 Draft 2020-12 JSON Schema 生成。本文的 `common.ts`、`consumer.ts` 与 `public.ts` 是指向该包源码的 type-only re-export；领域、Provider 和 Agent 设计仍留在本文档，且不进入运行包导出。
+
 管理GUI的Machine/Node/Consumer等视图由对应管理路由的response schema生成，按角色投影；不能直接把services返回的内部对象当HTTP响应。这里列核心用例端口，不为每个管理列表手工维护第二套字段定义。
 
 ## 一次申请只填写一次资源
