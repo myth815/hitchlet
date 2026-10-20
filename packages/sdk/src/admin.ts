@@ -16,6 +16,77 @@ export class AdminCommands {
       isCancelled ? { isCancelled } : {},
     );
   }
+  machines(isCancelled?: () => boolean) {
+    return this.http.request(
+      "/v1/machines",
+      "GET",
+      undefined,
+      (v) => AdminSchemas.MachineDependencyViewSchema.array().parse(v),
+      isCancelled ? { isCancelled } : {},
+    );
+  }
+  machineDryRun(machineId: string, isCancelled?: () => boolean) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/dry-run`,
+      "GET",
+      undefined,
+      (v) => AdminSchemas.MachineDependencyViewSchema.parse(v),
+      isCancelled ? { isCancelled } : {},
+    );
+  }
+  previewHumanUsePolicy(
+    machineId: string,
+    body: {
+      expectedVersion: number;
+      policy: import("@hitchlet/contracts/admin").HumanUsePolicy;
+    },
+    isCancelled?: () => boolean,
+  ) {
+    const input = AdminSchemas.MachinePolicyUpdateSchema.parse(body);
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/human-use-policy/dry-run`,
+      "POST",
+      input,
+      (v) => AdminSchemas.MachinePolicyDryRunSchema.parse(v),
+      {
+        key: crypto.randomUUID(),
+        retry: false,
+        ...(isCancelled ? { isCancelled } : {}),
+      },
+    );
+  }
+  updateHumanUsePolicy(
+    machineId: string,
+    body: {
+      expectedVersion: number;
+      policy: import("@hitchlet/contracts/admin").HumanUsePolicy;
+    },
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    const input = AdminSchemas.MachinePolicyUpdateSchema.parse(body);
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/human-use-policy`,
+      "PUT",
+      input,
+      (v) => AdminSchemas.MachinePolicyReceiptSchema.parse(v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
+  updateNodeAdmissionMode(
+    nodeId: string,
+    body: import("@hitchlet/contracts/admin").NodeAdmissionModeUpdate,
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/nodes/${encodeURIComponent(nodeId)}/admission-mode`,
+      "PUT",
+      AdminSchemas.NodeAdmissionModeSchema.parse(body),
+      (v) => AdminSchemas.NodeAdmissionModeReceiptSchema.parse(v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
   networkProfiles(isCancelled?: () => boolean) {
     return this.http.request(
       "/v1/network-profiles",

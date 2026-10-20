@@ -52,6 +52,7 @@ function successfulFixture() {
       ],
     },
   ]);
+  vi.spyOn(client.admin, "machines").mockResolvedValue([]);
   vi.spyOn(client.admin, "nodes").mockResolvedValue([]);
   vi.spyOn(client.admin, "networkProfiles").mockResolvedValue([]);
   vi.spyOn(client.admin, "draftVersion").mockResolvedValue({
@@ -186,6 +187,7 @@ describe("administrator validation workflow", () => {
         ],
       },
     ]);
+    vi.spyOn(client.admin, "machines").mockResolvedValue([]);
     vi.spyOn(client.admin, "nodes").mockResolvedValue([]);
     vi.spyOn(client.admin, "networkProfiles").mockResolvedValue([]);
     vi.spyOn(client.admin, "draftVersion").mockResolvedValue({

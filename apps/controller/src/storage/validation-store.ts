@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
+import { prepareMachineAdmission } from "./human-use-guard.js";
 import type { Storage } from "./index.js";
 import { hash, integer, parseJson, type Row } from "./admin-store-utils.js";
 
@@ -237,6 +238,16 @@ export class SQLiteValidationStore {
     }
     let reservationConflict = false;
     try {
+      if (!input.blockReason)
+        statements.unshift(
+          await prepareMachineAdmission(
+            this.db,
+            String(target.machine_id),
+            request.nodeId,
+            resources,
+            now,
+          ),
+        );
       await this.db.batchTransaction(statements);
     } catch (error) {
       if (

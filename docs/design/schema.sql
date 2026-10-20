@@ -230,6 +230,10 @@ CREATE TABLE machines (
   policy_id TEXT REFERENCES policies(id) ON DELETE RESTRICT,
   labels_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(labels_json)),
   capabilities_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(capabilities_json)),
+  -- D21: management_json.humanUsePolicy is validated by the runtime schema.
+  -- systemReserve includes humanReserved once and mirrors the physical root system_*.
+  -- Policy writes and tenant/validation reservations fence the same complete Machine input
+  -- inside BEGIN IMMEDIATE (including Host evidence, not only Machine.version).
   management_json TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(management_json)),
   version INTEGER NOT NULL DEFAULT 1 CHECK (version > 0),
   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),

@@ -55,6 +55,8 @@ import {
   ConnectionActivationReceiptSchema,
   MachineInputSchema,
   NodeInputSchema,
+  NodeAdmissionModeSchema,
+  NodeAdmissionModeReceiptSchema,
   NodeRuntimeConfigSchema,
   NodeCapabilityAttestationSchema,
   NetworkProfileInputSchema,
@@ -84,6 +86,10 @@ import {
   ArtifactReceiptSchema,
   ValidationScheduleReceiptSchema,
   CachePlanReceiptSchema,
+  MachineDependencyViewSchema,
+  MachinePolicyUpdateSchema,
+  MachinePolicyDryRunSchema,
+  MachinePolicyReceiptSchema,
 } from "./http/admin-protocol.js";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { probePortainer } from "./providers/portainer-probe.js";
@@ -297,6 +303,63 @@ export async function buildApp(
       if (!installation) throw new ApplicationError("not_found");
       reply.header("Cache-Control", "no-store");
       return AdminInstallationViewSchema.parse(installation);
+    });
+    app.get("/v1/machines", async (request, reply) => {
+      await requireAdmin(request);
+      reply.header("Cache-Control", "no-store");
+      return MachineDependencyViewSchema.array().parse(
+        await admin.machineDependencies(),
+      );
+    });
+    app.get("/v1/machines/:machineId/dry-run", async (request, reply) => {
+      await requireAdmin(request);
+      reply.header("Cache-Control", "no-store");
+      return MachineDependencyViewSchema.parse(
+        await admin.machineDryRun(uuidParam(request.params, "machineId")),
+      );
+    });
+    app.post(
+      "/v1/machines/:machineId/human-use-policy/dry-run",
+      async (request, reply) => {
+        await requireAdmin(request);
+        const body = parseInput(MachinePolicyUpdateSchema, request.body);
+        reply.header("Cache-Control", "no-store");
+        return MachinePolicyDryRunSchema.parse(
+          await admin.machinePolicyDryRun({
+            machineId: uuidParam(request.params, "machineId"),
+            ...body,
+          }),
+        );
+      },
+    );
+    app.put(
+      "/v1/machines/:machineId/human-use-policy",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        const body = parseInput(MachinePolicyUpdateSchema, request.body);
+        const result = await admin.updateHumanUsePolicy({
+          machineId: uuidParam(request.params, "machineId"),
+          ...body,
+          operatorId: actor.consumerId,
+          requestId: request.id,
+        });
+        return reply
+          .header("ETag", `\"${result.version}\"`)
+          .send(MachinePolicyReceiptSchema.parse(result));
+      },
+    );
+    app.put("/v1/nodes/:nodeId/admission-mode", async (request, reply) => {
+      const actor = await requireAdmin(request, true),
+        body = parseInput(NodeAdmissionModeSchema, request.body);
+      const result = await admin.updateNodeAdmissionMode({
+        ...body,
+        nodeId: uuidParam(request.params, "nodeId"),
+        operatorId: actor.consumerId,
+        requestId: request.id,
+      });
+      return reply
+        .header("ETag", `"${result.version}"`)
+        .send(NodeAdmissionModeReceiptSchema.parse(result));
     });
     app.post("/v1/provider-connections", async (request, reply) => {
       await requireAdmin(request, true);
@@ -673,7 +736,9 @@ export async function buildApp(
     );
     const eventStreams = new Set<() => void>();
     const loginFailures = new Map<string, { count: number; since: number }>();
+    let closing = false;
     const closeEventStreams = () => {
+      closing = true;
       for (const close of eventStreams) close();
       eventStreams.clear();
     };
@@ -1149,6 +1214,11 @@ export async function buildApp(
     });
     app.get("/v1/events/stream", async (request, reply) => {
       const actor = await identify(request);
+      if (closing)
+        return reply
+          .code(503)
+          .header("Connection", "close")
+          .send(apiError(request.id, "service_unavailable", true));
       if (!actor.scopes.includes("events:read"))
         return reply.code(403).send(apiError(request.id, "forbidden", false));
       const query = parseInput(

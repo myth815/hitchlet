@@ -520,6 +520,24 @@ bootstrap：登记Host Agent→验证Hyper-V/Tart Node→选已发布Docker底�
 
 唤醒由常驻控制端或已登记LAN转发端发送WOL，默认最多3次、相隔30秒，总恢复窗口5分钟且受provisionTimeout限制。ping通不够，需Agent认证、bootId/新鲜观测、人的使用策略和所有依赖重新满足。唤醒失败转unknown并查实，不循环重启或强行断电。控制机、数据库宿主、必要网络服务及WOL转发端设置系统Hold，避免关闭后无人能唤醒。此协议让无BMC机器也可有条件闭环；自动电源仍是逐机可选能力。
 
+### D21 人机共用准入与容量解释
+
+运行时 `HumanUsePolicy` 由 `packages/contracts/src/admin.ts` 的严格 schema 定义，设计类型仅 re-export 同一类型。策略保存在 `machines.management_json.humanUsePolicy`，根池 `system_*` 同步为 `systemReserve`；它已经包含 `humanReserved`，只扣一次。所有预算均为安全非负整数，零是合法的显式容量意图。`attendedMaximum <= unattendedMaximum`，两者与系统保留之和均不能超过根池容量；上限指**物理根池未释放 Claim 的总包络**，包含 infrastructure backing，不是额外叠加一遍子池租客。`workloadUsage` 单独展示全 Machine 的 tenant/validation Claim 总量，不将它再次从根池扣除。
+
+准入、内部镜像 validation、机器 dry-run 共用纯领域规则。根池以及每个 Node 的子池均检查 reserved、committed、quarantined；只有 released 不占容量。子池由同 Machine 中运行的 infrastructure Allocation 的 committed Claim 背书，全部兄弟子池容量不能超过同一底座背书；依赖必须无环并回到唯一物理根池。停止且无占用的底座可保留池定义与磁盘，不阻止无关 Node。降低策略上限可以保存并立即阻止新增，现有 Claim 继续占用且不影响已有入口；提高系统保留若与未释放根池 Claim 冲突则拒绝。资源未知或清理未查实不通过改策略假释放。
+
+`observed_host` 需要当前已认证 Host 的 Machine/boot/session/controller epoch 一致、观测与接收时间均新鲜、已知人员与可测且低于阈值的 CPU/内存压力。Host 协议有效期为30秒，策略只能收紧实际有效期，即 `min(maximumObservationAgeSeconds, 30)`。`block_new` 在任何交互会话存在时拒绝新增；锁屏、断开的 RDP、快速用户切换仍属于有人，不能当无人。unknown 人员、stale、failed、缺资源压力与实际 unmanagedActivityHold=true 均拒绝正式观测路径。
+
+原生采样的 `partial` 和 `unmanagedActivityHold=null` 不会被改写成 complete/false。partial 下未管理活动从 null 改善为 false 仍保留相同的有限准入；true 始终拒绝。在显式 `within_reserved_budget` 策略下，若新鲜可信人员证据为 present（即便会话枚举不完整）或已完整确认 absent，且资源压力已知，则允许 `bounded_partial_host` 路径，始终按 attended 上限接单，API/GUI展示实际未管理活动状态与此限制。新鲜 complete 观测才标记 complete_host；缺失、过期、撤销、失败或不足以走有界路径的观测标记 unavailable_host，不能暗示完整可信。完整工作负载且明确无人时才可用 unattended 上限。此有限准入不提供关机权限；所有 partial、未知人的状态、未知未管理活动继续阻止自动电源。`dedicated` 标签也不跳过观测、压力或容量规则。
+
+`constant_online_manual_inventory` 是独立的 M1 人工试用路径，读取 Node 的 `capabilities.admissionMode`；管理员已批准保守静态物理预算并隔离共享宿主额度，不要求伪造 Host。旧 M1 没有保存策略时仅从原根池总量/系统保留投影 `manual_inventory_frozen_budget`，并显示局限；始终采用 attended 上限、保持电源 on，实际新鲜过压/failed/明确未管理活动信号仍可否决，不宣称共享宿主已验证。D21实际新预留只接收 on + healthy 的节点；已有 expected-off/WOL 证据合同保留，D22a/b仍须补完可信观测、互斥与最终复核后接回安全唤醒路径，不以旧回执在常开试用中放行 unknown。
+
+Hold 的用途与容量观测分开：`infrastructure`（包括外部常开 Docker/Portainer 底座）、`manual`、`unmanaged_work` 保留开机保护与可见解释。Portainer 清单可能包含自身、Registry、Runtime Agent等外部服务；unmanaged_work Hold 不自动意味着超预算，也不授权删除这些对象，准入仍受管理员已批准的物理预算/保留量与实际压力约束。`maintenance`、`recovery` 同时阻止新增。所有有效 Hold 均出现在停机禁用解释中；D21不执行电源动作。
+
+管理 API 与 SDK：`GET /v1/machines`、`GET /v1/machines/{id}/dry-run` 读取依赖树、全机预算、各 Node 可用余量、观测完整性与禁用原因；`POST /v1/machines/{id}/human-use-policy/dry-run` 接受 `{expectedVersion, policy}`，返回 `{machine, canApply, updateDisabledReasons}`，没有写入；`PUT /v1/machines/{id}/human-use-policy` 以相同体 CAS 更新策略与根池保留量。`PUT /v1/nodes/{id}/admission-mode` 接受 `{expectedVersion, mode, reason}`，显式选择可信观测或人工试用，不修改能力验证证据。默认登记/attestation仍为人工试用；真实 Host 缺证据时切到 observed_host 会自然显示禁用。所有管理写入限 full admin，投影不含凭据、原始会话主体或内部源地址；SDK管理写入传入 key 且不自动重试未知结果，CAS成功后重放旧版本会冲突，调用方应重新查询。
+
+SQLite适配器先用一个确定性本地读取冻结上述规则的所有输入，再在同一 `BEGIN IMMEDIATE` 写事务内比较完整输入，之后才预留 tenant/validation 或更新策略。精确比较覆盖 Machine/Node/pool、所有未释放 Claim 与必需底座、Hold、Host快照/agent栅栏和controller epoch；因此不增加 Machine.version 的心跳竞态也不能绕过。事务内无网络调用。GUI每5秒有界刷新且不覆盖编辑草稿，身份/权限、连接、Machine版本或预算占用变化会使旧预算预演失效；普通心跳/压力刷新保留预算预演，准入解释标明来自历史观测，保存始终重新核对。断连明确标成历史/未知并禁用保存，文案不将连接故障误称为管理员权限变化。
+
 ### 13.1 智能插座故障恢复
 
 插座恢复与空闲节能独立。插座已断开供电时，核对绑定后可单独请求恢复供电；插座仍为 on 时，WOL 超时或 Agent 失联不能直接触发 off。先排除网络、管理连接、Docker/底座等可局部恢复的问题；确认为机器级故障后才受理 `faultRecovery`。业务失败不构成重启宿主的理由。

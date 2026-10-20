@@ -709,9 +709,11 @@ describe("D10 Portainer identity and D11a catalog", () => {
 
   it("keeps validation unavailable without verified capabilities and prevents concurrent over-reservation", async () => {
     const { dir, db, adminId } = await fixture();
-    const service = new AdminService(db, async () =>
-      evidence("engine-validation"),
-    );
+    const service = new AdminService(db, async () => ({
+      ...evidence("engine-validation"),
+      containerCount: 0,
+      unmanagedContainerCount: 0,
+    }));
     const discovery = (await service.discover({
       endpointUrl: "https://portainer.test",
       environmentId: "1",
@@ -801,6 +803,7 @@ describe("D10 Portainer identity and D11a catalog", () => {
           cpuHardLimit: "verified",
           memoryHardLimit: "verified",
           networkPolicyEnforcement: "verified",
+          admissionMode: "constant_online_manual_inventory",
           capacity: { cpuMillis: 3500, memoryMiB: 3500, scratchMiB: 3500 },
           verifiedNetworkProfileRevisionIds: [blockedProfile.revisionId],
           architectures: ["amd64"],
@@ -1199,9 +1202,11 @@ describe("D10 Portainer identity and D11a catalog", () => {
         return typeof value === "function" ? value.bind(target) : value;
       },
     });
-    const racingAdmin = new AdminService(raceDb, async () =>
-      evidence("engine-validation"),
-    );
+    const racingAdmin = new AdminService(raceDb, async () => ({
+      ...evidence("engine-validation"),
+      containerCount: 0,
+      unmanagedContainerCount: 0,
+    }));
     const racingEviction = await racingAdmin.planCacheEviction({
       nodeId: node.id,
       artifactId: raceVersion.artifactId,

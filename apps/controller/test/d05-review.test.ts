@@ -1489,4 +1489,82 @@ describe("independent D05 protocol and lease review", () => {
       await bearerReader.cancel().catch(() => undefined);
     }
   }, 10000);
+
+  it("rejects an SSE request whose authentication finishes during shutdown", async () => {
+    const f = await fixture();
+    let releaseAuthentication!: () => void;
+    let authenticationEntered!: () => void;
+    let preCloseStarted!: () => void;
+    const authenticationGate = new Promise<void>((resolve) => {
+      releaseAuthentication = resolve;
+    });
+    const enteredGate = new Promise<void>((resolve) => {
+      authenticationEntered = resolve;
+    });
+    const preCloseGate = new Promise<void>((resolve) => {
+      preCloseStarted = resolve;
+    });
+    const storage = new Proxy(f.storage, {
+      get(target, property) {
+        if (property === "get")
+          return async (...args: Parameters<typeof target.get>) => {
+            if (String(args[0]).includes("FROM consumer_credentials cc")) {
+              authenticationEntered();
+              await authenticationGate;
+            }
+            return target.get(...args);
+          };
+        const value = Reflect.get(target, property, target) as unknown;
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    const app = await buildApp(
+      loadConfig({
+        DATA_DIR: f.dataDir,
+        EXECUTION_MODE: "simulator",
+        SIMULATOR_DATA_DIR: join(f.dir, "external"),
+      }),
+      { storage },
+    );
+    app.addHook("preClose", () => preCloseStarted());
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const controller = new AbortController();
+    let closePromise: Promise<void> | undefined;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const responsePromise = fetch(`${address}/v1/events/stream?after=0`, {
+        headers: { authorization: `Bearer ${f.token}` },
+        signal: controller.signal,
+      });
+      await enteredGate;
+
+      closePromise = app.close();
+      await preCloseGate;
+      releaseAuthentication();
+      const [response] = await Promise.all([
+        responsePromise,
+        Promise.race([
+          closePromise,
+          new Promise<never>((_, reject) => {
+            timeout = setTimeout(
+              () =>
+                reject(new Error("Server close waited on a late SSE stream")),
+              2500,
+            );
+          }),
+        ]),
+      ]);
+      expect(response.status).toBe(503);
+      expect(response.headers.get("connection")).toBe("close");
+      expect(await response.json()).toMatchObject({
+        error: { code: "service_unavailable" },
+      });
+    } finally {
+      if (timeout) clearTimeout(timeout);
+      releaseAuthentication();
+      controller.abort();
+      closePromise ??= app.close();
+      await closePromise?.catch(() => undefined);
+    }
+  }, 10000);
 });

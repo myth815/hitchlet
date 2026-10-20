@@ -339,6 +339,7 @@ export class TicketService {
       const imageVersion = String(ticket.image_version_id);
       const candidates = await this.store.eligibleCandidates({
         imageVersion,
+        now: this.now(),
         providers: contract.allowedProviders,
         siteIds: contract.siteIds,
         nodeIds: allowedNodes,

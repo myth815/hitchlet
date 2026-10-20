@@ -1,4 +1,5 @@
 import React from "react";
+import { MachinePanel } from "./MachinePanel.js";
 import {
   ComputeClientError,
   type HitchletClient,
@@ -9,6 +10,7 @@ import {
 } from "@hitchlet/sdk";
 
 type AdminClient = HitchletClient["admin"];
+type MachineView = Awaited<ReturnType<AdminClient["machines"]>>[number];
 type NodeView = Awaited<ReturnType<AdminClient["nodes"]>>[number];
 type ProfileView = Awaited<ReturnType<AdminClient["networkProfiles"]>>[number];
 
@@ -50,6 +52,8 @@ export function AdminPanel({
   const [versions, setVersions] = React.useState<AdminImageVersionSummary[]>(
     [],
   );
+  const [machineConnection, setMachineConnection] = React.useState(true);
+  const [machines, setMachines] = React.useState<MachineView[]>([]);
   const [nodes, setNodes] = React.useState<NodeView[]>([]);
   const [profiles, setProfiles] = React.useState<ProfileView[]>([]);
   const [selectedVersionId, setSelectedVersionId] = React.useState("");
@@ -150,6 +154,7 @@ export function AdminPanel({
       previousConsumerId.current = principal.consumerId;
       setVersions([]);
       setNodes([]);
+      setMachines([]);
       setProfiles([]);
       setSelectedVersionId("");
       setSelectedArtifactId("");
@@ -162,12 +167,15 @@ export function AdminPanel({
     void Promise.all([
       client.admin.imageVersions(cancelled),
       client.admin.nodes(cancelled),
+      client.admin.machines(cancelled),
       client.admin.networkProfiles(cancelled),
     ])
-      .then(([foundVersions, foundNodes, foundProfiles]) => {
+      .then(([foundVersions, foundNodes, foundMachines, foundProfiles]) => {
         if (cancelled()) return;
         setVersions(foundVersions);
         setNodes(foundNodes);
+        setMachines(foundMachines);
+        setMachineConnection(true);
         setProfiles(foundProfiles);
         setSelectedVersionId(
           (current) => current || foundVersions[0]?.id || "",
@@ -196,6 +204,34 @@ export function AdminPanel({
     return () => {
       active = false;
       lifecycle.current += 1;
+    };
+  }, [canRead, client, principal.consumerId]);
+
+  React.useEffect(() => {
+    if (!canRead) return;
+    const epoch = lifecycle.current;
+    let active = true,
+      running = false;
+    const cancelled = () => !active || epoch !== lifecycle.current;
+    const poll = async () => {
+      if (running || cancelled()) return;
+      running = true;
+      try {
+        const found = await client.admin.machines(cancelled);
+        if (!cancelled()) {
+          setMachines(found);
+          setMachineConnection(true);
+        }
+      } catch {
+        if (!cancelled()) setMachineConnection(false);
+      } finally {
+        running = false;
+      }
+    };
+    const timer = window.setInterval(() => void poll(), 5000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
     };
   }, [canRead, client, principal.consumerId]);
 
@@ -479,6 +515,29 @@ export function AdminPanel({
           {status}
         </p>
       ) : null}
+      <MachinePanel
+        client={client}
+        machines={machines}
+        connected={machineConnection}
+        canWrite={canWrite}
+        onRefresh={async () => {
+          const epoch = lifecycle.current;
+          try {
+            const found = await client.admin.machines(
+              () => epoch !== lifecycle.current,
+            );
+            if (epoch === lifecycle.current) {
+              setMachines(found);
+              setMachineConnection(true);
+            }
+          } catch (cause) {
+            if (epoch === lifecycle.current) {
+              setMachineConnection(false);
+              setError(errorMessage(cause));
+            }
+          }
+        }}
+      />
       <div className="admin-grid">
         <div>
           <h3>Nodes</h3>

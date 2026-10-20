@@ -598,11 +598,53 @@ export function openApiDocument() {
         ),
       },
       "/v1/machines": {
+        get: adminOperation(
+          "List machine, Node, pool dependencies and human-use dry-run explanations",
+          "200",
+          undefined,
+          z.array(AdminSchemas.MachineDependencyViewSchema),
+        ),
         post: adminOperation(
           "Register a conservative manual machine budget",
           "201",
           AdminSchemas.MachineInputSchema,
           AdminSchemas.MachineReceiptSchema,
+        ),
+      },
+      "/v1/machines/{machineId}/dry-run": {
+        get: adminOperation(
+          "Evaluate current machine admission policy without side effects",
+          "200",
+          undefined,
+          AdminSchemas.MachineDependencyViewSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/human-use-policy/dry-run": {
+        post: adminOperation(
+          "Preview proposed human-use policy and current dependencies without mutation",
+          "200",
+          AdminSchemas.MachinePolicyUpdateSchema,
+          AdminSchemas.MachinePolicyDryRunSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/human-use-policy": {
+        put: adminOperation(
+          "CAS-update human-use thresholds and root pool reserves",
+          "200",
+          AdminSchemas.MachinePolicyUpdateSchema,
+          AdminSchemas.MachinePolicyReceiptSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/nodes/{nodeId}/admission-mode": {
+        put: adminOperation(
+          "CAS-select observed Host admission or explicitly approved frozen static trial; never attests capabilities",
+          "200",
+          AdminSchemas.NodeAdmissionModeSchema,
+          AdminSchemas.NodeAdmissionModeReceiptSchema,
+          [pathId("nodeId")],
         ),
       },
       "/v1/nodes": {

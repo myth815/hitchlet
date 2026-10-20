@@ -144,7 +144,10 @@ export class AdminService {
         } catch {
           // An invalid stored capability document cannot be renewed by observation.
         }
-        if (!capabilities || !validManualCapability(capabilities, checkedAt)) {
+        if (
+          !capabilities ||
+          !validAttestedCapability(capabilities, checkedAt)
+        ) {
           if (capabilities && capabilityExpired(capabilities, checkedAt)) {
             if (
               await this.inventory.recordPortainerObservation(
@@ -211,6 +214,27 @@ export class AdminService {
   }
   listNodes() {
     return this.inventory.listNodes();
+  }
+  updateNodeAdmissionMode(
+    input: Parameters<SQLiteMachineNodeStore["updateNodeAdmissionMode"]>[0],
+  ) {
+    return this.inventory.updateNodeAdmissionMode(input);
+  }
+  machineDryRun(machineId: string) {
+    return this.inventory.machineDryRun(machineId);
+  }
+  machinePolicyDryRun(
+    input: Parameters<SQLiteMachineNodeStore["machinePolicyDryRun"]>[0],
+  ) {
+    return this.inventory.machinePolicyDryRun(input);
+  }
+  machineDependencies() {
+    return this.inventory.listMachineDependencies();
+  }
+  updateHumanUsePolicy(
+    input: Parameters<SQLiteMachineNodeStore["updateHumanUsePolicy"]>[0],
+  ) {
+    return this.inventory.updateHumanUsePolicy(input);
   }
   getInstallation() {
     return this.inventory.getInstallation();
@@ -298,13 +322,15 @@ function capabilityExpired(capability: Record<string, unknown>, now: number) {
   return !Number.isFinite(expiry) || expiry <= now;
 }
 
-function validManualCapability(
+function validAttestedCapability(
   capability: Record<string, unknown>,
   now: number,
 ) {
   if (
     capabilityExpired(capability, now) ||
-    capability.admissionMode !== "constant_online_manual_inventory" ||
+    !["constant_online_manual_inventory", "observed_host"].includes(
+      String(capability.admissionMode),
+    ) ||
     capability.offline !== false ||
     capability.powerEnabled !== false ||
     typeof capability.connectionRevisionId !== "string" ||

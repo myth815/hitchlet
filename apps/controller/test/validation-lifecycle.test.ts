@@ -350,6 +350,69 @@ async function fixture(options: { blocked?: boolean; capacity?: number } = {}) {
 }
 
 describe("shared durable validation lifecycle (simulated execution; no hardware claim)", () => {
+  it("applies the same attended Machine ceiling to internal validations and never releases previous claims on policy reduction", async () => {
+    const f = await fixture();
+    const first = await f.admin.scheduleValidation(f.request);
+    expect(first.scheduler).toBe("queued");
+    const machine = (await f.admin.machineDependencies())[0]!;
+    const policy = {
+      ...machine.humanUsePolicy!,
+      attendedMaximum: { cpuMillis: 100, memoryMiB: 100, scratchMiB: 0 },
+    };
+    await f.admin.updateHumanUsePolicy({
+      machineId: f.machine.id,
+      expectedVersion: machine.version,
+      policy,
+      operatorId: f.request.requestedBy,
+      requestId: randomUUID(),
+    });
+    const second = await f.admin.scheduleValidation(f.request);
+    expect(second.scheduler).toBe("blocked");
+    expect(
+      Number(
+        (await f.db.get<{ n: bigint }>(
+          "SELECT count(*) n FROM capacity_claims WHERE state<>'released'",
+        ))!.n,
+      ),
+    ).toBe(1);
+    expect(await f.claim()).toMatchObject({ state: "reserved" });
+  });
+  it("rolls a validation reservation back when policy changes after its human-use read but before the transaction", async () => {
+    const f = await fixture(),
+      machine = (await f.admin.machineDependencies())[0]!;
+    const original = f.db.batchTransaction.bind(f.db);
+    let changed = false;
+    vi.spyOn(f.db, "batchTransaction").mockImplementation(
+      async (statements) => {
+        if (
+          !changed &&
+          statements.some((s) => s.sql.startsWith("INSERT INTO allocations"))
+        ) {
+          changed = true;
+          await f.admin.updateHumanUsePolicy({
+            machineId: f.machine.id,
+            expectedVersion: machine.version,
+            policy: {
+              ...machine.humanUsePolicy!,
+              attendedMaximum: { cpuMillis: 0, memoryMiB: 0, scratchMiB: 0 },
+            },
+            operatorId: f.request.requestedBy,
+            requestId: randomUUID(),
+          });
+        }
+        return original(statements);
+      },
+    );
+    const run = await f.admin.scheduleValidation(f.request);
+    expect(changed).toBe(true);
+    expect(run.scheduler).toBe("blocked");
+    expect(
+      await f.db.get("SELECT id FROM allocations WHERE image_validation_id=?", [
+        run.validationId,
+      ]),
+    ).toBeUndefined();
+    expect(await f.claim()).toBeUndefined();
+  });
   it("renews the bounded worker lease through slow readiness without extending the frozen deadline", async () => {
     const f = await fixture();
     const run = await f.admin.scheduleValidation(f.request);

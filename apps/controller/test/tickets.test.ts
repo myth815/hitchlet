@@ -1,5 +1,6 @@
 import Database from "better-sqlite3";
 import { TicketQueries } from "../dist/application/queries.js";
+import { SQLiteMachineNodeStore } from "../src/storage/machine-node-store.js";
 import { SQLiteOperationStore } from "../dist/storage/operation-store.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, rm, readdir } from "node:fs/promises";
@@ -143,6 +144,7 @@ async function fixture() {
           observedAt: new Date(now).toISOString(),
           expiresAt: new Date(now + 600_000).toISOString(),
           providerVersion: "fixture",
+          admissionMode: "constant_online_manual_inventory",
           resourceKinds: ["container"],
           guestOs: ["linux"],
           architectures: ["amd64"],
@@ -702,7 +704,7 @@ describe("SQLite Ticket admission", () => {
       { n: 0n },
     );
   });
-  it("reserves a cold-off node only with verified wake evidence, then binds after wake", async () => {
+  it("keeps manual inventory offline queued despite old wake evidence, then reserves and binds after manual online observation", async () => {
     const { service, storage } = await fixture();
     const now = 1_790_000_000_000;
     await storage.batchTransaction([
@@ -766,6 +768,19 @@ describe("SQLite Ticket admission", () => {
       "verified-cold-wake",
       request(),
     );
+    expect(await service.reserveNext()).toBeNull();
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "queued" });
+    await storage.run(
+      "UPDATE machines SET observed_power='on',power_lifecycle='idle',version=version+1 WHERE id='50000000-0000-4000-8000-000000000001'",
+    );
+    await storage.run(
+      "UPDATE nodes SET observed_health='healthy',observed_at_ms=?,version=version+1 WHERE id='40000000-0000-4000-8000-000000000001'",
+      [now],
+    );
     const allocation = await service.reserveNext();
     expect(allocation?.ticketId).toBe(ticket.ticketId);
     expect(
@@ -797,7 +812,7 @@ describe("SQLite Ticket admission", () => {
     await service.bindProvisionContract({
       allocationId: allocation?.allocationId ?? "",
       ticketVersion: Number(stored?.version),
-      nodeVersion: 4,
+      nodeVersion: 5,
       generation: 1,
       controlVersion: 1,
       contractId,
@@ -875,6 +890,19 @@ describe("SQLite Ticket admission", () => {
         "SELECT sum(cpu_millis) AS n FROM capacity_claims WHERE pool_id='90000000-0000-4000-8000-000000000002' AND state<>'released'",
       ),
     ).toMatchObject({ n: 2000n });
+    const projection = (
+      await new SQLiteMachineNodeStore(
+        storage,
+        () => 1_790_000_000_000,
+      ).listMachineDependencies()
+    )[0]!;
+    expect(projection.physicalUsage.cpuMillis).toBe(3000);
+    expect(projection.workloadUsage.cpuMillis).toBe(2000);
+    expect(
+      projection.dependencyTree.find(
+        (item) => item.id === "90000000-0000-4000-8000-000000000002",
+      )?.parentKey,
+    ).toBe("allocation:a0000000-0000-4000-8000-000000000004");
   });
   it("does not reserve from a child pool when its infrastructure parent is stopped", async () => {
     const { service, storage } = await fixture();

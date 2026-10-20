@@ -84,4 +84,31 @@ describe("shared administrator contracts", () => {
     expect(consumerContracts).not.toHaveProperty("NodeRuntimeConfigSchema");
     expect(consumerContracts).not.toHaveProperty("AdminSchemas");
   });
+  it("matches the persisted Machine and Node admission/health enums without inventing retirement", () => {
+    const machineAdmission =
+      AdminSchemas.MachineDependencyViewSchema.shape.admission;
+    const dependencyNode =
+      AdminSchemas.MachineDependencyViewSchema.shape.nodes.element;
+    const node = AdminSchemas.NodeViewSchema;
+    for (const state of ["enabled", "draining", "disabled"]) {
+      expect(machineAdmission.parse(state)).toBe(state);
+      expect(dependencyNode.shape.admission.parse(state)).toBe(state);
+      expect(node.shape.admission.parse(state)).toBe(state);
+    }
+    for (const state of ["retired", "unknown", "on"]) {
+      expect(machineAdmission.safeParse(state).success).toBe(false);
+      expect(dependencyNode.shape.admission.safeParse(state).success).toBe(
+        false,
+      );
+      expect(node.shape.admission.safeParse(state).success).toBe(false);
+    }
+    for (const health of ["healthy", "degraded", "unknown", "lost"]) {
+      expect(dependencyNode.shape.observedHealth.parse(health)).toBe(health);
+      expect(node.shape.observedHealth.parse(health)).toBe(health);
+    }
+    expect(
+      dependencyNode.shape.observedHealth.safeParse("running").success,
+    ).toBe(false);
+    expect(node.shape.observedHealth.safeParse("running").success).toBe(false);
+  });
 });

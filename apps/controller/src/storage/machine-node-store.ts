@@ -1,5 +1,21 @@
 import { randomUUID } from "node:crypto";
-import type { Storage } from "./index.js";
+import { StorageError, type Storage } from "./index.js";
+import { ApplicationError } from "../application/errors.js";
+import {
+  evaluateMachineAdmission,
+  resourceKeys,
+  zeroResources,
+} from "../domain/human-use.js";
+import {
+  loadMachineAdmission,
+  machineAdmissionFence,
+  policyContext,
+  type MachineAdmissionSnapshot,
+} from "./human-use-guard.js";
+import {
+  HumanUsePolicySchema,
+  type HumanUsePolicy,
+} from "@hitchlet/contracts/admin";
 import {
   hash,
   integer,
@@ -54,6 +70,170 @@ export class SQLiteMachineNodeStore {
         r.observed_at_ms === null ? null : integer(r.observed_at_ms),
       version: integer(r.version),
     }));
+  }
+  async updateNodeAdmissionMode(input: {
+    nodeId: string;
+    expectedVersion: number;
+    mode: "observed_host" | "constant_online_manual_inventory";
+    reason: string;
+    operatorId: string;
+    requestId: string;
+  }) {
+    const row = await this.db.get<Row>(
+      "SELECT capabilities_json,version FROM nodes WHERE id=? AND admission<>'retired'",
+      [input.nodeId],
+    );
+    if (!row) throw new ApplicationError("not_found");
+    if (integer(row.version) !== input.expectedVersion)
+      throw new ApplicationError("conflict");
+    const capabilities = parseJson(String(row.capabilities_json)),
+      time = this.now();
+    try {
+      await this.db.batchTransaction([
+        {
+          kind: "run",
+          sql: "UPDATE nodes SET capabilities_json=?,version=version+1,updated_at_ms=? WHERE id=? AND version=? AND capabilities_json=? AND admission<>'retired'",
+          params: [
+            JSON.stringify({ ...capabilities, admissionMode: input.mode }),
+            time,
+            input.nodeId,
+            input.expectedVersion,
+            String(row.capabilities_json),
+          ],
+          expectChanges: 1,
+        },
+        {
+          kind: "run",
+          sql: "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) VALUES('consumer',?,'node.admission_mode_updated','node',?,?,?,?)",
+          params: [
+            input.operatorId,
+            input.nodeId,
+            input.requestId,
+            time,
+            JSON.stringify({ mode: input.mode, reason: input.reason }),
+          ],
+        },
+      ]);
+    } catch (error) {
+      if (error instanceof StorageError && error.code === "STORAGE_CAS_FAILED")
+        throw new ApplicationError("conflict");
+      throw error;
+    }
+    return {
+      nodeId: input.nodeId,
+      version: input.expectedVersion + 1,
+      mode: input.mode,
+    };
+  }
+  async listMachineDependencies() {
+    const rows = await this.db.all<Row>(
+      "SELECT id FROM machines ORDER BY created_at_ms,id",
+    );
+    const now = this.now();
+    return Promise.all(
+      rows.map(async (row) =>
+        projectMachine(
+          await loadMachineAdmission(this.db, String(row.id), now),
+          now,
+        ),
+      ),
+    );
+  }
+  async machineDryRun(machineId: string) {
+    const now = this.now();
+    return projectMachine(
+      await loadMachineAdmission(this.db, machineId, now),
+      now,
+    );
+  }
+  async machinePolicyDryRun(input: {
+    machineId: string;
+    expectedVersion: number;
+    policy: HumanUsePolicy;
+  }) {
+    const policy = HumanUsePolicySchema.parse(input.policy),
+      now = this.now();
+    const snapshot = await loadMachineAdmission(this.db, input.machineId, now);
+    if (snapshot.data.machine?.version !== input.expectedVersion)
+      throw new ApplicationError("conflict");
+    const proposed = { ...snapshot, context: policyContext(snapshot, policy) };
+    const updateDisabledReasons = policyUpdateReasons(proposed);
+    return {
+      machine: projectMachine(proposed, now),
+      canApply: updateDisabledReasons.length === 0,
+      updateDisabledReasons,
+    };
+  }
+  async updateHumanUsePolicy(input: {
+    machineId: string;
+    expectedVersion: number;
+    policy: HumanUsePolicy;
+    operatorId: string;
+    requestId: string;
+  }) {
+    const policy = HumanUsePolicySchema.parse(input.policy),
+      time = this.now();
+    const snapshot = await loadMachineAdmission(this.db, input.machineId, time);
+    if (snapshot.data.machine?.version !== input.expectedVersion)
+      throw new ApplicationError("conflict");
+    if (
+      policyUpdateReasons({
+        ...snapshot,
+        context: policyContext(snapshot, policy),
+      }).length
+    )
+      throw new ApplicationError("invalid_request");
+    try {
+      await this.db.batchTransaction([
+        machineAdmissionFence(snapshot),
+        {
+          kind: "run",
+          sql: "UPDATE machines SET management_json=?,version=version+1,updated_at_ms=? WHERE id=? AND version=?",
+          params: [
+            JSON.stringify({
+              ...snapshot.data.machine.management,
+              humanUsePolicy: policy,
+            }),
+            time,
+            input.machineId,
+            input.expectedVersion,
+          ],
+          expectChanges: 1,
+        },
+        {
+          kind: "run",
+          sql: "UPDATE capacity_pools SET system_cpu_millis=?,system_memory_mib=?,system_scratch_mib=?,version=version+1,updated_at_ms=? WHERE machine_id=? AND parent_allocation_id IS NULL",
+          params: [
+            policy.systemReserve.cpuMillis,
+            policy.systemReserve.memoryMiB,
+            policy.systemReserve.scratchMiB,
+            time,
+            input.machineId,
+          ],
+          expectChanges: 1,
+        },
+        {
+          kind: "run",
+          sql: "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) VALUES('consumer',?,'machine.human_use_policy_updated','machine',?,?,?,?)",
+          params: [
+            input.operatorId,
+            input.machineId,
+            input.requestId,
+            time,
+            JSON.stringify({ version: input.expectedVersion + 1, policy }),
+          ],
+        },
+      ]);
+    } catch (error) {
+      if (error instanceof StorageError && error.code === "STORAGE_CAS_FAILED")
+        throw new ApplicationError("conflict");
+      throw error;
+    }
+    return {
+      machineId: input.machineId,
+      version: input.expectedVersion + 1,
+      policy,
+    };
   }
   async duePortainerObservations(
     now: number,
@@ -538,4 +718,148 @@ export class SQLiteMachineNodeStore {
       version: input.expectedVersion + 1,
     };
   }
+}
+
+/** Policy ceilings can be reduced below existing use: those claims remain charged and new
+ * admission stops. A new physical reserve may not confiscate already occupied capacity. */
+function policyUpdateReasons(snapshot: MachineAdmissionSnapshot): string[] {
+  const roots = snapshot.context.pools.filter(
+    (p) => p.parentAllocationId === null,
+  );
+  const root = roots[0],
+    policy = snapshot.context.policy;
+  if (!root || roots.length !== 1 || !policy)
+    return ["One physical root pool and valid policy are required"];
+  const used = snapshot.context.claims
+    .filter((c) => c.poolId === root.id && c.state !== "released")
+    .reduce(
+      (sum, c) => ({
+        cpuMillis: sum.cpuMillis + c.resources.cpuMillis,
+        memoryMiB: sum.memoryMiB + c.resources.memoryMiB,
+        scratchMiB: sum.scratchMiB + c.resources.scratchMiB,
+      }),
+      zeroResources(),
+    );
+  return resourceKeys.flatMap((k) =>
+    policy.systemReserve[k] + policy.unattendedMaximum[k] > root.capacity[k] ||
+    policy.systemReserve[k] + policy.attendedMaximum[k] > root.capacity[k]
+      ? [`Policy ${k} ceiling plus reserve exceeds root capacity`]
+      : used[k] + policy.systemReserve[k] > root.capacity[k]
+        ? [`Reserve ${k} conflicts with unreleased physical claims`]
+        : [],
+  );
+}
+function projectMachine(snapshot: MachineAdmissionSnapshot, now: number) {
+  const { context, data } = snapshot,
+    machine = data.machine!;
+  const nodes = context.nodes.map((n) => {
+    const result = evaluateMachineAdmission(context, now, n.id);
+    const pool = context.pools.find((p) => p.id === n.poolId);
+    return {
+      id: n.id,
+      name: n.name,
+      version: data.nodes.find((row) => row.id === n.id)!.version,
+      admission: n.admission,
+      observedHealth: n.observedHealth,
+      poolId: n.poolId,
+      parentAllocationId: pool?.parentAllocationId ?? null,
+      dependencies: [`machine:${machine.id}`, `pool:${n.poolId}`],
+      admissionMode: n.manualInventory
+        ? ("constant_online_manual_inventory" as const)
+        : ("observed_host" as const),
+      admissionAssurance: result.admissionAssurance,
+      limitations: result.limitations,
+      canAdmit: result.allowed,
+      disabledReasons: result.reasons,
+      available: result.available,
+    };
+  });
+  const first = nodes.find((n) => n.canAdmit) ?? nodes[0];
+  const result = evaluateMachineAdmission(context, now, first?.id);
+  const root = context.pools.find((p) => p.parentAllocationId === null);
+  const tree: {
+    key: string;
+    parentKey: string | null;
+    kind: "machine" | "pool" | "node" | "allocation";
+    id: string;
+    name: string;
+    purpose: string | null;
+    claimed: ReturnType<typeof zeroResources>;
+  }[] = [
+    {
+      key: `machine:${machine.id}`,
+      parentKey: null,
+      kind: "machine",
+      id: machine.id,
+      name: machine.name,
+      purpose: null,
+      claimed: result.physicalUsage,
+    },
+    ...context.pools.map((p) => ({
+      key: `pool:${p.id}`,
+      parentKey:
+        p.parentAllocationId === null
+          ? `machine:${machine.id}`
+          : `allocation:${p.parentAllocationId}`,
+      kind: "pool" as const,
+      id: p.id,
+      name:
+        p.parentAllocationId === null
+          ? "Physical root pool"
+          : "Infrastructure child pool",
+      purpose: null,
+      claimed: result.usage.get(p.id) ?? zeroResources(),
+    })),
+    ...context.nodes.map((n) => ({
+      key: `node:${n.id}`,
+      parentKey: `pool:${n.poolId}`,
+      kind: "node" as const,
+      id: n.id,
+      name: n.name,
+      purpose: null,
+      claimed: zeroResources(),
+    })),
+    ...context.allocations.map((a) => ({
+      key: `allocation:${a.id}`,
+      parentKey: `node:${a.nodeId}`,
+      kind: "allocation" as const,
+      id: a.id,
+      name: `${a.purpose} · ${a.observedState} / ${a.cleanupStatus}`,
+      purpose: a.purpose,
+      claimed: context.claims
+        .filter((c) => c.allocationId === a.id && c.state !== "released")
+        .reduce(
+          (sum, c) => ({
+            cpuMillis: sum.cpuMillis + c.resources.cpuMillis,
+            memoryMiB: sum.memoryMiB + c.resources.memoryMiB,
+            scratchMiB: sum.scratchMiB + c.resources.scratchMiB,
+          }),
+          zeroResources(),
+        ),
+    })),
+  ];
+  return {
+    machineId: machine.id,
+    name: machine.name,
+    usageMode: machine.usageMode,
+    admission: machine.admission,
+    version: machine.version,
+    hostObservation: result.hostObservation,
+    capacity: root?.capacity ?? zeroResources(),
+    systemReserve: root?.reserve ?? zeroResources(),
+    humanUsePolicy: result.policy,
+    policySource: context.policy
+      ? ("configured" as const)
+      : result.manual
+        ? ("manual_inventory_frozen_budget" as const)
+        : ("missing" as const),
+    physicalUsage: result.physicalUsage,
+    workloadUsage: result.workloadUsage,
+    holds: context.holds.map(({ id, kind, reason }) => ({ id, kind, reason })),
+    dependencyTree: tree,
+    shutdownDisabledReasons: result.shutdownReasons,
+    canAdmitTenants: nodes.some((n) => n.canAdmit),
+    disabledReasons: nodes.some((n) => n.canAdmit) ? [] : result.reasons,
+    nodes,
+  };
 }

@@ -27,3 +27,13 @@ HTTP surface.
 SQLite 3.53.4 is the version embedded by the pinned `better-sqlite3` package in
 the tested macOS arm64 environment. Backup/restore and online backup API are
 not implemented in this storage foundation.
+
+D21 adds no migration: versioned HumanUsePolicy lives in existing Machine
+management JSON and uses the existing root pool reserve columns. Migrations
+001–005 remain byte-for-byte frozen. `human-use-guard.ts` owns one deterministic
+read of the Machine dependency/budget/Host input and its exact comparison fence.
+`domain/human-use.ts` owns the pure admission rule used by scheduling, internal
+validation and management previews. Claim insertion and policy updates compare
+the whole input inside the same short write batch, so a heartbeat, policy,
+Hold or sibling allocation change between reading and writing causes rollback.
+Historical released allocations are excluded unless still backing a child pool.

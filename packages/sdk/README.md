@@ -27,3 +27,13 @@ Every write is prepared and deeply frozen before sending. Persist the `PreparedT
 `waitUntilReady` and `waitUntilReleased` poll with bounded backoff (60 minutes and 5 minutes by default). Their timeout or `isCancelled` callback stops only local waiting; it does not cancel a ticket or release a lease. No background lease renewal or automatic release is performed.
 
 The client accepts a `fetch` override as its second constructor argument for existing callers, or a `SdkOptions` object for authentication and deterministic wait/fetch dependencies. Responses, requests, and saved prepared commands are validated against shared contracts before use.
+
+管理端通过 `client.admin.machines()` / `machineDryRun(machineId)` 读取机器、
+Node、容量池和活跃 Allocation 依赖树。`previewHumanUsePolicy(machineId,
+{expectedVersion, policy})` 只预演，`updateHumanUsePolicy(machineId, body, key)`
+以版本 CAS 保存；`updateNodeAdmissionMode(nodeId, {expectedVersion, mode, reason}, key)`
+显式选择 `observed_host` 或常开手工预算试用。写命令不自动重试；响应未知后先
+查询当前 Machine/Node，不能用新版本重放旧意图。策略中 `systemReserve` 已含
+`humanReserved`，attended/unattendedMaximum 指物理根池占用包络（含底座），
+不对嵌套子池再扣一次。partial Host 仅在明确有限有人预算下准入且显示未知负载；
+人工试用与这种可信观测路径有独立解释，均不宣称支持自动电源或离线截止。

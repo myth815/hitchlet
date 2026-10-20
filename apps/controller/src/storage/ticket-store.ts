@@ -1,6 +1,11 @@
 import type { Storage } from "./index.js";
 import { createHash } from "node:crypto";
 import type { IdempotencyCompletionRef } from "./termination-context.js";
+import {
+  loadMachineAdmission,
+  prepareMachineAdmission,
+} from "./human-use-guard.js";
+import { evaluateMachineAdmission } from "../domain/human-use.js";
 
 type Row = Record<string, string | number | bigint | null>;
 
@@ -254,8 +259,9 @@ export class SQLiteTicketStore {
       [now],
     );
   }
-  eligibleCandidates(query: {
+  async eligibleCandidates(query: {
     imageVersion: string;
+    now: number;
     providers: readonly string[];
     siteIds: readonly string[];
     nodeIds: readonly string[];
@@ -263,7 +269,7 @@ export class SQLiteTicketStore {
     kind: string;
     architectures: readonly string[];
   }): Promise<Row[]> {
-    return this.storage.all<Row>(
+    const candidates = await this.storage.all<Row>(
       `SELECT n.id AS node_id,n.version AS node_version,n.machine_id,n.runtime_identity_id,n.backend_kind,n.pool_id,n.capabilities_json,n.config_json,n.observed_at_ms,m.version AS machine_version,m.site_id,m.labels_json AS machine_labels,m.admission AS machine_admission,m.observed_power,m.power_lifecycle,m.power_cycle_id,m.power_transition_id,m.shutdown_operation_id,m.accepted_shutdown_receipt_id,m.out_of_band_evidence_id,m.wake_not_before_ms,m.shutdown_accepted_at_ms,m.power_transition_deadline_ms,m.wake_attempt_count,m.updated_at_ms AS machine_updated_at_ms,m.desired_power,m.capabilities_json AS machine_capabilities,power_policy.config_json AS power_policy_json,p.version AS pool_version,p.parent_allocation_id,p.total_cpu_millis,p.total_memory_mib,p.total_scratch_mib,p.system_cpu_millis,p.system_memory_mib,p.system_scratch_mib,a.id AS artifact_id,a.architecture,a.guest_os,a.environment_kind,a.requirements_json,a.minimum_cpu_millis,a.minimum_memory_mib,a.minimum_scratch_mib,a.access_recipe_json,pcr.id AS connection_revision_id,EXISTS(SELECT 1 FROM operations o JOIN agent_commands c ON c.operation_id=o.id AND c.kind='machine.shutdown' JOIN agents ag ON ag.id=c.agent_id AND ag.machine_id=m.id JOIN agent_receipts r ON r.command_id=c.id AND r.agent_id=c.agent_id WHERE o.id=m.shutdown_operation_id AND o.machine_id=m.id AND o.kind='machine.shutdown' AND o.state IN ('running','succeeded') AND r.id=m.accepted_shutdown_receipt_id AND r.phase='accepted' AND r.observed_at_ms>=m.shutdown_accepted_at_ms AND r.received_at_ms<=m.power_transition_deadline_ms) AS shutdown_evidence
       FROM nodes n JOIN machines m ON m.id=n.machine_id LEFT JOIN policies power_policy ON power_policy.id=m.policy_id AND power_policy.kind='machine' JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.enabled=1 AND pc.runtime_identity_id=n.runtime_identity_id JOIN provider_connection_revisions pcr ON pcr.id=pc.current_revision_id AND pcr.verified_runtime_identity_id=n.runtime_identity_id JOIN capacity_pools p ON p.id=n.pool_id JOIN image_artifacts a ON a.image_version_id=? AND a.backend_kind=n.backend_kind WHERE n.admission='enabled' AND (n.observed_health='healthy' OR (n.observed_health='unknown' AND (m.observed_power IN ('off','sleeping') OR (m.observed_power='unknown' AND m.power_lifecycle='off_expected')))) AND m.admission='enabled' AND m.source='local' AND (m.observed_power IN ('on','off','sleeping') OR (m.observed_power='unknown' AND m.power_lifecycle='off_expected')) AND n.backend_kind IN (${query.providers.map(() => "?").join(",")}) AND m.site_id IN (${query.siteIds.map(() => "?").join(",")}) AND n.id IN (${query.nodeIds.map(() => "?").join(",")}) AND m.id IN (${query.machineIds.map(() => "?").join(",")}) AND a.environment_kind=? AND a.architecture IN (${query.architectures.map(() => "?").join(",")}) ORDER BY n.id,a.architecture`,
       [
@@ -276,6 +282,23 @@ export class SQLiteTicketStore {
         ...query.architectures,
       ],
     );
+    const allowed: Row[] = [];
+    for (const candidate of candidates) {
+      const snapshot = await loadMachineAdmission(
+        this.storage,
+        String(candidate.machine_id),
+        query.now,
+      );
+      if (
+        evaluateMachineAdmission(
+          snapshot.context,
+          query.now,
+          String(candidate.node_id),
+        ).allowed
+      )
+        allowed.push(candidate);
+    }
+    return allowed;
   }
   consumerQuota(consumerId: string): Promise<Row | undefined> {
     return this.storage.get<Row>(
@@ -528,7 +551,15 @@ export class SQLiteTicketStore {
       request.scratchMiB,
       limits.scratchMiB,
     ];
+    const humanUseFence = await prepareMachineAdmission(
+      this.storage,
+      input.machineId,
+      input.nodeId,
+      input.requested,
+      input.now,
+    );
     await this.storage.batchTransaction([
+      humanUseFence,
       {
         kind: "run",
         sql:

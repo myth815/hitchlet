@@ -231,6 +231,7 @@ try {
           observedAt: new Date(now).toISOString(),
           expiresAt: new Date(now + 3600000).toISOString(),
           providerVersion: "simulator",
+          admissionMode: "constant_online_manual_inventory",
           resourceKinds: ["container"],
           guestOs: ["linux"],
           architectures: ["amd64"],

@@ -2,11 +2,20 @@ import { z } from "zod";
 import { StorageRequestSchema, ResourceContractSchema } from "./schemas.js";
 
 const id = z.string().uuid();
+const admissionState = z.enum(["enabled", "draining", "disabled"]);
+const nodeHealth = z.enum(["healthy", "degraded", "unknown", "lost"]);
 const minimumResources = z
   .object({
     cpuMillis: z.number().int().positive(),
     memoryMiB: z.number().int().positive(),
     scratchMiB: z.number().int().nonnegative(),
+  })
+  .strict();
+export const MachineResourcesSchema = z
+  .object({
+    cpuMillis: z.number().int().nonnegative().safe(),
+    memoryMiB: z.number().int().nonnegative().safe(),
+    scratchMiB: z.number().int().nonnegative().safe(),
   })
   .strict();
 const bootstrap = z
@@ -106,6 +115,165 @@ export const MachineInputSchema = z
     hostOs: z.enum(["linux", "windows", "macos"]),
     architecture: z.enum(["amd64", "arm64"]),
     capacity: minimumResources,
+  })
+  .strict();
+export const HumanUsePolicySchema = z
+  .object({
+    blockShutdownForAnyInteractiveSession: z.literal(true),
+    blockShutdownOnUnknownPresence: z.literal(true),
+    maximumObservationAgeSeconds: z.number().int().min(1).max(3600),
+    admissionDuringInteraction: z.enum(["block_new", "within_reserved_budget"]),
+    /** humanReserved is included in systemReserve; it must never be subtracted twice. */
+    humanReserved: MachineResourcesSchema,
+    systemReserve: MachineResourcesSchema,
+    /** Physical root claim envelope, including infrastructure backing. Child claims are not charged twice. */
+    unattendedMaximum: MachineResourcesSchema,
+    attendedMaximum: MachineResourcesSchema,
+    cpuPressureLimitPercent: z.number().finite().min(1).max(100),
+    memoryPressureLimitPercent: z.number().finite().min(1).max(100),
+  })
+  .strict()
+  .superRefine((policy, ctx) => {
+    for (const resource of ["cpuMillis", "memoryMiB", "scratchMiB"] as const) {
+      if (policy.attendedMaximum[resource] > policy.unattendedMaximum[resource])
+        ctx.addIssue({
+          code: "custom",
+          path: ["attendedMaximum", resource],
+          message: "attended ceiling cannot exceed unattended ceiling",
+        });
+      if (policy.humanReserved[resource] > policy.systemReserve[resource])
+        ctx.addIssue({
+          code: "custom",
+          path: ["humanReserved", resource],
+          message:
+            "human reserve is included in system reserve and cannot exceed it",
+        });
+      if (
+        policy.unattendedMaximum[resource] + policy.systemReserve[resource] >
+          Number.MAX_SAFE_INTEGER ||
+        policy.attendedMaximum[resource] + policy.systemReserve[resource] >
+          Number.MAX_SAFE_INTEGER
+      )
+        ctx.addIssue({
+          code: "custom",
+          path: ["systemReserve", resource],
+          message: "resource budget exceeds safe integer range",
+        });
+    }
+  });
+export const MachineDependencyViewSchema = z
+  .object({
+    machineId: id,
+    name: z.string(),
+    usageMode: z.enum(["shared", "dedicated"]),
+    admission: admissionState,
+    hostObservation: z
+      .object({
+        state: z.enum(["fresh", "stale", "missing", "revoked"]),
+        humanPresence: z.enum(["present", "absent", "unknown"]),
+        cpuPercent: z.number().nullable(),
+        memoryPercent: z.number().nullable(),
+        unmanagedActivityHold: z.boolean().nullable(),
+        receivedAtMs: z.number().int().nonnegative().nullable(),
+        probeStatus: z.enum(["complete", "partial", "failed"]).nullable(),
+        sessionsComplete: z.boolean().nullable(),
+        interactiveSessionCount: z.number().int().nonnegative().nullable(),
+      })
+      .strict(),
+    capacity: minimumResources,
+    systemReserve: MachineResourcesSchema,
+    humanUsePolicy: HumanUsePolicySchema.nullable(),
+    policySource: z.enum([
+      "configured",
+      "manual_inventory_frozen_budget",
+      "missing",
+    ]),
+    physicalUsage: MachineResourcesSchema,
+    workloadUsage: MachineResourcesSchema,
+    shutdownDisabledReasons: z.array(z.string()),
+    holds: z.array(
+      z.object({ id, kind: z.string(), reason: z.string() }).strict(),
+    ),
+    dependencyTree: z.array(
+      z
+        .object({
+          key: z.string(),
+          parentKey: z.string().nullable(),
+          kind: z.enum(["machine", "pool", "node", "allocation"]),
+          id,
+          name: z.string(),
+          purpose: z.string().nullable(),
+          claimed: MachineResourcesSchema,
+        })
+        .strict(),
+    ),
+    canAdmitTenants: z.boolean(),
+    disabledReasons: z.array(z.string()),
+    nodes: z.array(
+      z
+        .object({
+          id,
+          name: z.string(),
+          admission: admissionState,
+          observedHealth: nodeHealth,
+          poolId: id,
+          parentAllocationId: id.nullable(),
+          dependencies: z.array(z.string()),
+          version: z.number().int().positive(),
+          admissionMode: z.enum([
+            "observed_host",
+            "constant_online_manual_inventory",
+          ]),
+          canAdmit: z.boolean(),
+          disabledReasons: z.array(z.string()),
+          available: MachineResourcesSchema,
+          admissionAssurance: z.enum([
+            "manual_inventory_trial",
+            "bounded_partial_host",
+            "complete_host",
+            "unavailable_host",
+          ]),
+          limitations: z.array(z.string()),
+        })
+        .strict(),
+    ),
+    version: z.number().int().positive(),
+  })
+  .strict();
+export const MachinePolicyUpdateSchema = z
+  .object({
+    expectedVersion: z.number().int().positive(),
+    policy: HumanUsePolicySchema,
+  })
+  .strict();
+export const MachinePolicyReceiptSchema = z
+  .object({
+    machineId: id,
+    version: z.number().int().positive(),
+    policy: HumanUsePolicySchema,
+  })
+  .strict();
+export const MachinePolicyDryRunSchema = z
+  .object({
+    machine: MachineDependencyViewSchema,
+    canApply: z.boolean(),
+    updateDisabledReasons: z.array(z.string()),
+  })
+  .strict();
+export type HumanUsePolicy = z.infer<typeof HumanUsePolicySchema>;
+export const NodeAdmissionModeSchema = z
+  .object({
+    expectedVersion: z.number().int().positive(),
+    mode: z.enum(["observed_host", "constant_online_manual_inventory"]),
+    reason: z.string().trim().min(1).max(1000),
+  })
+  .strict();
+export type NodeAdmissionModeUpdate = z.input<typeof NodeAdmissionModeSchema>;
+export const NodeAdmissionModeReceiptSchema = z
+  .object({
+    nodeId: id,
+    version: z.number().int().positive(),
+    mode: z.enum(["observed_host", "constant_online_manual_inventory"]),
   })
   .strict();
 export const NodeInputSchema = z
@@ -457,8 +625,8 @@ export const NodeViewSchema = z
     providerConnectionId: id,
     runtimeIdentityId: id,
     poolId: id,
-    admission: z.string(),
-    observedHealth: z.string(),
+    admission: admissionState,
+    observedHealth: nodeHealth,
     capabilities: z
       .object({
         verified: z.boolean(),
@@ -658,7 +826,14 @@ export const AdminSchemas = {
   ConnectionActivationSchema,
   ConnectionActivationReceiptSchema,
   MachineInputSchema,
+  HumanUsePolicySchema,
+  MachineDependencyViewSchema,
+  MachinePolicyDryRunSchema,
+  MachinePolicyUpdateSchema,
+  MachinePolicyReceiptSchema,
   NodeInputSchema,
+  NodeAdmissionModeSchema,
+  NodeAdmissionModeReceiptSchema,
   NodeRuntimeConfigSchema,
   NodeCapabilityAttestationSchema,
   NetworkProfileInputSchema,

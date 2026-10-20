@@ -2,22 +2,22 @@
 
 实现基线：[设计 v1.3](design/README.md)。当前目标保持 M2（Docker 正式交付）；Hyper-V、Tart 和云扩容不在本轮实现范围。模拟器通过不代表真实 Docker 或宿主通过。
 
-本轮状态：批次1–5及批次6的 D20 已通过主审与独立复验，M0 和 M1 Docker 实验/试用闭环完成。批次5的共享 tenant/validation 持久执行、验证回收及发布，以及 D20 分别按用户单独限定使用 GPT-6.1 Sol，其余实现遵循 Luna 策略。正式交付 M2 尚未完成；接续批次6的 D21 人机共用和 D22a 电源 dry-run，不提前实现 VM。
+本轮状态：批次1–5及批次6的 D20、D21 已通过主审与独立复验，M0 和 M1 Docker 实验/试用闭环完成。批次5的共享 tenant/validation 持久执行、验证回收及发布，以及 D20、D21 分别按用户单独限定使用 GPT-6.1 Sol，其余实现遵循 Luna 策略。正式交付 M2 尚未完成，整体估算约70%；接续批次6的 D22a 电源 dry-run，不提前实现 VM。
 
 ## 工作方式与固定批次
 
 开发由 GPT-6 Luna 子智能体承担，初始思考预算 low，使用正常速度。主智能体检查差异、接口一致性和测试结果，再允许进入依赖它的下一批。必要时可提高 Luna 的思考预算；如果仍不能胜任，停止并向用户报告。子智能体不继续委派，不增加无限细分的任务树。
 
-| 批次              | 设计任务             | 确定产物                                                            | 审核门槛                                                                  | 当前状态                   |
-| ----------------- | -------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------- |
-| 1 基础工程        | D00                  | pnpm 工程、API/GUI 启动、配置、日志、构建测试、Docker 部署骨架      | 安装、类型检查、测试和构建实际通过；缺失配置有明确错误                    | 已审核通过                 |
-| 2 领域与账本      | D01–D03              | 运行时合同、SQLite 迁移/worker、状态机、配额与原子资源预留          | 合同一致；并发末份容量不超售；冻结请求、事务与版本约束通过                | 已审核通过                 |
-| 3 模拟闭环        | D04–D05              | 持久操作与恢复、Simulator、租约 API/SDK、基础 GUI                   | 重启恢复、创建回执丢失、删除失败、续租竞态、归属鉴权与浏览器闭环；完成 M0 | 已审核通过（M0）           |
-| 4 Docker 接入准备 | D10、D11a            | Portainer 身份与修订、节点能力、草稿镜像目录和验证调度              | 错误 Engine 拒绝；草稿不能被消费者租用；固定制品和授权修订                | 已审核通过                 |
-| 5 Docker 租用闭环 | D10b、D12、D11b、D13 | 最小 Runtime Agent 网络执行、独立容器生命周期、验证后发布、恢复回收 | 实际 Docker 网络/限额/存储隔离与失败清理通过；完成 M1                     | 已审核通过（M1）           |
-| 6 宿主与节能策略  | D20–D22a             | Host 观测、人机共用、依赖与保留量、电源 dry-run                     | 未知或有人登录阻止关机；竞态处理；未实测能力不启用                        | D20 已审核通过；D21 待开发 |
-| 7 运维与交付界面  | D23–D24              | 备份恢复、升级、凭据轮换、完整 GUI/SDK 与接入手册                   | 真实恢复演练、权限/存储回归、浏览器 E2E 与干净环境安装                    | 未开始                     |
-| 8 正式验收        | D25；D22b 逐机可选   | 实际节点能力矩阵与发布证据                                          | 对照设计 Docker DoD 逐项取证；未验证机器保持试用/禁用或手动电源           | 未开始                     |
+| 批次              | 设计任务             | 确定产物                                                            | 审核门槛                                                                  | 当前状态                    |
+| ----------------- | -------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------- | --------------------------- |
+| 1 基础工程        | D00                  | pnpm 工程、API/GUI 启动、配置、日志、构建测试、Docker 部署骨架      | 安装、类型检查、测试和构建实际通过；缺失配置有明确错误                    | 已审核通过                  |
+| 2 领域与账本      | D01–D03              | 运行时合同、SQLite 迁移/worker、状态机、配额与原子资源预留          | 合同一致；并发末份容量不超售；冻结请求、事务与版本约束通过                | 已审核通过                  |
+| 3 模拟闭环        | D04–D05              | 持久操作与恢复、Simulator、租约 API/SDK、基础 GUI                   | 重启恢复、创建回执丢失、删除失败、续租竞态、归属鉴权与浏览器闭环；完成 M0 | 已审核通过（M0）            |
+| 4 Docker 接入准备 | D10、D11a            | Portainer 身份与修订、节点能力、草稿镜像目录和验证调度              | 错误 Engine 拒绝；草稿不能被消费者租用；固定制品和授权修订                | 已审核通过                  |
+| 5 Docker 租用闭环 | D10b、D12、D11b、D13 | 最小 Runtime Agent 网络执行、独立容器生命周期、验证后发布、恢复回收 | 实际 Docker 网络/限额/存储隔离与失败清理通过；完成 M1                     | 已审核通过（M1）            |
+| 6 宿主与节能策略  | D20–D22a             | Host 观测、人机共用、依赖与保留量、电源 dry-run                     | 未知或有人登录阻止关机；竞态处理；未实测能力不启用                        | D20–D21 已审核；D22a 待开发 |
+| 7 运维与交付界面  | D23–D24              | 备份恢复、升级、凭据轮换、完整 GUI/SDK 与接入手册                   | 真实恢复演练、权限/存储回归、浏览器 E2E 与干净环境安装                    | 未开始                      |
+| 8 正式验收        | D25；D22b 逐机可选   | 实际节点能力矩阵与发布证据                                          | 对照设计 Docker DoD 逐项取证；未验证机器保持试用/禁用或手动电源           | 未开始                      |
 
 每批可分配少量具有明确文件边界的工作，例如领域与存储、HTTP 与 SDK、GUI；不把这些实现分工演变成新的层级计划。依赖未通过审核不跨批开发。故障修复在原批次内完成。
 
@@ -248,3 +248,76 @@ M1稳定提交`05199e8`已推送。D20按默认Luna/low启动；子智能体只�
 - 真实实验凭据及新 Host 凭据扫描无匹配；001–004迁移保持原字节。Windows/Linux 原生部署、无人/锁屏/切换全过程及开机服务权限仍须逐机验收；当前不据此启用自动电源或宣称完整无人的 macOS 观测。
 
 本次放行仅覆盖 D20。接续 D21/D22a 保持原 Luna 策略和固定任务边界；M2 尚未完成，Hyper-V/Tart 仍后置。
+
+### D21 low 检查点与预算调整
+
+2026-10-20 D21 按默认 Luna/low 启动，已形成管理合同/机器投影/API/SDK/GUI 草稿，随后明确报告无法在当前预算闭合固定完整范围并停止。主要未完成项为唯一的准入规则、tenant/validation 事务重检、整机未释放 Claim 的有人预算聚合，以及依赖/Hold解释和GUI策略编辑；后续草稿未通过最终检查，不能据此标记 D21 完成。
+
+按用户既有“可适当提高思考预算”的授权，将同一完整 D21 交 Luna/high 接续审核和实现，不增加任务分层、不扩大 Sol 例外。主审继续以 c77da9c 的已推送 D20 为稳定基线，D21 草稿保持未提交。
+
+### D21 high 能力门槛停止
+
+同一完整范围的 Luna/high 审阅草稿后也明确报告无法闭合并停止，未把草稿标为实现冻结通过。候选筛选与实际 reserve 的人类策略不一致，未在写入事务固定并重验 Host 观测及根预算；策略更新条件、validation guard、依赖/Hold 和 GUI 策略编辑仍未完成。当前差异不能作为 D21、批次6或M2完成证据。
+
+按用户既定停止约定，主智能体不接管实现，也不将“仅 D20 允许 Sol”的单模块授权扩展到 D21。D21 草稿和停止记录留在本地未提交，已推送稳定基线为 c77da9c（D20），整体 M2 估算约65%；未执行任何真实电源动作。等待用户决定 D21 的后续执行方式。
+
+### D21 单模块模型例外授权
+
+2026-10-20 用户明确回复“仅 D21 允许改用 Sol”。仅将同一完整 D21 人机共用、整机容量策略、依赖视图与 GUI 交 GPT-6.1 Sol 接续，实现完成后由主智能体独立审核和实测。保留 low/high 停止记录和固定任务范围，不继续委派或细分，不扩大到 D22a 及后续模块。当前 D21 尚未完成，M2 目标保持不变，Docker 优先、VM 后置。
+
+### D21 主审首轮（尚未放行）
+
+主智能体独立运行首轮完整290项测试通过，未排除loopback TLS/SSE。物理Mac在独立空账本经真实CLI/TLS配对观测，管理API/SDK验证策略预演无写入、旧版本CAS拒绝、超预算策略拒绝、人的保留包含在根池系统保留仅扣一次，以及配置3600秒也不能延长Host协议30秒有效期。真实浏览器完成策略预演/保存到version3，零人类CPU保留值保留，系统总保留未重复扣减；停止控制器后显示历史/当前unknown并禁用保存。
+
+专用Docker实验Engine先查实旧Claim、未完成租客/验证及安装所有原生对象均为0，再复验CPU配额/throttling、内存OOM及INPUT/FORWARD、来源/管理口/同bridge隔离、IPv6、既有连接撤销、Agent与Engine重启、重复删除查实。旧私有网络脚本固定epoch=1被正确拒绝，维护为读取Agent持久代次后复验通过，未降低生产栅栏；默认Docker context未操作。
+
+主审发现并交回同一D21 Sol修订：partial证据中的未管理状态从null改善为false不应反而拒绝有界准入；缺失/过期Host不应标为complete_host；普通心跳不应使管理员来不及阅读预演就静默作废保存。上述回修需独立复验，后续真实物理Host+Docker租用/验证/回收和最终GUI验收仍待完成。此处不作为D21或M2完成证据；未执行真实电源动作。
+
+### D21 Sol 实现冻结（待主审）
+
+2026-10-20 按用户仅 D21 的例外授权完成本固定范围，源码与全仓 dist 已冻结；未继续委派、未 commit/push、未操作实际机器、Docker 或电源，也未读取/使用私有实验凭据。本段仅记录交接，不修改文首放行状态；独立实机与 GUI 证据由主审追加。
+
+`domain/human-use.ts` 集中人员、新鲜度、压力、保留量和物理/子池准入规则；`storage/human-use-guard.ts` 集中完整 Machine 输入的确定性读取及事务内精确比较。tenant 和内部 validation 写入共用这一守卫，覆盖不增加 Machine.version 的 Host 心跳、controller/agent 栅栏、策略、Node/pool、所有未释放 Claim、底座和 Hold 变化。Claim 只在既有查实回收路径释放；降低上限可以保存并阻止新增，不改变已有 Claim 或入口。根池系统保留包含人的最低保留，只扣一次；父底座占物理预算，子池不得再次加到根池，必须有运行底座的 committed 背书且兄弟池不超同一背书。仅保留活跃 Claim 所需及仍被子池引用的 Allocation 输入，避免把已回收历史全部加入每次准入。
+
+`SQLiteMachineNodeStore` 提供实际 Machine→root pool→Node→infrastructure Allocation→child pool→Node→tenant/validation 的结构化依赖视图、开机保护 Hold、预算与策略预演/CAS。contracts/admin 是 HumanUsePolicy 与管理 DTO/schema 权威，设计同名类型改为 re-export；HTTP 只鉴权、schema 和调用用例，SDK 与 GUI 使用同一公开合同，不投影凭据、原始会话主体或内部源地址。管理入口为 machines 列表/current dry-run、策略 proposed dry-run/PUT，以及带 Node version 和理由的 admission-mode PUT；切换模式不伪造能力验证，后台健康观察支持两种模式且不续期能力证明。
+
+正式 observed_host 使用 min(policy TTL, Host协议30秒)，拒绝人员未知、过期/失败观测、缺资源、过压、能力过期与明确 unmanagedActivityHold=true。保留 D20 原生 partial/null 事实：显式 within_reserved_budget 下，新鲜可信正向有人（即便会话枚举不完整）或已完整确认无人、已知低压力可走 bounded_partial_host，始终使用 attended 上限并展示未知工作量；不能授权电源。manual inventory 是独立人工冻结预算试用，旧 M1 可由既有根池投影静态策略，不宣称已验证人机共用。infrastructure/manual/unmanaged_work Hold 保留开机保护与解释；maintenance/recovery 同时阻止新增，Portainer 服务清单不被当成可删除对象或自动超预算结论。
+
+D21 实际新预留限定 on + healthy；旧 expected-off/WOL 证据测试输入保留，现断言常开试用在 unknown 时 queued，人工在线后才预留/绑定。未来安全 wake 合同和 M2 目标未缩减，D22a/b 在可信观测、最终复核、逐机能力与互斥闭环完成后再接入；本次不实现自动电源、VM、cloud 或 offline guard。GUI 每5秒 single-flight 刷新机器，断连标成历史/未知，编辑草稿不被轮询覆盖；版本/观测变化使旧预演失效，保存仍由服务端事务复核。
+
+冻结检查在 Node 24.22.0 / pnpm 10.28.2 完成：pnpm typecheck、pnpm build、全仓 prettier check、git diff --check 通过；设计 strict TypeScript 和 SQLite schema 42表/86 checks 通过；迁移001–005与HEAD字节不变，无新增迁移。本地 contracts16、SDK22、GUI19通过；controller23个测试文件通过，195 passed / 1 skipped（仅 sandbox listen EPERM 的既有 loopback SSE 实测需主审执行）。本次新增 domain15、SQLite/API/SDK联调4、validation2、GUI3共24项；runtime-agent既有测试本地35通过，2个HTTPS loopback因同一EPERM未执行。未经排除的全仓290项和实际物理Mac/真实Docker/浏览器闭环仍待主审，本记录不把 fixtures 当成真实平台或电源能力证据。
+
+### D21 主审两项观测分类回修冻结
+
+2026-10-20 主审先独立完成未排除全仓290项、物理Mac API/SDK/TTL和专用网络 epoch 检查，随后提出两项静态反例。本次只修复这两项：partial 的 unmanagedActivityHold 从 null 改善为 false 后仍可在已知人员、已知低压力、显式 within_reserved_budget 下走 attended 有界路径；true 继续拒绝，新鲜 complete/false 保持 complete_host。缺失、过期、撤销、失败或不足的 Host 观测改为 unavailable_host，公开schema/SDK推导/OpenAPI和GUI标签同步，避免将不可用证据标成完整可信。partial/false 的解释也不再误称未管理活动未知。
+
+针对反例的 domain22及SQLite/API/SDK4共26项通过，MachinePanel4项通过；全仓 typecheck、build、修改文件格式和 diff 检查通过。比前次冻结新增8项反例（整仓预期298项，尚待主审未排除复验）。源码/dist再次冻结，未更改实际机器配置；真实Docker和当前GUI服务的独立验收仍由主审继续。
+
+### D21 预演可读性与断连文案回修冻结
+
+主审真实浏览器发现每秒 Host 心跳、每5秒GUI刷新会使正常阅读中的预算预演静默失效。本次将预算预演的失效输入收窄为身份/权限、连接、Machine版本/容量/保留量/实际占用、Hold及Node版本/模式；普通心跳时间或压力变化不再清空可保存预算预演。准入解释明确标成预演时的历史观测，保存仍由服务端重新读取并在事务内比较当前身份、策略和预算，不使用前端预演作为准入许可。权限与连接状态分开传递；仅真正只读角色显示权限文案，管理员断连只显示已有连接中断/历史/未知原因并禁用编辑。
+
+回归改为实际的“编辑→预演→心跳刷新→阅读→保存”流程，并保留占用变化、撤权、断连失效与真实只读文案检查。两处域分类与此次GUI回修合并后的冻结检查：domain22+SQLite/API/SDK4共26项、GUI全21项通过；全仓typecheck及最后GUI strict类型、全仓build、全仓格式和diff检查通过。较主审290项基线新增9项反例，未排除全仓预期299项待主审复验。源码/dist再次冻结，未操作当前GUI进程、实机或实际配置，等待主审继续真实Docker与浏览器验收。
+
+### D21 SQLite枚举收口冻结
+
+主审真实流程结束后，仅收紧管理DTO和对应内部类型：Machine与Node admission 使用现有SQLite enabled/draining/disabled，Node observedHealth 使用healthy/degraded/unknown/lost；MachineDependency与Node列表共用同一运行时枚举，不提前输出数据库不存在的retired。合法状态不变，没有扩展运行时或修改实测逻辑。先按主审时序完成不写dist的contracts/controller noEmit检查与枚举反例，获准后再统一构建。
+
+最终全仓typecheck、build、format及diff检查通过；contracts全17项、domain/SQLite/API/SDK聚焦26项通过。新增1项枚举反例后全仓预期300项待主审必要复验，源码/dist再次冻结；未操作实机、进程或配置，主审继续独立GUI与最终发布检查。
+
+### D21 Host过期与撤销状态分类冻结
+
+主审真实Node GUI发现controller重启时active Agent的旧epoch快照被误标为revoked。本次仅将明确agents.status=disabled与失效快照分开投影：disabled保留revoked；Agent仍active但controller/session/boot围栏或时间不再可信时显示stale，assurance仍为unavailable_host。新boot按原D20流程清除旧快照后显示missing，收到可信新心跳才恢复。身份/新鲜度校验与所有准入拒绝规则未改，不将等待Host恢复误导为需要轮换凭据。
+
+新增真实SQLite加API反例验证controller epoch递增（Agent仍active）→stale且旧准入围栏失败、新boot等待快照→missing、新心跳恢复、显式撤销→revoked，均核对准入与assurance。先完成不写dist的noEmit和针对测试，获主审停止临时GUI的通知后统一重建。domain22+SQLite/API/SDK5共27项通过，全仓typecheck/build/format及diff检查通过；新增1项后全仓预期301项由主审必要复验。源码/dist再次冻结，未操作实机、进程或配置，其余真实流程证据和逻辑保持不变。
+
+### D21 主审放行与真实 Docker 验收
+
+2026-10-20 主智能体完成独立复验，D21 放行。Node24 下全仓302项测试通过（contracts17、Runtime Agent37、SDK22、controller205、GUI21），没有跳过 loopback HTTPS/SSE；typecheck、build、format、diff检查、设计 strict 类型和86项 SQL 检查通过。仍为42张表，迁移001–005字节不变。真实凭据及Host身份扫描206个候选文件，未发现匹配。
+
+- 物理Mac从空账本经正式CLI、TLS配对及原生命令采样，验证有人且partial的真实观测、未知未管理活动、策略预演无写入、保存/CAS、超预算拒绝及30秒新鲜度上限。真实GUI完成编辑、预演、跨多轮心跳阅读再保存，0值保留且人类保留未重复计费；旧epoch快照显示stale而非误报撤销，断连显示历史/当前未知并禁用保存。
+- 专用Docker实验Engine的真实草稿验证、测试、查实回收、报告与发布成功；正式SDK领取SSH Ticket并实际运行Node。切换到真实Host观测模式后，下调有人上限保留既有Claim与SSH，新Ticket排队；恢复预算后原Ticket继续。控制器重启保留租约与SSH，Host恢复新epoch；停止Host超过30秒即阻止新分配，恢复Host后同一排队Ticket继续，最终全部正常归还。
+- 实际CPU限额/throttling、内存OOM，以及INPUT/FORWARD、管理地址/同bridge隔离、IPv6、既有连接撤销、Agent/Engine重启、重复删除查实均复验通过。始终显式选择专用实验Docker context，未操作默认业务环境。结束后SQLite独立重开，未释放Claim、未回收验证、未释放Ticket及安装所有租客原生容器/网络/卷均为0。
+- 最终GUI关闭实测暴露既有SSE竞态：认证尚未返回时服务开始关闭，旧实现会在preClose后建立新长连接。原范围由Luna修复关闭标志与迟到503的Connection: close；主审确定性loopback复现从200/无法及时退出变为503/正常退出，新增回归等待app.close完成后才中止客户端。真实Portainer控制器保持GUI连接时SIGTERM正常结束，后台循环、SQLite和进程均关闭；未以全局强断连接掩盖问题。
+
+以上不证明完整无人Mac观测、Windows/Linux逐机Host部署、NAS挂载或任何真实电源能力。未执行WOL、关机或智能插座动作；严格离线租约执行仍未启用。M2尚未完成，接续D22a（Luna默认low，必要时提高预算），Sol例外不延伸到后续模块；Docker优先、VM后置。

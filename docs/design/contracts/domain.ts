@@ -122,19 +122,9 @@ export interface HumanPresenceReport extends ObservationMetadata {
   readonly errorCode?: string;
 }
 
-/** 共享机器的人机共用约束。人类保留资源和未知状态保护不可由租客覆盖。 */
-export interface HumanUsePolicy {
-  /** 任何受保护交互会话都阻止自动关机，v1 固定 true。 */
-  readonly blockShutdownForAnyInteractiveSession: true;
-  /** 未知人类状态阻止自动关机，v1 固定 true。 */
-  readonly blockShutdownOnUnknownPresence: true;
-  /** 允许的最大观测年龄，单位秒；超过即失去准入/电源判断可信度。 */
-  readonly maximumObservationAgeSeconds: number;
-  /** 有人使用时阻止新单，或仅在显式保留预算内接单。 */
-  readonly admissionDuringInteraction: 'block_new' | 'within_reserved_budget';
-  /** 人的最低保留预算，已包含在根池reservedForPlatform中；不能再次扣减。 */
-  readonly humanReserved: ResourceAmounts;
-}
+/** Runtime schema is authoritative; do not duplicate HumanUsePolicy fields here. */
+import type { HumanUsePolicy } from '../../../packages/contracts/src/admin';
+export type { HumanUsePolicy } from '../../../packages/contracts/src/admin';
 
 /** 逐机启用的电源规则；未经实测的唤醒路径不能被配置视为已支持。 */
 export interface PowerPolicy {
