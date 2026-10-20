@@ -34,6 +34,8 @@ export const hostSnapshotSchema = z
     machineId: id,
     agentId: id,
     bootId: id,
+    /** Stable native OS boot identity; absent on the observer-only entry point. */
+    osBootId: id.optional(),
     sequence: z.number().int().nonnegative().safe(),
     observedAt: z.string().datetime({ offset: true }),
     probeStatus: z.enum(["complete", "partial", "failed"]),

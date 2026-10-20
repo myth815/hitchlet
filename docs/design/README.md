@@ -579,6 +579,12 @@ D22a 策略、能力结论、插座绑定和预演 DTO 由 `packages/contracts/s
 
 本能力并入 D22a 的模型/dry-run 与 D22b 的逐机实际验收，不新增开发阶段，不提前到 D03。SQLite 的策略/绑定初期放在带版本的 policies.config_json 与 machines.management_json；一次恢复的阶段、读回和截止放在 Operations/回执内，D22a已固定配置schema和设备身份唯一性，真实电源动作仍属D22b逐机后置验收，不为其提前增加表。
 
+### 13.2 本轮 D22b 正常关机/WOL 原生入口
+
+2026-10-20 用户单独授权实现正常关机与 WOL 的逐机闭环，范围不含 sleep、智能插座/强制切电、VM 或云。D22a 继续保持纯预演。新增的 `power.execution` Operations、authenticated Host prepare/commit/accepted、独立本机取消 watchdog、软件/guard/路由/策略资格绑定，以及具体部署/测试步骤见 [原生电源说明](../POWER-NATIVE.md)。默认自动电源关闭，必须显式安装原生 power 入口并审阅本机有限工作负载边界；D20 observer 不静默升权。`osBootId` 与原 process bootId/session 分开，只有不同的原生 OS boot 及重新健康的已登记依赖才完成恢复。
+
+本轮无 Docker Node 的逐机资格只能证明物理 Host 恢复，不能替代 Docker ready 证据；运行中的 WSL 或不明任务持续阻塞。代码交付与合成测试不等于逐机实机验收。故障插座恢复仍保留后置范围与原独立恢复义务，不能从正常节能流程升级为 AC 操作。
+
 ## 14. 存储、网络、凭据与清理权限
 
 ### 14.1 固定授权与内部解析合同

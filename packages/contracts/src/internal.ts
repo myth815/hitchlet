@@ -23,3 +23,4 @@ export * from "./host-agent.js";
 export { classifyFreshHumanPresence } from "./host-observation.js";
 export * from "./runtime-storage.js";
 export * from "./recovery.js";
+export * from "./power-execution.js";

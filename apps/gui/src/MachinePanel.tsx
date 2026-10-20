@@ -1,3 +1,4 @@
+import { PowerExecutionPanel } from "./PowerExecutionPanel.js";
 import { PowerPanel } from "./PowerPanel.js";
 import React from "react";
 import { ComputeClientError, type HitchletClient } from "@hitchlet/sdk";
@@ -336,7 +337,7 @@ function MachineCard({
         ))}
       </details>
       <details>
-        <summary>实际停机禁用原因（D22b 未启用）</summary>
+        <summary>沙盘停机禁用原因（原生执行见独立面板）</summary>
         {machine.shutdownDisabledReasons.map((reason) => (
           <p key={reason}>{reason}</p>
         ))}
@@ -468,6 +469,12 @@ function MachineCard({
           </p>
         ) : null}
       </details>
+      <PowerExecutionPanel
+        client={client}
+        machineId={machine.machineId}
+        connected={connected}
+        canWrite={canWrite}
+      />
       <PowerPanel
         client={client}
         machineId={machine.machineId}

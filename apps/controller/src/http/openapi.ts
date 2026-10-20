@@ -1,4 +1,12 @@
 import {
+  PowerExecutionStartSchema,
+  PowerExecutionCommandSchema,
+  PowerExecutionSchema,
+  PowerExecutionViewSchema,
+  HostPowerEventSchema,
+  HostPowerDirectiveSchema,
+} from "@hitchlet/contracts/admin";
+import {
   DiagnosticsSchema,
   CredentialListSchema,
   SystemHealthSchema,
@@ -136,6 +144,43 @@ export function openApiDocument() {
     info: { title: "Hitchlet API", version: "1.0.0" },
     paths: {
       ...managementApiPaths(),
+      "/v1/machines/{machineId}/power-executions": {
+        get: adminOperation(
+          "Read independent native power qualification and execution history",
+          "200",
+          undefined,
+          PowerExecutionViewSchema,
+          [pathId("machineId")],
+        ),
+        post: adminOperation(
+          "Start guarded native normal shutdown; explicit qualification is installation opt-in",
+          "200",
+          PowerExecutionStartSchema,
+          PowerExecutionSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/power-executions/{cycleId}/command": {
+        post: adminOperation(
+          "CAS cancel or bounded WOL request",
+          "200",
+          PowerExecutionCommandSchema,
+          PowerExecutionSchema,
+          [pathId("machineId"), pathId("cycleId")],
+        ),
+      },
+      "/v1/agents/{agentId}/power": {
+        post: {
+          ...adminOperation(
+            "Authenticated native Host prepare/commit/accepted exchange",
+            "200",
+            HostPowerEventSchema,
+            HostPowerDirectiveSchema,
+            [pathId("agentId")],
+          ),
+          security: [{ hostCredential: [] }],
+        },
+      },
       "/v1/machines/{machineId}/power": {
         get: adminOperation(
           "Read power configuration and real-execution blockers",

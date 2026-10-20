@@ -1,4 +1,10 @@
 import {
+  PowerExecutionSchema,
+  PowerExecutionViewSchema,
+  PowerExecutionStartSchema,
+  PowerExecutionCommandSchema,
+} from "@hitchlet/contracts/admin";
+import {
   DiagnosticsSchema,
   CredentialListSchema,
   SystemHealthSchema,
@@ -124,6 +130,40 @@ export class AdminCommands {
       "POST",
       CredentialRotationSchema.parse(body),
       (v) => CredentialReceiptSchema.parse(v),
+      { key: crypto.randomUUID(), retry: false },
+    );
+  }
+  powerExecutions(machineId: string) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-executions`,
+      "GET",
+      undefined,
+      (v) => PowerExecutionViewSchema.parse(v),
+      {},
+    );
+  }
+  startPowerExecution(
+    machineId: string,
+    body: import("@hitchlet/contracts/admin").PowerExecutionStart,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-executions`,
+      "POST",
+      PowerExecutionStartSchema.parse(body),
+      (v) => PowerExecutionSchema.parse(v),
+      { key: crypto.randomUUID(), retry: false },
+    );
+  }
+  commandPowerExecution(
+    machineId: string,
+    cycleId: string,
+    body: import("@hitchlet/contracts/admin").PowerExecutionCommand,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-executions/${encodeURIComponent(cycleId)}/command`,
+      "POST",
+      PowerExecutionCommandSchema.parse(body),
+      (v) => PowerExecutionSchema.parse(v),
       { key: crypto.randomUUID(), retry: false },
     );
   }

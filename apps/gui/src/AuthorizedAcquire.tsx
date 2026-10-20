@@ -108,8 +108,8 @@ export function AuthorizedAcquire({
       <button onClick={() => void catalog.refresh()}>刷新授权目录</button>
       <p>
         Docker CPU 为配额，共享宿主内核；临时盘默认 best_effort。当前 offline
-        lease enforcement unsupported，实际电源
-        disabled；离线后只能承诺恢复对账后的最终清理。浏览器关闭不会释放环境。
+        lease enforcement
+        unsupported；离线后只能承诺恢复对账后的最终清理。浏览器关闭不会释放环境。
       </p>
       <form
         className="acquire-form"

@@ -522,3 +522,41 @@ D25由Luna/high在固定完整范围实现，经主审反馈修订并独立验�
 补齐固定授权修订的原子吊销与既有 cleanup 续接，发布提交时的期限/存储吊销复查，以及人机策略、正式准入模式的原管理命令恢复；同步 contracts、SDK、GUI、OpenAPI 和设计权威引用。复用原账本、Operation 与终止流程，没有新表、迁移改写或通用框架，VM/云/真实电源仍后置。
 
 主审真实复验另修正持久引用被误送入 Provider 删除接口导致的无谓失败，以及第三方 Ed25519 生成器偶发剥离前导零字节的问题；Simulator 只解绑本地引用元数据，Native 密钥在持久化前校验。补充迟到 ready 回执、引用不进入 destroy 和固定前导零/签名反例。最终 Node24 全仓437/437、类型/构建/格式/设计接口与SQLite86项43表通过，001–007及设计DDL未改。详细实际断联、重启、paused回收、NAS输出保留、SDK真实丢响应恢复、GUI预览、干净安装与正式Dockerfile证据见[验收补充](DOCKER-ACCEPTANCE.md#m2-整体复核补充2026-10-20)。保留此前418项等历史批次结果，不将新复核覆盖追写为历史已验证。
+
+### D22b 恢复实现（待独立实机审核）
+
+2026-10-20 用户另行扩展并恢复固定 D22b 正常关机＋WOL 实现/Windows 实测，继续 Docker 优先、VM 后置；Luna/high 已明确无法完整交付，由 Sol 接续。子智能体只实现/本地合成测试，不委派、不执行真实电源或外部网络、不提交推送。主审负责真实资格、竞态注入、业务任务保护和最终恢复/清理/正常关机。
+
+新增独立运行时 schema、纯领域守卫、SQLite Operations/完整输入 CAS、应用编排、authenticated Host exchange、API/OpenAPI、SDK 与 GUI 实执行面板。D22a 仍固定 dryRun=true 且不是 permit。原生 Windows power 入口与 D20 observer 分开，必须本机显式安装、受保护配置和有限逐项审核的 workload guard。新 OS boot 单独用 snapshot.osBootId 表示，原 process bootId/session 防重放机制保留；单进程 restart 不构成开机证据。
+
+真实关机采用 Microsoft 正常非强制 API 与60秒可取消 grace，prepared/commit 五秒、两次本机复核、API调用前 deadline/父进程身份复核；独立有限 watchdog 以具体 cycle 的五秒控制通信 lease 保护执行者硬崩溃/断联。accepted 仅为受理，120秒心跳消失才推断 off_expected，observedPower仍unknown。WOL固定本地LAN私有/24广播，三次/30秒/原五分钟或更早Ticket截止；新需求在排空前取消、已expected-off且资格通过后有界恢复。所有恢复都要求新OSboot/认证Host及已登记Node健康，真人登录后由HumanUsePolicy继续决定准入。
+
+新增 powerOnly Machine 登记仅支持无虚构 Node 的物理资格，不自动添加外部Docker底座Hold；不删除其他保护。不支持运行中的WSL业务自动证明/暂停，无任务安全证据即阻塞。安装边界、固定入口、逐项guard、qualification绑定和实机证据表见 [原生电源说明](POWER-NATIVE.md)。此节为实现状态，不表示逐机验收通过；本轮无Docker Node的实机证据只能证明Host恢复。
+
+D22b 子实现本地复验：Node 24 / pnpm 10 全仓 typecheck、build、format:check、git diff --check 通过。完整测试在允许本地 loopback 监听的隔离外测试环境 464/464 通过（contracts22、runtime63、SDK30、controller314、GUI35）；随后补充 watchdog 过期 lease 不可续期与旧 child 事件隔离，聚焦 native power 14/14 再通过，当前预期全仓465项。controller 电源聚焦41/41、GUI电源4/4、SDK电源3/3；覆盖真实 TicketService.acquire 驱动的取消/有界 WOL 与无新 Claim，OS/UDP均为合成端口。本机受限 sandbox 首次全仓测试遇 loopback EPERM，未据此宣称通过，完整允许监听的复验已实际执行。日志留在私有 `/private/tmp/d22b-*`，不提交测试产物/机器信息。Windows PowerShell/API/硬崩溃、自启动、原生守卫时限和逐机真实关机/WOL仍待主审实测，尚未声称任何机器通过资格。
+
+### D22b 软件主审与隔离部署复验（2026-10-20；硬件验收未完成）
+
+主审独立通过初版465项全仓检查后，补齐维护暂停/低磁盘/恢复状态的关机拒绝与事务栅栏、超出GUI最近100条窗口的精确资格引用，以及进程boot回执与独立OSboot标识的一致性。增加维护变更发生在prepared提交前的真实SQLite竞态，以及101条后续历史不使有效资格失效的回归；全仓470/470通过（contracts22、Runtime64、SDK30、controller319、GUI35），类型、构建、格式、设计接口及86项SQLite检查通过，001–007迁移和设计DDL未改。
+
+实际Linux x86_64隔离控制器以Node24和非root用户运行，保持电源配置禁用。通过真实HTTP与构建后SDK验证无Node物理Machine登记、重启保留SQLite、状态合同、默认拒绝资格执行、401与OpenAPI；真实浏览器验证登录、原生电源面板与隔离沙盘分开、未知事实阻止执行，并复核最终镜像重启后的显示。私有机器信息/临时凭据扫描零匹配。原生清单进一步限制为仅打开系统盘映像，其他卷或网络共享上的未知进程只作为阻塞事实，不读取其文件。
+
+本轮现场机器已有网络在线证据，但认证SSH入口不可达，尚未安装原生power服务，因而没有Hitchlet accepted/关机/WOL/新OSboot资格闭环证据，也不能完成本轮正常关机收尾。实际Windows API、五秒时限、SYSTEM自启与硬崩溃/失联/登录竞态仍未验证；待恢复管理入口后继续，不将软件检查计为逐机验收，不发布已通过硬件资格的声明。
+
+### D22b Windows 现场保护复核（2026-10-21；资格闭环仍待完成）
+
+恢复管理入口后，以受保护测试目录与独立 SYSTEM 开机任务部署原生执行者。修复真实 Windows 暴露的 detached PowerShell 提前退出，改为固定 Node launcher 启动固定 watchdog；以进程创建身份核对父子关系，不扩大通用解释器白名单。steady loop 每轮仅采一份新鲜观测，prepare/commit 仍独立复核。所有本机期限统一为系统 uptime，OS boot 改用不可变的 System 启动事件，实测校时不会制造新 boot。
+
+实际暂停同一测试控制器20秒、保持同一 controller epoch：OS 受理正常关机后约4.8秒确认取消，超出原60秒 grace 后机器仍在线；网络恢复后原生 journal 的待报取消事实获得 ACK，控制器自动恢复自身 drain 与准入，没有人工改账或重放关机。另在 OS 受理后硬杀唯一测试执行者，独立 launcher/watchdog 存活并在约310毫秒内取消关机，未执行救援 Abort；超过原 grace 后确认原 OS boot。该崩溃保留锁与 journal，按设计由操作员查实、确认取消并恢复，不能宣称同 boot 崩溃后自动接管。
+
+新增关闭确认区分 ChildProcess callback 与真实 close；只有唯一提交已真实结束、原父身份仍存活且正常 Abort 已确认，才允许 unsafe watchdog 读取内部 settled-cancelled 终态提前结束。实际 Windows 已验证过期 lease 的确认取消与有界结束；普通 cancelled、父进程死亡或身份不符仍维持原120秒保护。
+
+当前源码在 Node24 下全仓596项通过，另5项 Windows 条件测试在本机跳过；实际 Windows 原生向量、固定 watcher 启停和上述故障注入另行取证。严格类型、构建、格式、设计接口与 SQLite86项/43表检查通过，001–007迁移未改。一次旧 Portainer 批次公平性测试因随机 UUID 同时间排序而失败，修正为检查实际首批未尝试端点后完整复跑通过，未改生产调度规则。仍待新登录/断开会话保护和完整正常关机→本产品WOL→新 OS boot/开机自启恢复；不将故障取消通过记作逐机资格通过。Docker 优先，VM/云与智能插座切电仍不在本轮范围。
+
+随后实际新登录保护通过：正常关机受理后通过 RDP 登录，Windows 在受理后约22秒记录取消，控制器自动恢复准入并报告一个登录会话；全过程未用 SSH 触发取消。仅断开 RDP 后，认证 Host 仍报告 present，WTS 独立读取确认该会话为 disconnected，超过原60秒 grace 后原 OS boot 仍在线。仅正常注销本轮新建的唯一测试会话，未打开用户文档。一次独立资格尝试在 prepare 最终复核主动拒绝、无 accepted 或 OS 事件，按取消保留，不推断未经取证的根因；后续同一制品已获得上述真实受理与取消证据。
+
+正向实测进一步暴露控制器缺陷：正常关机后最后一份较新且安全的 Host 观测失鲜，被错误当成“新的在线不安全证据”，在受理后约86秒提前取消，无法进入120秒 expected-off。修复复用既有 Machine admission 的 Host freshness 判定，同时约束同 boot 在线反证与新 boot 恢复入口；不重复定义时效规则，不改变原生执行器或许可期限。新增10项真实SQLite回归，覆盖31秒、86秒、120秒边界、原截止/receipt保留、正式排队需求WOL与新boot恢复，以及fresh有人/未知/不完整仍取消、失鲜期间新Hold仍取消。主审全仓606项通过、5项Windows条件跳过，构建/类型/格式通过；首次sandbox复验因loopback EPERM失败，允许本机监听后完整复跑通过。
+
+修复后的两轮运行均真实受理后保护性取消，没有被标记为成功。只读逐次采样确认其中一轮受理约32秒后出现新的fresh、partial、unmanaged hold观测，控制器和原生取消、准入恢复一致，区别于此前失鲜缓存误判。随后只读清单发现系统存储优化与Store维护服务；已审核这两项系统目录DLL的有效微软签名、SCM手动启动及当前正常停止能力。该机基线扩展仍待本轮明确授权，未安装；完整本产品WOL与新boot资格仍未通过，自动电源保持关闭。
+
+本轮收尾已完成：正式吊销测试Host、清除电源grant并验证禁用，恢复原服务启动方式/运行状态及原计算环境自启设置，删除两个测试SYSTEM任务和带所有权标记的测试目录，复核无登录会话和计算进程后正常非强制关机。测试NAS的4个控制器容器、6个专用镜像tag及临时fixture已删除，没有共享prune；浏览器管理会话已退出，本地临时入口已关闭。首次Windows目录删除遇macOS打包的AppleDouble尾点名称，使用扩展DOS路径完成原目录清理；后续测试包去除该平台元数据，执行器代码指纹不变。没有执行基线扩展、插座操作或VM/云部署，也没有以手动准备性WOL填补产品资格。

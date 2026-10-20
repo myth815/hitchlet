@@ -13,6 +13,39 @@ export class HostRequestError extends Error {
     super(`host_http_${status}`);
   }
 }
+/** Only explicit transport availability failures and temporary HTTP responses may be retried. */
+export class HostTransientError extends Error {
+  constructor() {
+    super("host_temporarily_unavailable");
+  }
+}
+export function isTransientHostFailure(error: unknown): boolean {
+  return (
+    error instanceof HostTransientError ||
+    (error instanceof HostRequestError &&
+      [408, 429, 500, 502, 503, 504].includes(error.status))
+  );
+}
+export function hostConnectionFailure(error: unknown): Error {
+  if (error instanceof HostTransientError) return error;
+  const code =
+    error instanceof Error && "code" in error ? error.code : undefined;
+  return typeof code === "string" &&
+    [
+      "ECONNREFUSED",
+      "ECONNRESET",
+      "EHOSTUNREACH",
+      "ENETUNREACH",
+      "ENETDOWN",
+      "EHOSTDOWN",
+      "EAI_AGAIN",
+      "ETIMEDOUT",
+      "ERR_HTTP_REQUEST_TIMEOUT",
+      "ABORT_ERR",
+    ].includes(code)
+    ? new HostTransientError()
+    : new Error("host_request_failed");
+}
 /** TLS validation is mandatory. Credentials only go to the configured origin, with no redirects. */
 export class HostClient {
   constructor(
@@ -72,7 +105,7 @@ export class HostClient {
               reject(new Error("host_response_too_large"));
             }
           });
-          response.on("error", () => reject(new Error("host_response_failed")));
+          response.on("error", (error) => reject(hostConnectionFailure(error)));
           response.on("end", () => {
             if (response.statusCode !== 200 && response.statusCode !== 201) {
               reject(new HostRequestError(response.statusCode ?? 500));
@@ -87,9 +120,9 @@ export class HostClient {
         },
       );
       request.setTimeout(15_000, () =>
-        request.destroy(new Error("host_request_timeout")),
+        request.destroy(new HostTransientError()),
       );
-      request.on("error", () => reject(new Error("host_request_failed")));
+      request.on("error", (error) => reject(hostConnectionFailure(error)));
       request.end(payload);
     });
   }

@@ -269,7 +269,7 @@ export function ManagementConsole({
       <h2>管理工作台 · {principal.role}</h2>
       <p>
         Docker 底座由人工常开维护 · shared_kernel · scratch best_effort ·
-        offline unsupported · 实际电源 disabled。可信 Agent
+        offline unsupported · 原生电源默认关闭，逐机资格见机器面板。可信 Agent
         部署和能力取证先按接入手册完成。
       </p>
       <Observation at={overview.at} error={overview.error} />

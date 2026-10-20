@@ -179,3 +179,5 @@ identity; update the controller Node Runtime credential configuration. Old beare
 HTTP401/403 and new authenticated facts prove takeover; an epoch number or timeout
 alone does not. Do not grant SYS_ADMIN for this storage protocol. D23 only reads
 mount facts; host mount administration stays outside Hitchlet.
+
+D22b 的 `dist/host-power-main.js` 是另行安装的 opt-in Windows 电源入口；原 `host-main.js` 仍仅观测。配置、workload guard、自有开机任务、OS boot lock、独立取消 watchdog 和逐机资格见 [原生电源安装说明](../../docs/POWER-NATIVE.md)。不得同时运行两个使用同一 Host 身份的入口，不以 D20 的 partial/null 观测冒充完整关机许可。

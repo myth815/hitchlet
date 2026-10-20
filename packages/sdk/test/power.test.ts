@@ -50,3 +50,27 @@ describe("power sandbox SDK", () => {
     expect(calls).toBe(1);
   });
 });
+
+describe("native power SDK", () => {
+  it("journals native power requests and never retries an unknown shutdown response", async () => {
+    let calls = 0;
+    const prepared: unknown[] = [];
+    const client = new HitchletClient("https://controller.test", {
+      onManagementPrepared: async (r) => {
+        prepared.push(r);
+      },
+      fetch: async () => {
+        calls++;
+        throw new TypeError("lost native request response");
+      },
+    });
+    await expect(
+      client.admin.startPowerExecution(id, { qualification: true }),
+    ).rejects.toBeDefined();
+    expect(calls).toBe(1);
+    expect(prepared[0]).toMatchObject({
+      path: `/v1/machines/${id}/power-executions`,
+      body: { qualification: true },
+    });
+  });
+});

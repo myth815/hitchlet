@@ -1,3 +1,12 @@
+import { readFile, stat } from "node:fs/promises";
+import { PowerExecutionService } from "./application/power-execution.js";
+import {
+  PowerInstallationSchema,
+  PowerExecutionStartSchema,
+  PowerExecutionCommandSchema,
+  PowerExecutionViewSchema,
+  HostPowerEventSchema,
+} from "@hitchlet/contracts/admin";
 import { roleScopes } from "./domain/role-scopes.js";
 import {
   MaintenanceService,
@@ -578,7 +587,94 @@ export async function buildApp(
         );
       },
     );
+    let powerInstallation = PowerInstallationSchema.parse({ machines: [] });
+    if (config.HITCHLET_POWER_CONFIG) {
+      const info = await stat(config.HITCHLET_POWER_CONFIG);
+      if (process.platform !== "win32" && (info.mode & 0o077) !== 0)
+        throw new Error("power_config_permissions");
+      powerInstallation = PowerInstallationSchema.parse(
+        JSON.parse(await readFile(config.HITCHLET_POWER_CONFIG, "utf8")),
+      );
+    }
+    const realPower = new PowerExecutionService(
+      runtime.storage,
+      powerInstallation,
+    );
+    let realPowerPending: Promise<void> | null = null;
+    const realPowerTimer = setInterval(() => {
+      if (realPowerPending) return;
+      realPowerPending = realPower
+        .tick()
+        .catch(() =>
+          app.log.warn(
+            "Real power safety evaluation failed; no additional action authorized",
+          ),
+        )
+        .finally(() => {
+          realPowerPending = null;
+        });
+    }, 1000);
+    realPowerTimer.unref();
+    app.addHook("onClose", async () => {
+      clearInterval(realPowerTimer);
+      await realPowerPending;
+    });
+    app.get(
+      "/v1/machines/:machineId/power-executions",
+      async (request, reply) => {
+        await requireAdmin(request);
+        reply.header("Cache-Control", "no-store");
+        return PowerExecutionViewSchema.parse(
+          await realPower.view(uuidParam(request.params, "machineId")),
+        );
+      },
+    );
+    app.post(
+      "/v1/machines/:machineId/power-executions",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        reply.header("Cache-Control", "no-store");
+        const body = parseInput(PowerExecutionStartSchema, request.body);
+        return realPower.start(
+          uuidParam(request.params, "machineId"),
+          body.qualification,
+          { operatorId: actor.principalId, requestId: request.id },
+        );
+      },
+    );
+    app.post(
+      "/v1/machines/:machineId/power-executions/:cycleId/command",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        reply.header("Cache-Control", "no-store");
+        const body = parseInput(PowerExecutionCommandSchema, request.body);
+        return realPower.command(
+          uuidParam(request.params, "machineId"),
+          uuidParam(request.params, "cycleId"),
+          body.expectedVersion,
+          body.action,
+          body.provisionDeadlineMs,
+          { operatorId: actor.principalId, requestId: request.id },
+        );
+      },
+    );
     const hosts = new HostAgents(runtime.storage);
+    app.post("/v1/agents/:agentId/power", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      const agentId = uuidParam(request.params, "agentId");
+      const session = await hosts.session(
+        agentId,
+        request.headers.authorization,
+      );
+      const event = parseInput(HostPowerEventSchema, request.body);
+      if (
+        session.bootId !== event.bootId ||
+        session.sessionEpoch !== event.sessionEpoch ||
+        session.controllerEpoch !== event.controllerEpoch
+      )
+        throw new ApplicationError("conflict");
+      return realPower.hostEvent(agentId, event);
+    });
     app.post("/v1/agents/pairings", async (request, reply) => {
       const actor = await requireAdmin(request, true);
       reply.header("Cache-Control", "no-store");

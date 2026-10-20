@@ -308,7 +308,11 @@ export function parseWindowsSessions(
     errors:
       d.complete && d.sessions.length === 0
         ? []
-        : ["windows_lock_state_unknown"],
+        : [
+            d.complete
+              ? "windows_lock_state_unknown"
+              : "windows_session_enumeration_incomplete",
+          ],
   };
 }
 

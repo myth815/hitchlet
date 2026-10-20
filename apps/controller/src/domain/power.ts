@@ -110,7 +110,7 @@ export function shutdownReasons(c: PowerContext, now: number): string[] {
 
 export function executionReasons(c: PowerContext): string[] {
   const reasons = [
-    "D22b real power executor and per-machine acceptance are unavailable; preview is never a permit",
+    "D22a preview is isolated and never a real-execution permit; inspect the dedicated native D22b power execution view",
   ];
   if (c.policy.idleAction === "sleep")
     reasons.push(

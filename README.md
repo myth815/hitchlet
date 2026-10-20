@@ -10,9 +10,11 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 
 ## 当前状态
 
-**M2 Docker 正式交付已通过独立验收，承诺限于已验证的部署组合。** 已实现 Portainer 接入、镜像验证后发布、独立容器与 SSH 凭据、Ticket 全生命周期、恢复回收、授权持久存储、备份恢复、完整管理 API、TypeScript SDK 与中文 GUI。418项实现测试通过；干净安装、正式 Dockerfile、实际浏览器及真实 Docker/NFS 闭环均已验证。实际 Mac Host 已通过可信观测进入正式准入，部分观测仅在显式批准的有人预算内接单，未知、压力和过期证据会阻止新增。逐节点证据与限制见[交付验收](docs/DOCKER-ACCEPTANCE.md)和[实施记录](docs/IMPLEMENTATION.md)。
+**M2 Docker 正式交付已通过独立验收，承诺限于已验证的部署组合。** 已实现 Portainer 接入、镜像验证后发布、独立容器与 SSH 凭据、Ticket 全生命周期、恢复回收、授权持久存储、备份恢复、完整管理 API、TypeScript SDK 与中文 GUI。实现测试已通过；干净安装、正式 Dockerfile、实际浏览器及真实 Docker/NFS 闭环均已验证。实际 Mac Host 已通过可信观测进入正式准入，部分观测仅在显式批准的有人预算内接单，未知、压力和过期证据会阻止新增。逐节点证据与限制见[交付验收](docs/DOCKER-ACCEPTANCE.md)和[实施记录](docs/IMPLEMENTATION.md)。
 
 首个交付目标是 **Docker，通过 Portainer 接入**。Hyper-V 与 Tart 只保留扩展设计，按实际需求后置，不作为 Docker 版本发布的前提。
+
+D22b Windows 原生正常关机与 WOL 已通过软件主审，失联、执行者崩溃及登录撤销已实测；完整逐机关机/唤醒资格尚未通过。默认关闭自动电源；安装、守卫与启用条件见[原生电源说明](docs/POWER-NATIVE.md)。
 
 ## 能力
 

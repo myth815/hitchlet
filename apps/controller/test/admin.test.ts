@@ -515,6 +515,11 @@ describe("D10 Portainer identity and D11a catalog", () => {
     ).duePortainerObservations(clock);
     expect(firstBatch).toHaveLength(16);
     failedEndpoints = new Set(firstBatch.map((node) => node.endpointUrl));
+    // Equal fixture timestamps use random IDs as a tie-breaker, not creation order.
+    const unattemptedEndpoint = endpoints.find(
+      (endpoint) => !failedEndpoints.has(endpoint),
+    );
+    if (!unattemptedEndpoint) throw new Error("Missing unattempted fixture");
     expect(await service.refreshPortainerObservations()).toMatchObject({
       checked: 16,
       refreshed: 0,
@@ -539,13 +544,13 @@ describe("D10 Portainer identity and D11a catalog", () => {
       refreshed: 16,
       unhealthy: 0,
     });
-    expect(probedEndpoints).toContain(endpoints[16]);
+    expect(probedEndpoints).toContain(unattemptedEndpoint);
     const laterNode = await db.get<{
       observed_at_ms: bigint;
       observed_health: string;
     }>(
       "SELECT n.observed_at_ms,n.observed_health FROM nodes n JOIN provider_connections c ON c.id=n.provider_connection_id JOIN provider_connection_revisions r ON r.id=c.current_revision_id WHERE r.endpoint_ref=?",
-      [endpoints[16]],
+      [unattemptedEndpoint],
     );
     expect(laterNode).toMatchObject({
       observed_at_ms: BigInt(clock),

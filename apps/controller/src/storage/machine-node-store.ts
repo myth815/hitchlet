@@ -407,6 +407,7 @@ export class SQLiteMachineNodeStore {
     return changes.changes === 1n;
   }
   async createMachine(input: {
+    powerOnly?: boolean | undefined;
     id?: string;
     name: string;
     hostOs: "linux" | "windows" | "macos";
@@ -444,11 +445,15 @@ export class SQLiteMachineNodeStore {
           time,
         ],
       },
-      {
-        kind: "run",
-        sql: "INSERT INTO holds(id,machine_id,kind,reason,created_by_consumer_id,created_at_ms) VALUES(?,?,'infrastructure','External always-on Docker base runtime dependency',?,?)",
-        params: [randomUUID(), id, input.operatorId, time],
-      },
+      ...(input.powerOnly
+        ? []
+        : [
+            {
+              kind: "run" as const,
+              sql: "INSERT INTO holds(id,machine_id,kind,reason,created_by_consumer_id,created_at_ms) VALUES(?,?,'infrastructure','External always-on Docker base runtime dependency',?,?)",
+              params: [randomUUID(), id, input.operatorId, time],
+            },
+          ]),
     ]);
     return {
       id,

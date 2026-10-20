@@ -27,14 +27,18 @@ const kind = "power.dry-run";
 const policyId = (machineId: string) => `power:${machineId}`;
 // Include all relevant operations and allocations, including ones without a Claim yet.
 const materialSql = `SELECT json_object(
+ 'maintenance',(SELECT json_object('paused',paused,'diskState',disk_state,'recovering',recovery_json IS NOT NULL) FROM system_maintenance WHERE singleton=1),
  'machine',(SELECT json_object('epoch',machine_epoch,'capabilities',json(capabilities_json),'management',json(management_json),'version',version) FROM machines WHERE id=:id),
  'policy',(SELECT json_object('version',version,'config',json(config_json)) FROM policies WHERE id=:policyId),
+ 'demands',json((SELECT json_group_array(json_object('id',id,'deadlineMs',COALESCE(provision_deadline_ms,queue_deadline_ms))) FROM (SELECT * FROM tickets WHERE phase='queued' AND EXISTS(SELECT 1 FROM json_each(request_json,'$.allowedMachineIds') WHERE value=:id) AND EXISTS(SELECT 1 FROM nodes n JOIN image_artifacts a ON a.image_version_id=tickets.image_version_id AND a.backend_kind=n.backend_kind AND a.environment_kind=json_extract(tickets.request_json,'$.kind') WHERE n.machine_id=:id AND n.admission='enabled' AND n.id IN(SELECT value FROM json_each(tickets.request_json,'$.allowedNodeIds')) AND n.backend_kind IN(SELECT value FROM json_each(tickets.request_json,'$.allowedProviders')) AND a.architecture IN(SELECT value FROM json_each(tickets.request_json,'$.allowedArchitectures'))) ORDER BY id))),
  'operations',json((SELECT json_group_array(json_object('id',id,'kind',kind,'state',state,'version',version,'epoch',controller_epoch)) FROM (SELECT * FROM operations WHERE state IN ('planned','running','unknown') AND (machine_id=:id OR node_id IN(SELECT id FROM nodes WHERE machine_id=:id) OR allocation_id IN(SELECT id FROM allocations WHERE machine_id=:id)) ORDER BY id))),
  'allocations',json((SELECT json_group_array(json_object('id',id,'purpose',purpose,'desiredState',desired_state,'observedState',observed_state,'cleanupStatus',cleanup_status,'version',version)) FROM (SELECT * FROM allocations WHERE machine_id=:id AND (cleanup_status<>'complete' OR id IN(SELECT allocation_id FROM capacity_claims WHERE state<>'released') OR id IN(SELECT parent_allocation_id FROM capacity_pools WHERE parent_allocation_id IS NOT NULL)) ORDER BY id)))
 ) AS material`;
 const sql = materialSql.replaceAll(":policyId", "?").replaceAll(":id", "?");
-const params = (id: string) => [id, policyId(id), id, id, id, id];
+const params = (id: string) => [id, policyId(id), id, id, id, id, id, id];
 type PowerMaterial = {
+  maintenance: { paused: number; diskState: string; recovering: number } | null;
+  demands: { id: string; deadlineMs: number }[];
   machine: {
     epoch: number;
     capabilities: Record<string, unknown>;

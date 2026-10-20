@@ -5,7 +5,12 @@ import {
   type HostSnapshot,
 } from "@hitchlet/contracts/internal";
 import type { HostClient } from "./host-client.js";
-import { HostRequestError } from "./host-client.js";
+import {
+  HostRequestError,
+  HostTransientError,
+  isTransientHostFailure,
+} from "./host-client.js";
+export { HostTransientError } from "./host-client.js";
 
 export type HostBinding = {
   agentId: string;
@@ -15,11 +20,14 @@ export type HostBinding = {
 };
 /** One process owns one bootId. A fenced process exits instead of stealing a newer process's session. */
 export class HostObservationService {
-  private bootId = randomUUID();
+  private bootId: string = randomUUID();
   private sequence = 0;
   private controllerEpoch = 0;
   private sessionEpoch = 0;
   private pending: HostHeartbeat | undefined;
+  private pendingInitialization:
+    | { controllerEpoch: number; sessionEpoch: number }
+    | undefined;
   constructor(
     private readonly binding: HostBinding,
     private readonly client: Pick<HostClient, "session" | "boot" | "heartbeat">,
@@ -30,16 +38,29 @@ export class HostObservationService {
       >
     >,
     private readonly now = Date.now,
+    private readonly physicalBootId?: string,
   ) {}
   async initialize() {
-    const s = await this.client.session(
-      this.binding.agentId,
-      this.binding.credential,
+    if (!this.pendingInitialization) {
+      const s = await this.client.session(
+        this.binding.agentId,
+        this.binding.credential,
+      );
+      if (s.installationId !== this.binding.installationId)
+        throw new Error("host_installation_mismatch");
+      this.pendingInitialization = {
+        controllerEpoch: s.controllerEpoch,
+        sessionEpoch: s.sessionEpoch,
+      };
+    }
+    // A lost boot response may already be committed. Retry the same process boot/expected epoch.
+    await this.start(
+      this.pendingInitialization.controllerEpoch,
+      this.pendingInitialization.sessionEpoch,
     );
-    if (s.installationId !== this.binding.installationId)
-      throw new Error("host_installation_mismatch");
-    await this.start(s.controllerEpoch, s.sessionEpoch);
+    this.pendingInitialization = undefined;
   }
+
   private async start(controllerEpoch: number, expectedSessionEpoch: number) {
     const boot = await this.client.boot(
       this.binding.agentId,
@@ -60,7 +81,9 @@ export class HostObservationService {
     this.controllerEpoch = controllerEpoch;
     this.sessionEpoch = boot.sessionEpoch;
   }
-  async tick() {
+  /** True only when this call collected new evidence and its heartbeat was acknowledged. */
+  async tick(): Promise<boolean> {
+    let sampled = false;
     // A lost response may already be committed. Skip its sequence when discarding stale evidence.
     if (
       this.pending &&
@@ -83,10 +106,12 @@ export class HostObservationService {
           agentId: this.binding.agentId,
           machineId: this.binding.machineId,
           bootId: this.bootId,
+          ...(this.physicalBootId ? { osBootId: this.physicalBootId } : {}),
           sequence: this.sequence,
           observedAt,
         },
       });
+      sampled = true;
     }
     try {
       const result = await this.client.heartbeat(
@@ -101,6 +126,7 @@ export class HostObservationService {
         throw new Error("host_heartbeat_receipt_mismatch");
       this.sequence++;
       this.pending = undefined;
+      return sampled;
     } catch (error) {
       if (
         error instanceof HostRequestError &&
@@ -119,18 +145,9 @@ export class HostObservationService {
         this.sequence = 0;
         this.pending = undefined;
         await this.start(current.controllerEpoch, current.sessionEpoch);
-      } else if (
-        error instanceof HostRequestError &&
-        error.status >= 400 &&
-        error.status < 500
-      )
-        throw error;
-      else throw new HostTransientError();
+        return false;
+      } else if (isTransientHostFailure(error)) throw new HostTransientError();
+      else throw error;
     }
-  }
-}
-export class HostTransientError extends Error {
-  constructor() {
-    super("host_temporarily_unavailable");
   }
 }

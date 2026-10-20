@@ -1,3 +1,8 @@
+import {
+  PowerExecutionStartSchema,
+  PowerExecutionCommandSchema,
+  PowerExecutionSchema,
+} from "./power-execution.js";
 import { z } from "zod";
 import {
   StorageRequestSchema,
@@ -117,6 +122,8 @@ export const ConnectionActivationReceiptSchema = z
   .strict();
 export const MachineInputSchema = z
   .object({
+    /** Standalone physical Host qualification, with no implied external Docker infrastructure. */
+    powerOnly: z.boolean().optional(),
     name: z.string().min(1).max(120),
     hostOs: z.enum(["linux", "windows", "macos"]),
     architecture: z.enum(["amd64", "arm64"]),
@@ -996,6 +1003,18 @@ export function managementRequestContract(
   const route = (pattern: string) =>
     new RegExp(`^${pattern.replaceAll(":id", uuid)}$`).test(path);
   if (method === "POST") {
+    if (route("/v1/machines/:id/power-executions"))
+      return {
+        request: PowerExecutionStartSchema,
+        response: PowerExecutionSchema,
+        cas: false,
+      };
+    if (route("/v1/machines/:id/power-executions/:id/command"))
+      return {
+        request: PowerExecutionCommandSchema,
+        response: PowerExecutionSchema,
+        cas: false,
+      };
     if (path === "/v1/admin/profile-grants/revoke")
       return {
         request: ProfileGrantRevokeRequestSchema,
@@ -1218,3 +1237,4 @@ export const PreparedManagementRequestSchema = z
 export type PreparedManagementRequest = z.infer<
   typeof PreparedManagementRequestSchema
 >;
+export * from "./power-execution.js";
