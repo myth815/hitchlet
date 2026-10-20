@@ -37,3 +37,21 @@ Node、容量池和活跃 Allocation 依赖树。`previewHumanUsePolicy(machineI
 `humanReserved`，attended/unattendedMaximum 指物理根池占用包络（含底座），
 不对嵌套子池再扣一次。partial Host 仅在明确有限有人预算下准入且显示未知负载；
 人工试用与这种可信观测路径有独立解释，均不宣称支持自动电源或离线截止。
+
+`client.admin.powerConfiguration(machineId)` returns the strict management power
+projection. `previewPowerPolicy` and `updatePowerPolicy` accept
+`{expectedVersion, policy}`; only the latter persists. `updatePowerCapabilities`
+accepts `{expectedMachineVersion, conclusions}` with unsupported/unverified values
+only. `updateSmartPlugBinding` accepts `{expectedMachineVersion, binding|null}`;
+the binding uses exact device ID/MAC and fixed endpoint/secret-version references,
+never plaintext credentials. `powerPreviews`, `powerPreview`, `startPowerPreview`
+and `advancePowerPreview` expose persistent, explicitly synthetic cycles. Advance
+uses `{expectedVersion,event}`; events are evaluate/cancel, simulated local
+shutdown acceptance, simulated off confirmation, bounded wake, or exact plug
+readback/off-result-unknown. All are admin-only; writes take an explicit key and
+are not automatically retried. Query the original cycle/configuration after an
+uncertain response. D22a never sends real power commands, marks hardware verified,
+changes real Machine power/admission, or creates a real Agent receipt. Restore
+supply responsibility survives cancellation, policy changes and restart with its
+original minimum 600-second off deadline. See design section13 for the full schema
+and dry-run/actual execution boundary.

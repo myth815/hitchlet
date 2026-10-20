@@ -114,6 +114,8 @@ Agent 的 `accepted/running` 回执必须没有 output。`succeeded` 表示受�
 
 v1.3没有增加表或常驻服务。首发工程只需contracts和sdk两个共享包，纯领域、数据库和Provider代码先放在control内；接口文件分层不要求拆成更多npm包。Docker仍先实现，VM只保留后置合同，现有Docker专属网络执行协议也不视为VM已实现。接口文件的存在不代表运行能力已经交付。
 
+D22a 电源管理协议的唯一运行时权威为 `packages/contracts/src/power.ts`，仅从 admin 子入口导出；`domain.ts` 的 PowerPolicy/FaultRecoveryPolicy/SmartPlugBinding/PowerCapabilities 为同一来源的 type-only re-export。D22a 固定 dryRun=true，能力/绑定管理不能写 verified，合成回执不进入真实 Agent 账本。本文的 ShutdownPermit/ShutdownAcceptedReceipt 与 MachinePowerStatus 仍为 D22b 的真实执行设计，不是 D22a API。实际边界、路由和恢复语义见设计第13节的 D22a说明。
+
 ## 检查方式
 
 使用TypeScript strict、noUncheckedIndexedAccess、exactOptionalPropertyTypes、noEmit检查总入口、[contracts.typecheck.ts](contracts.typecheck.ts)和使用示例。类型回归覆盖公开边界、固定租期、互斥状态、执行上下文及Agent结果映射；SQLite校验覆盖容量、延迟绑定、历史清理和终态约束。当前准确检查数见[验证记录](../VERIFICATION.md)，不以静态通过替代运行时或实机验收。

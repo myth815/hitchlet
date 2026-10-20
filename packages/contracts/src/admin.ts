@@ -865,3 +865,5 @@ export const AdminSchemas = {
   AdminImageAliasViewSchema,
   AdminCacheOperationReceiptSchema,
 };
+
+export * from "./power.js";

@@ -50,7 +50,7 @@ describe("SQLite storage worker", () => {
     opened.push(restarted);
     expect(
       await restarted.get("SELECT count(*) AS count FROM schema_migrations"),
-    ).toMatchObject({ count: 5n });
+    ).toMatchObject({ count: 6n });
   });
 
   it("enforces foreign keys, immutable rows, and active grant cleanup guards", async () => {
@@ -246,10 +246,10 @@ describe("SQLite storage worker", () => {
     opened.push(storage);
     expect(
       await storage.get("SELECT count(*) AS count FROM schema_migrations"),
-    ).toMatchObject({ count: 5n });
+    ).toMatchObject({ count: 6n });
     expect(
       await storage.get<{ user_version: bigint }>("PRAGMA user_version"),
-    ).toMatchObject({ user_version: 5n });
+    ).toMatchObject({ user_version: 6n });
     expect(
       await storage.get(
         "SELECT name FROM pragma_table_info('gui_sessions') WHERE name='source_credential_id'",
@@ -312,7 +312,7 @@ describe("SQLite storage worker", () => {
       ),
     ).toEqual({ n: 1n });
     expect(await upgraded.get("PRAGMA user_version")).toEqual({
-      user_version: 5n,
+      user_version: 6n,
     });
     expect(
       (

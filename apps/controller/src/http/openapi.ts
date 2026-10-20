@@ -14,6 +14,7 @@ import {
   hostRevokeRequestSchema,
   hostSnapshotViewSchema,
 } from "@hitchlet/contracts/internal";
+import { PowerSchemas } from "@hitchlet/contracts/admin";
 import { AdminSchemas } from "./admin-protocol.js";
 
 export function openApiDocument() {
@@ -121,6 +122,85 @@ export function openApiDocument() {
     openapi: "3.1.0",
     info: { title: "Hitchlet API", version: "1.0.0" },
     paths: {
+      "/v1/machines/{machineId}/power": {
+        get: adminOperation(
+          "Read power configuration and real-execution blockers",
+          "200",
+          undefined,
+          PowerSchemas.PowerConfigurationSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/power-policy/dry-run": {
+        post: adminOperation(
+          "Preview isolated power policy without saving",
+          "200",
+          PowerSchemas.PowerConfigurationUpdateSchema,
+          PowerSchemas.PowerPolicyPreviewSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/power-policy": {
+        put: adminOperation(
+          "CAS save dry-run power policy",
+          "200",
+          PowerSchemas.PowerConfigurationUpdateSchema,
+          PowerSchemas.PowerConfigurationSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/power-capabilities": {
+        put: adminOperation(
+          "CAS save unsupported/unverified capability conclusions; cannot verify hardware",
+          "200",
+          PowerSchemas.PowerCapabilityUpdateSchema,
+          PowerSchemas.PowerConfigurationSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/smart-plug-binding": {
+        put: adminOperation(
+          "CAS bind exclusive plug identity and fixed secret reference",
+          "200",
+          PowerSchemas.SmartPlugBindingUpdateSchema,
+          PowerSchemas.PowerConfigurationSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/power-previews": {
+        get: adminOperation(
+          "List isolated persistent simulations",
+          "200",
+          undefined,
+          PowerSchemas.PowerPreviewStateSchema.array(),
+          [pathId("machineId")],
+        ),
+        post: adminOperation(
+          "Start isolated persistent simulation; never executes power",
+          "201",
+          PowerSchemas.PowerPreviewStartSchema,
+          PowerSchemas.PowerPreviewStateSchema,
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/power-previews/{previewId}": {
+        get: adminOperation(
+          "Read isolated simulation",
+          "200",
+          undefined,
+          PowerSchemas.PowerPreviewStateSchema,
+          [pathId("machineId"), pathId("previewId")],
+        ),
+      },
+      "/v1/machines/{machineId}/power-previews/{previewId}/advance": {
+        post: adminOperation(
+          "CAS advance synthetic power event; never a real receipt",
+          "200",
+          PowerSchemas.PowerPreviewAdvanceSchema,
+          PowerSchemas.PowerPreviewStateSchema,
+          [pathId("machineId"), pathId("previewId")],
+        ),
+      },
       "/v1/agents/pairings": {
         post: adminOperation(
           "Create or replace a disabled Host single-use pairing",

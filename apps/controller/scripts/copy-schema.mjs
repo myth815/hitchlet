@@ -25,3 +25,8 @@ await copyFile(
   resolve(source, "005-host-observations.sql"),
   resolve(target, "005-host-observations.sql"),
 );
+
+await copyFile(
+  resolve(source, "006-power-dry-run.sql"),
+  resolve(target, "006-power-dry-run.sql"),
+);

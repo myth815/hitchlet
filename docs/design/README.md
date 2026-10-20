@@ -538,6 +538,33 @@ Hold 的用途与容量观测分开：`infrastructure`（包括外部常开 Dock
 
 SQLite适配器先用一个确定性本地读取冻结上述规则的所有输入，再在同一 `BEGIN IMMEDIATE` 写事务内比较完整输入，之后才预留 tenant/validation 或更新策略。精确比较覆盖 Machine/Node/pool、所有未释放 Claim 与必需底座、Hold、Host快照/agent栅栏和controller epoch；因此不增加 Machine.version 的心跳竞态也不能绕过。事务内无网络调用。GUI每5秒有界刷新且不覆盖编辑草稿，身份/权限、连接、Machine版本或预算占用变化会使旧预算预演失效；普通心跳/压力刷新保留预算预演，准入解释标明来自历史观测，保存始终重新核对。断连明确标成历史/未知并禁用保存，文案不将连接故障误称为管理员权限变化。
 
+### D22a 运行时边界与持久预演
+
+D22a 策略、能力结论、插座绑定和预演 DTO 由 `packages/contracts/src/power.ts` 的严格运行时 schema 唯一定义，设计合同仅 re-export 相同类型。策略保存在 `policies` 的逐机 `power:<machineId>` 记录，版本独立 CAS，默认 `enabled=false`、`dryRun=true`、连续空闲1800秒、正常节能禁止强制切电。D22a 固定 `dryRun=true`，不能经配置开启真实动作。sleep 值仅保留后置配置语义，启动睡眠预演返回 `execution_mode_unsupported`，GUI 不允许选择睡眠动作；睡眠唤醒不能混作关机冷启动。
+
+能力管理只接受 unsupported/unverified 结论与可选唤醒路由引用，不接受 verified 或上传报告直接启用。已有 JSON 中的 verified 字符串在 D22a 也仅投影为 unverified。实测报告接受、真实 prepared token、Agent 关机回执、WOL、插座适配器及逐机能力启用均留 D22b；`executionAllowed=false` 与实际执行阻塞原因始终显示。纯领域合成测试可传入 verified 能力以检查安全 WOL 规则，但不构成任何机器已验证的证据。
+
+持久预演复用 `operations.kind='power.dry-run'` 与 events/audit，固定 `dryRun=true`、`executable=false`；虚拟 epoch、drain、受理 ID、断电读回和恢复供电义务只存在该 Operation JSON 内。它们不写 `agent_receipts` 或真实 Machine 的准入、电源、epoch 字段，不阻止真实 Ticket/validation 的 D21 on+healthy 路径，也不签发可执行许可。每机仅一项未决电源意图；故障事件 ID 跨终态去重，不因失败重复切电。
+
+连续空闲须显式 evaluate，GUI 打开面板且有写权限时每5秒采样。关闭页面不在后台推进正常空闲关机；条件变化或采样中断超过有效观测期（至多30秒）清空计时。排空只增加虚拟 epoch；最终复核要求最近5秒评估、完整新鲜无人证据和完整账本再次满足。SQLite 在同一短写事务比较 Machine/Node/pool、未释放 Claim、准备/回收 Allocation、依赖 Hold、未决操作、Host/Agent/控制器栅栏与策略的全部输入；事务内无网络。历史已完成且无依赖的 Allocation/Operation 不进入复核材料。虚拟受理后仅自己的受理 ID、未被新观测/epoch/计划作废、随后心跳停止且至少120秒保护期才能成为 off_expected，其虚拟 observedPower 仍为 unknown；off_confirmed 须独立模拟证据。普通 unknown 无自动唤醒，expected-off 还须独立安全 WOL 验证；次数、30秒间隔与首次固定的总截止共同限界。
+
+插座绑定位于 `machines.management_json.smartPlugBinding`，CAS 使用 Machine version。设备 ID 为无前导零十进制字符串，MAC 规范化小写；迁移006为绑定 ID、设备 ID、大小写无关 MAC 建立全局唯一索引，每机一个完整绑定。只接受固定 `endpoint:` 与 `secret:<32hex>` 引用，无 token 输入。存在未完成电源意图时拒绝改绑/删除；恢复周期另冻结绑定与秘密版本，D22a 不解析秘密或连接设备。
+
+恢复先 inspect 精确身份；off 结果未知保持 inspect_off，不再切电。确认 off 时固定原 `restoreNotBeforeMs`（至少600秒），重复读回不重置。进入切电意图即持久保留恢复责任，原请求取消、策略禁用、控制器或机器 epoch 变化均不能丢弃；原先已 off 则直接恢复供电，不新增切电。启动时和每5秒有界后台检查会把到期虚拟义务推进 on_pending，无 GUI 仍继续，但不实际发送 on。供电 on 不等于整机就绪；随后按当前认证的新 boot、恢复供电后的完整新鲜观测及健康依赖只读复核，不复用旧 off 许可。真实准入字段始终不由沙盘修改。
+
+端点限全权限 admin，写入校验 CSRF/CAS，响应均来自共享 schema。SDK 管理写入不自动重试；未知响应后查询当前配置或原预演。路径前缀 `/v1/machines/{machineId}`：
+
+| 路径 | 行为 |
+| --- | --- |
+| `GET /power` | 策略、能力、绑定、执行阻塞与活动预演引用 |
+| `POST /power-policy/dry-run` | `{expectedVersion, policy}` 无写预演 |
+| `PUT /power-policy` | 同体保存独立版本策略 |
+| `PUT /power-capabilities` | `{expectedMachineVersion, conclusions}`，不能写 verified |
+| `PUT /smart-plug-binding` | `{expectedMachineVersion, binding|null}` |
+| `GET/POST /power-previews` | 历史 / 启动隔离 idle_shutdown 或 fault_recovery |
+| `GET /power-previews/{previewId}` | 原预演查询与未知响应恢复 |
+| `POST /power-previews/{previewId}/advance` | `{expectedVersion,event}` 合成事件，不是执行端回执 |
+
 ### 13.1 智能插座故障恢复
 
 插座恢复与空闲节能独立。插座已断开供电时，核对绑定后可单独请求恢复供电；插座仍为 on 时，WOL 超时或 Agent 失联不能直接触发 off。先排除网络、管理连接、Docker/底座等可局部恢复的问题；确认为机器级故障后才受理 `faultRecovery`。业务失败不构成重启宿主的理由。

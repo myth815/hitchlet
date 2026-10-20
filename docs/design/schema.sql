@@ -706,6 +706,16 @@ CREATE UNIQUE INDEX operations_installation_step
 
 -- A pending proposal does not extend Lease.expires_at_ms. Final acknowledgement
 -- rechecks Lease CAS, Ticket state and claim_by_ms in one short transaction.
+CREATE UNIQUE INDEX machine_plug_binding_id ON machines(json_extract(management_json,'$.smartPlugBinding.id'))
+  WHERE json_extract(management_json,'$.smartPlugBinding.id') IS NOT NULL;
+CREATE UNIQUE INDEX machine_plug_device_id ON machines(json_extract(management_json,'$.smartPlugBinding.device.deviceId'))
+  WHERE json_extract(management_json,'$.smartPlugBinding.device.deviceId') IS NOT NULL;
+CREATE UNIQUE INDEX machine_plug_mac ON machines(lower(json_extract(management_json,'$.smartPlugBinding.device.macAddress')))
+  WHERE json_extract(management_json,'$.smartPlugBinding.device.macAddress') IS NOT NULL;
+-- Dry-run mutex is isolated from allocation workers. Future real power intents share this fence.
+CREATE UNIQUE INDEX machine_active_power_intent ON operations(machine_id)
+  WHERE machine_id IS NOT NULL AND kind LIKE 'power.%' AND state IN ('planned','running','unknown');
+
 CREATE TABLE lease_renewals (
   id TEXT PRIMARY KEY,
   lease_id TEXT NOT NULL REFERENCES leases(id) ON DELETE RESTRICT,
@@ -977,6 +987,11 @@ INSERT INTO schema_migrations(version, description, applied_at_ms)
 VALUES (3, 'Protect tested image evidence and completed validation reports', CAST(unixepoch('now') AS INTEGER) * 1000);
 INSERT INTO schema_migrations(version, description, applied_at_ms)
 VALUES (4, 'Separate managed resource entity UUIDs from native Provider identities', CAST(unixepoch('now') AS INTEGER) * 1000);
+
+INSERT INTO schema_migrations(version, description, applied_at_ms)
+VALUES (5, 'Persist physical Host enrollment, fenced boots and authenticated observations', CAST(unixepoch('now') AS INTEGER) * 1000);
+INSERT INTO schema_migrations(version, description, applied_at_ms)
+VALUES (6, 'Isolated power previews and exclusive smart plug identity', CAST(unixepoch('now') AS INTEGER) * 1000);
 
 COMMIT;
 

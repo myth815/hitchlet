@@ -1153,7 +1153,11 @@ describe("persistent simulator lifecycle", () => {
       .prepare("UPDATE managed_resources SET provider_id=NULL WHERE id=?")
       .run(child.provider_id);
     raw.exec(
-      `DROP TABLE agent_boots;
+      `DROP INDEX machine_plug_binding_id;
+       DROP INDEX machine_plug_device_id;
+       DROP INDEX machine_plug_mac;
+       DROP INDEX machine_active_power_intent;
+       DROP TABLE agent_boots;
        ALTER TABLE agents DROP COLUMN host_identity;
        ALTER TABLE agents DROP COLUMN enrollment_hash;
        ALTER TABLE agents DROP COLUMN enrollment_expires_at_ms;

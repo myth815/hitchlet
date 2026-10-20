@@ -421,7 +421,9 @@ export function evaluateMachineAdmission(
       ),
     ]),
   ) as Resources;
-  const shutdownReasons = ["Automatic power is not implemented (D22a)"];
+  const shutdownReasons = [
+    "Actual power execution is disabled pending D22b acceptance",
+  ];
   if (humanPresence !== "absent")
     shutdownReasons.push(`Human presence is ${humanPresence}`);
   if (snapshot?.probeStatus !== "complete" || !fresh)

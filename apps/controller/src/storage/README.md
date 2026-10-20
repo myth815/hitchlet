@@ -10,8 +10,8 @@ for the worker to close SQLite and release that lock.
 `src/storage/migrations/001-initial.sql` is the frozen v1 baseline. Migration
 002 adds the browser session's issuing credential foreign key; older sessions
 have no lineage and are rejected. `docs/design/schema.sql` shows the complete
-current schema. The controller build copies both migrations into `dist`, and
-the storage tests check baseline bytes and the v1-to-v2 upgrade. The
+current schema. The controller build copies all migrations into `dist`, and
+storage tests check frozen baseline bytes and historical upgrade paths. The
 `schema_migrations` table is authoritative; `PRAGMA user_version` mirrors the
 latest applied version. Unknown migration versions fail closed.
 
@@ -37,3 +37,15 @@ validation and management previews. Claim insertion and policy updates compare
 the whole input inside the same short write batch, so a heartbeat, policy,
 Hold or sibling allocation change between reading and writing causes rollback.
 Historical released allocations are excluded unless still backing a child pool.
+
+D22a adds migration006 only: exclusive indexes for plug binding/device ID/MAC
+in Machine management JSON and one unresolved power intent per Machine in
+Operations. Migrations001–005 remain unchanged. Power policies use existing
+versioned policies.config_json; isolated `power.dry-run` Operations hold virtual
+state, accepted IDs, frozen binding versions and restore duties. They never
+write real Machine admission/power/epoch fields or agent_receipts. The allocation
+worker continues to recognize only allocation.provision/cleanup. Power fences
+include active/preparing/cleanup allocations even before a Claim exists, pending
+operations, dependency/Host inputs and policy version. Completed unrelated
+history is excluded. Due restore duties are continued every five seconds without
+network/device calls; cancellation/restart never resets their original deadline.

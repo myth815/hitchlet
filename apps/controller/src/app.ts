@@ -1,3 +1,5 @@
+import { PowerService, startPowerRecovery } from "./application/power.js";
+import { PowerSchemas } from "@hitchlet/contracts/admin";
 import { HealthResponseSchema } from "@hitchlet/contracts/health";
 import Fastify, { type FastifyInstance } from "fastify";
 import fastifyStatic from "@fastify/static";
@@ -230,6 +232,129 @@ export async function buildApp(
         throw new AuthFailure("forbidden");
       return actor;
     };
+    const power = new PowerService(runtime.storage);
+    await power.recover();
+    const stopPowerRecovery = startPowerRecovery(power, () =>
+      app.log.warn(
+        "Power preview restoration check failed; obligation remains persisted",
+      ),
+    );
+    app.addHook("onClose", stopPowerRecovery);
+    app.get("/v1/machines/:machineId/power", async (request, reply) => {
+      await requireAdmin(request);
+      reply.header("Cache-Control", "no-store");
+      return PowerSchemas.PowerConfigurationSchema.parse(
+        await power.configuration(uuidParam(request.params, "machineId")),
+      );
+    });
+    app.post(
+      "/v1/machines/:machineId/power-policy/dry-run",
+      async (request, reply) => {
+        await requireAdmin(request);
+        reply.header("Cache-Control", "no-store");
+        return PowerSchemas.PowerPolicyPreviewSchema.parse(
+          await power.previewPolicy(
+            uuidParam(request.params, "machineId"),
+            parseInput(
+              PowerSchemas.PowerConfigurationUpdateSchema,
+              request.body,
+            ),
+          ),
+        );
+      },
+    );
+    app.put("/v1/machines/:machineId/power-policy", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      const result = await power.configure(
+        uuidParam(request.params, "machineId"),
+        parseInput(PowerSchemas.PowerConfigurationUpdateSchema, request.body),
+        { operatorId: actor.consumerId, requestId: request.id },
+      );
+      reply
+        .header("Cache-Control", "no-store")
+        .header("ETag", `"${result.version}"`);
+      return PowerSchemas.PowerConfigurationSchema.parse(result);
+    });
+    app.put(
+      "/v1/machines/:machineId/power-capabilities",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        reply.header("Cache-Control", "no-store");
+        return PowerSchemas.PowerConfigurationSchema.parse(
+          await power.capabilities(
+            uuidParam(request.params, "machineId"),
+            parseInput(PowerSchemas.PowerCapabilityUpdateSchema, request.body),
+            { operatorId: actor.consumerId, requestId: request.id },
+          ),
+        );
+      },
+    );
+    app.put(
+      "/v1/machines/:machineId/smart-plug-binding",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        reply.header("Cache-Control", "no-store");
+        return PowerSchemas.PowerConfigurationSchema.parse(
+          await power.bind(
+            uuidParam(request.params, "machineId"),
+            parseInput(PowerSchemas.SmartPlugBindingUpdateSchema, request.body),
+            { operatorId: actor.consumerId, requestId: request.id },
+          ),
+        );
+      },
+    );
+    app.get(
+      "/v1/machines/:machineId/power-previews",
+      async (request, reply) => {
+        await requireAdmin(request);
+        reply.header("Cache-Control", "no-store");
+        return PowerSchemas.PowerPreviewStateSchema.array().parse(
+          await power.list(uuidParam(request.params, "machineId")),
+        );
+      },
+    );
+    app.post(
+      "/v1/machines/:machineId/power-previews",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        reply.header("Cache-Control", "no-store").code(201);
+        return PowerSchemas.PowerPreviewStateSchema.parse(
+          await power.start(
+            uuidParam(request.params, "machineId"),
+            parseInput(PowerSchemas.PowerPreviewStartSchema, request.body),
+            { operatorId: actor.consumerId, requestId: request.id },
+          ),
+        );
+      },
+    );
+    app.get(
+      "/v1/machines/:machineId/power-previews/:previewId",
+      async (request, reply) => {
+        await requireAdmin(request);
+        reply.header("Cache-Control", "no-store");
+        return PowerSchemas.PowerPreviewStateSchema.parse(
+          await power.get(
+            uuidParam(request.params, "machineId"),
+            uuidParam(request.params, "previewId"),
+          ),
+        );
+      },
+    );
+    app.post(
+      "/v1/machines/:machineId/power-previews/:previewId/advance",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        reply.header("Cache-Control", "no-store");
+        return PowerSchemas.PowerPreviewStateSchema.parse(
+          await power.advance(
+            uuidParam(request.params, "machineId"),
+            uuidParam(request.params, "previewId"),
+            parseInput(PowerSchemas.PowerPreviewAdvanceSchema, request.body),
+            { operatorId: actor.consumerId, requestId: request.id },
+          ),
+        );
+      },
+    );
     const hosts = new HostAgents(runtime.storage);
     app.post("/v1/agents/pairings", async (request, reply) => {
       const actor = await requireAdmin(request, true);

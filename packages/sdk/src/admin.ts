@@ -1,5 +1,6 @@
 import {
   AdminSchemas,
+  PowerSchemas,
   type AdminImageValidationRequest,
 } from "@hitchlet/contracts/admin";
 import type { HttpTransport } from "./transport.js";
@@ -7,6 +8,134 @@ import type { HttpTransport } from "./transport.js";
 /** Narrow management API backed by the controller's shared runtime schemas. */
 export class AdminCommands {
   constructor(private readonly http: HttpTransport) {}
+  /** Management-only power projection; executable is always false in D22a. */
+  powerConfiguration(machineId: string, isCancelled?: () => boolean) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power`,
+      "GET",
+      undefined,
+      (v) => PowerSchemas.PowerConfigurationSchema.parse(v),
+      isCancelled ? { isCancelled } : {},
+    );
+  }
+  /** Evaluates a proposed policy without persisting it or starting a power cycle. */
+  previewPowerPolicy(
+    machineId: string,
+    body: import("@hitchlet/contracts/admin").PowerConfigurationUpdate,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-policy/dry-run`,
+      "POST",
+      PowerSchemas.PowerConfigurationUpdateSchema.parse(body),
+      (v) => PowerSchemas.PowerPolicyPreviewSchema.parse(v),
+      {
+        key: crypto.randomUUID(),
+        retry: false,
+        ...(isCancelled ? { isCancelled } : {}),
+      },
+    );
+  }
+  /** CAS write; an unknown response must be resolved by reading configuration, never automatic retry. */
+  updatePowerPolicy(
+    machineId: string,
+    body: import("@hitchlet/contracts/admin").PowerConfigurationUpdate,
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-policy`,
+      "PUT",
+      PowerSchemas.PowerConfigurationUpdateSchema.parse(body),
+      (v) => PowerSchemas.PowerConfigurationSchema.parse(v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
+  /** Records only unsupported/unverified conclusions. This never certifies hardware. */
+  updatePowerCapabilities(
+    machineId: string,
+    body: import("@hitchlet/contracts/admin").PowerCapabilityUpdate,
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-capabilities`,
+      "PUT",
+      PowerSchemas.PowerCapabilityUpdateSchema.parse(body),
+      (v) => PowerSchemas.PowerConfigurationSchema.parse(v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
+  /** One exclusive device identity per machine; fixed secret reference only, never plaintext. */
+  updateSmartPlugBinding(
+    machineId: string,
+    body: import("@hitchlet/contracts/admin").SmartPlugBindingUpdate,
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/smart-plug-binding`,
+      "PUT",
+      PowerSchemas.SmartPlugBindingUpdateSchema.parse(body),
+      (v) => PowerSchemas.PowerConfigurationSchema.parse(v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
+  /** Lists persistent sandbox cycles, separate from real Machine state and Agent receipts. */
+  powerPreviews(machineId: string, isCancelled?: () => boolean) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-previews`,
+      "GET",
+      undefined,
+      (v) => PowerSchemas.PowerPreviewStateSchema.array().parse(v),
+      isCancelled ? { isCancelled } : {},
+    );
+  }
+  /** Retrieves a sandbox cycle after restart or an uncertain management response. */
+  powerPreview(
+    machineId: string,
+    previewId: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-previews/${encodeURIComponent(previewId)}`,
+      "GET",
+      undefined,
+      (v) => PowerSchemas.PowerPreviewStateSchema.parse(v),
+      isCancelled ? { isCancelled } : {},
+    );
+  }
+  /** Starts one isolated intent; fault incidents have stable IDs and cannot be cut twice. */
+  startPowerPreview(
+    machineId: string,
+    body: import("@hitchlet/contracts/admin").PowerPreviewStart,
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-previews`,
+      "POST",
+      PowerSchemas.PowerPreviewStartSchema.parse(body),
+      (v) => PowerSchemas.PowerPreviewStateSchema.parse(v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
+  /** CAS appends a synthetic event; cancellation retains an existing restoration duty. */
+  advancePowerPreview(
+    machineId: string,
+    previewId: string,
+    body: import("@hitchlet/contracts/admin").PowerPreviewAdvance,
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/power-previews/${encodeURIComponent(previewId)}/advance`,
+      "POST",
+      PowerSchemas.PowerPreviewAdvanceSchema.parse(body),
+      (v) => PowerSchemas.PowerPreviewStateSchema.parse(v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
   nodes(isCancelled?: () => boolean) {
     return this.http.request(
       "/v1/nodes",

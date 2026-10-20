@@ -126,86 +126,11 @@ export interface HumanPresenceReport extends ObservationMetadata {
 import type { HumanUsePolicy } from '../../../packages/contracts/src/admin';
 export type { HumanUsePolicy } from '../../../packages/contracts/src/admin';
 
-/** 逐机启用的电源规则；未经实测的唤醒路径不能被配置视为已支持。 */
-export interface PowerPolicy {
-  /** 是否启用该配置；不代表依赖能力已通过验证。 */
-  readonly enabled: boolean;
-  /** 仅评估并记录解释，不执行真实电源动作。 */
-  readonly dryRun: boolean;
-  /** 连续满足全部空闲条件的秒数；条件变化重置。 */
-  readonly idleSeconds: number;
-  /** 空闲时拟执行的动作；none 表示不自动动作。 */
-  readonly idleAction: 'none' | 'sleep' | 'shutdown';
-  /** 是否允许新需求触发已验证的唤醒路径。 */
-  readonly wakeOnDemand: boolean;
-  /** 一次唤醒周期允许的总秒数。 */
-  readonly wakeTimeoutSeconds: number;
-  /** 同周期的最大唤醒发送次数。 */
-  readonly maximumWakeAttempts: number;
-  /** 本平台停机受理后、进入可唤醒推断的最短保护间隔，单位秒。 */
-  readonly expectedOffGuardSeconds: number; // 默认 120；仅适用于有持久化 shutdown accepted 回执的机器。
-  /** 正常节能关机固定 false；故障切电仅由独立 faultRecovery 策略授权。 */
-  readonly permitForcedPhysicalPowerOff: false;
-  /** 可选故障恢复；省略表示禁用，与空闲关机和普通 WOL 分开决策。 */
-  readonly faultRecovery?: FaultRecoveryPolicy;
-}
-
-/** 机器级故障的交流电恢复策略；不是租客或 Provider 可自行触发的动作。 */
-export type FaultRecoveryPolicy = {
-  /** 明确关闭故障切电。 */
-  readonly mode: 'disabled';
-} | {
-  /** 使用已登记的独占插座切电并恢复；优先执行有界 WOL/局部恢复。 */
-  readonly mode: 'smart_plug_cycle';
-  /** 固定供电对象与设备身份，不从租客请求接收地址或凭据。 */
-  readonly plugBindingId: Id;
-  /** 默认 operator；automatic_verified 须有独立证据排除受保护占用并通过逐机验收。 */
-  readonly authorization: 'operator' | 'automatic_verified';
-  /** 断电后最短等待秒数；当前安装默认 600，不因进程重启重新开始计时。 */
-  readonly minimumOffSeconds: number;
-  /** 同一故障事件只允许一个切电周期；失败转人工处理，不循环重启。 */
-  readonly maximumCyclesPerIncident: 1;
-};
-
-/** 带外电源设备与一台机器的专属绑定；属于宿主控制，不是第四种资源后端。 */
-export interface SmartPlugBinding extends Versioned {
-  /** 绑定记录的稳定标识。 */
-  readonly id: Id;
-  /** 唯一供电对象；同一插座不得同时绑定多台机器。 */
-  readonly machineId: Id;
-  /** 首个适配器；后续其他插座沿用相同恢复用例。 */
-  readonly adapter: 'xiaomi_miio_lan';
-  /** 实物核对的设备身份；型号不能单独作为身份。 */
-  readonly device: { readonly model: 'cuco.plug.v3'; readonly deviceId: string; readonly macAddress: string };
-  /** 安装内管理端点引用，不进入公开消费者 DTO。 */
-  readonly endpointRef: string;
-  /** 固定 token 版本引用；不保存或输出 token 明文。 */
-  readonly credentialVersionRef: Id;
-  /** 已核实只给目标机器供电；未验证不得执行切电。 */
-  readonly dedicatedSupply: Verification;
-  /** 固件/系统设置及实际交流电恢复后自动开机的验证结论。 */
-  readonly acPowerOn: Verification;
-  /** 独立于 WOL 的端到端恢复证据。 */
-  readonly verificationReportIds: readonly Id[];
-}
-
-/** 不同电源动作的独立验证结果；睡眠唤醒不等同于关机后冷启动。 */
-export interface PowerCapabilities {
-  /** 正常睡眠能力的验证状态。 */
-  readonly sleep: Verification;
-  /** 正常关机能力的验证状态。 */
-  readonly normalShutdown: Verification;
-  /** 从睡眠恢复的验证状态。 */
-  readonly wakeFromSleep: Verification;
-  /** 从已关机状态启动的验证状态。 */
-  readonly coldBoot: Verification;
-  /** 对可能仍开机的设备发送 WOL 是否已验证安全。 */
-  readonly wolWhilePossiblyOn: Verification; // 必须实测安全；不等同于 coldBoot。
-  /** 常驻唤醒发送端的引用；null 表示无可用路径。 */
-  readonly wakeRouteRef: Id | null;
-  /** 支持能力结论的可追溯报告标识。 */
-  readonly verificationReportIds: readonly Id[];
-}
+/** D22a power configuration and management types come from the runtime schema authority.
+ * D22a fixes dryRun=true; capability conclusions/bindings cannot assert real verification.
+ * Real prepared permits, Agent receipts and MachinePowerStatus below remain D22b design only. */
+import type { PowerPolicy, PowerCapabilities } from '../../../packages/contracts/src/power';
+export type { PowerPolicy, FaultRecoveryPolicy, SmartPlugBinding, PowerCapabilities } from '../../../packages/contracts/src/power';
 
 /** 电源流程状态。off_expected 为本平台停机后的推断，off_confirmed 才有可信断电证据。 */
 export type PowerPhase = 'idle' | 'draining' | 'shutdown_requested' | 'off_expected' | 'off_confirmed' | 'unknown' | 'waking';
