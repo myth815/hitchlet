@@ -25,6 +25,10 @@ import { AdminCommands } from "./admin.js";
 export { ComputeClientError } from "./transport.js";
 export { AdminCommands } from "./admin.js";
 export type {
+  SystemHealth,
+  BackupView,
+  CredentialRotationRequest,
+  RecoveryApproval,
   AdminImageAliasView,
   AdminImageVersionSummary,
   AdminValidationHistoryItem,

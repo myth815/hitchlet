@@ -1,3 +1,21 @@
+import {
+  MaintenanceService,
+  admissionOpen,
+} from "./application/maintenance.js";
+import { approveRecovery } from "./application/recovery.js";
+import {
+  DiagnosticsSchema,
+  CredentialListSchema,
+  CredentialQuerySchema,
+  SystemHealthSchema,
+  AdmissionPauseSchema,
+  BackupViewSchema,
+  BackupListSchema,
+  BackupCreateSchema,
+  CredentialRotationSchema,
+  CredentialReceiptSchema,
+  RecoveryApprovalSchema,
+} from "@hitchlet/contracts/admin";
 import { PowerService, startPowerRecovery } from "./application/power.js";
 import { PowerSchemas } from "@hitchlet/contracts/admin";
 import { HealthResponseSchema } from "@hitchlet/contracts/health";
@@ -101,6 +119,8 @@ import { z, ZodError, type ZodType } from "zod";
 
 export interface AppRuntime {
   readonly storage?: Storage;
+  readonly maintenance?: MaintenanceService;
+  readonly logStream?: NodeJS.WritableStream;
   readonly recoveryState?: () => "ready" | "recovering" | "unavailable";
   readonly secrets?: LocalSecretStore;
 }
@@ -113,6 +133,7 @@ export async function buildApp(
     genReqId: () => randomUUID(),
     logger: {
       level: config.LOG_LEVEL,
+      ...(runtime.logStream ? { stream: runtime.logStream } : {}),
       redact: {
         paths: ["req.headers.*"],
         censor: "[REDACTED]",
@@ -157,7 +178,11 @@ export async function buildApp(
           : 403
         : error instanceof RangeError
           ? 422
-          : errorCode === "STORAGE_BUSY"
+          : errorCode === "STORAGE_MAINTENANCE" ||
+              errorCode === "STORAGE_FULL" ||
+              errorCode === "STORAGE_IO" ||
+              errorCode === "STORAGE_READ_ONLY" ||
+              errorCode === "STORAGE_BUSY"
             ? 503
             : errorCode === "STORAGE_CAS_FAILED"
               ? 412
@@ -172,7 +197,9 @@ export async function buildApp(
           : status === 400 || status === 413 || status === 415 || status === 422
             ? "invalid_request"
             : status === 503
-              ? "storage_unavailable"
+              ? errorCode === "STORAGE_MAINTENANCE"
+                ? "admission_paused"
+                : "storage_unavailable"
               : status === 412
                 ? "version_conflict"
                 : status === 409
@@ -199,6 +226,22 @@ export async function buildApp(
   app.get("/v1/openapi.json", async () => openApiDocument());
 
   if (runtime.storage) {
+    const maintenance =
+      runtime.maintenance ??
+      new MaintenanceService(
+        runtime.storage,
+        config.DATA_DIR,
+        {
+          lowWaterMiB: config.DISK_LOW_WATER_MIB,
+          reserveMiB: config.DISK_RESERVE_MIB,
+        },
+        Date.now,
+        undefined,
+        {
+          dailyCopies: config.BACKUP_DAILY_COPIES,
+          weeklyCopies: config.BACKUP_WEEKLY_COPIES,
+        },
+      );
     const auth = new Authenticator(runtime.storage);
     const commands = new TicketService({ storage: runtime.storage });
     const queries = new TicketQueries(runtime.storage);
@@ -232,6 +275,87 @@ export async function buildApp(
         throw new AuthFailure("forbidden");
       return actor;
     };
+    app.get("/v1/system/diagnostics", async (request, reply) => {
+      await requireAdmin(request);
+      reply.header("Cache-Control", "no-store");
+      return DiagnosticsSchema.parse(await maintenance.diagnostics());
+    });
+    app.get("/v1/system/health", async (request, reply) => {
+      await requireAdmin(request);
+      reply.header("Cache-Control", "no-store");
+      return SystemHealthSchema.parse(await maintenance.health());
+    });
+    app.get("/v1/system/backups", async (request, reply) => {
+      await requireAdmin(request);
+      reply.header("Cache-Control", "no-store");
+      return BackupListSchema.parse(await maintenance.backups());
+    });
+    app.post("/v1/system/backups", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      parseInput(BackupCreateSchema, request.body);
+      const key = request.headers["idempotency-key"];
+      if (typeof key !== "string" || !key || key.length > 200)
+        throw new RangeError("Idempotency-Key required");
+      reply.header("Cache-Control", "no-store");
+      return BackupViewSchema.parse(
+        await maintenance.backup(key, actor.consumerId, request.id),
+      );
+    });
+    app.post("/v1/system/admission/pause", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      reply.header("Cache-Control", "no-store");
+      return SystemHealthSchema.parse(
+        await maintenance.pause(
+          parseInput(AdmissionPauseSchema, request.body).reason,
+          actor.consumerId,
+          request.id,
+        ),
+      );
+    });
+    app.post("/v1/system/admission/resume", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      reply.header("Cache-Control", "no-store");
+      return SystemHealthSchema.parse(
+        await maintenance.resume(
+          parseInput(AdmissionPauseSchema, request.body).reason,
+          actor.consumerId,
+          request.id,
+        ),
+      );
+    });
+    app.post("/v1/system/recovery/approve", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      const body = parseInput(RecoveryApprovalSchema, request.body);
+      await approveRecovery(
+        runtime.storage!,
+        actor.consumerId,
+        request.id,
+        body.reason,
+      );
+      reply.header("Cache-Control", "no-store");
+      return SystemHealthSchema.parse(await maintenance.health());
+    });
+    app.get("/v1/system/credentials", async (request, reply) => {
+      await requireAdmin(request);
+      const query = parseInput(CredentialQuerySchema, request.query);
+      reply.header("Cache-Control", "no-store");
+      return CredentialListSchema.parse(
+        await maintenance.credentials(query.consumerId),
+      );
+    });
+    app.post("/v1/system/credentials/rotate", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      const body = parseInput(CredentialRotationSchema, request.body);
+      reply.header("Cache-Control", "no-store");
+      return CredentialReceiptSchema.parse(
+        await maintenance.rotateCredential(
+          body.consumerId,
+          body.credentialId,
+          actor.consumerId,
+          request.id,
+        ),
+      );
+    });
     const power = new PowerService(runtime.storage);
     await power.recover();
     const stopPowerRecovery = startPowerRecovery(power, () =>

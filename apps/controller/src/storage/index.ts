@@ -1,5 +1,5 @@
 import { Worker } from "node:worker_threads";
-import { mkdir } from "node:fs/promises";
+import { mkdir, access } from "node:fs/promises";
 import { resolve } from "node:path";
 import type {
   Command,
@@ -31,18 +31,35 @@ export type Storage = {
     params?: readonly SqlValue[],
   ): Promise<T[]>;
   batchTransaction(statements: readonly Statement[]): Promise<unknown[]>;
+  writeFailure?: () => boolean;
+  clearWriteFailure?: () => void;
+  backup(destination: string): Promise<void>;
+  check(): Promise<void>;
   close(): Promise<void>;
 };
 
 async function openStorageUsing(
   dataDir: string,
   workerUrl: URL,
+  restoring = false,
 ): Promise<Storage> {
   const dir = resolve(dataDir);
   await mkdir(dir, { recursive: true, mode: 0o700 });
+  if (
+    !restoring &&
+    (await access(resolve(dir, "restore-in-progress.json")).then(
+      () => true,
+      () => false,
+    ))
+  )
+    throw new StorageError(
+      "STORAGE_RESTORE_INCOMPLETE",
+      "Isolated restore did not complete; admission remains closed",
+    );
   const worker = new Worker(workerUrl, {
     workerData: resolve(dir, "hitchlet.sqlite"),
   });
+  let writeFailed = false;
   let nextId = 1;
   let closed = false;
   let closing = false;
@@ -80,6 +97,16 @@ async function openStorageUsing(
     const item = pending.get(reply.id);
     if (!item) return;
     pending.delete(reply.id);
+    if (
+      reply.error &&
+      [
+        "STORAGE_FULL",
+        "STORAGE_IO",
+        "STORAGE_CORRUPT",
+        "STORAGE_READ_ONLY",
+      ].includes(reply.error.code)
+    )
+      writeFailed = true;
     if (reply.error)
       item.reject(new StorageError(reply.error.code, reply.error.message));
     else item.resolve(reply.result);
@@ -126,6 +153,12 @@ async function openStorageUsing(
     get: (sql, params = []) => send({ kind: "get", sql, params }),
     all: (sql, params = []) => send({ kind: "all", sql, params }),
     batchTransaction: (statements) => send({ kind: "batch", statements }),
+    writeFailure: () => writeFailed,
+    clearWriteFailure: () => {
+      writeFailed = false;
+    },
+    backup: (destination) => send({ kind: "backup", destination }),
+    check: () => send({ kind: "check" }),
     close() {
       if (closePromise) return closePromise;
       if (closed) return Promise.resolve();
@@ -149,10 +182,20 @@ export function openStorage(dataDir: string): Promise<Storage> {
   return openStorageUsing(dataDir, new URL("./worker.js", import.meta.url));
 }
 
+/** Offline restore adapter only; the serving open path refuses incomplete restores. */
+export function openStorageForRestore(dataDir: string): Promise<Storage> {
+  return openStorageUsing(
+    dataDir,
+    new URL("./worker.js", import.meta.url),
+    true,
+  );
+}
+
 /** Internal fault injection point for worker failure tests. */
 export function openStorageWithWorker(
   dataDir: string,
   workerUrl: URL,
+  restoring = false,
 ): Promise<Storage> {
   return openStorageUsing(dataDir, workerUrl);
 }

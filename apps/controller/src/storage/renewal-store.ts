@@ -112,7 +112,7 @@ export class SQLiteRenewalStore {
           input.renewalId,
           JSON.stringify({ renewalId: input.renewalId }),
           input.now,
-          input.now + 180 * 86400000,
+          input.now + 7 * 86400000,
         ],
       },
       {

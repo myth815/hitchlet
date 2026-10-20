@@ -67,6 +67,13 @@ export class SQLiteValidationStore {
     return { consumer, network, storageProfiles, target, deny };
   }
 
+  frozenStorage(profileId: string, revisionId: string) {
+    return this.db.get<Row>(
+      "SELECT p.id,r.id current_revision_id,p.version,p.status,r.kind,r.config_json,r.secret_version_ref FROM storage_profiles p JOIN storage_profile_revisions r ON r.profile_id=p.id WHERE p.id=? AND r.id=? AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations pr WHERE pr.storage_profile_revision_id=r.id)",
+      [profileId, revisionId],
+    );
+  }
+
   async persistSchedule(input: {
     readonly request: ScheduleRequest;
     readonly context: ValidationContext;
@@ -93,7 +100,7 @@ export class SQLiteValidationStore {
     const storageFences = bindings
       .map(
         () =>
-          " AND EXISTS(SELECT 1 FROM storage_profiles sp WHERE sp.id=? AND sp.status='active' AND sp.version=? AND sp.current_revision_id=? AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations pr WHERE pr.storage_profile_revision_id=sp.current_revision_id))",
+          " AND EXISTS(SELECT 1 FROM storage_profiles sp WHERE sp.id=? AND sp.status='active' AND sp.version=? AND EXISTS(SELECT 1 FROM storage_profile_revisions sr WHERE sr.profile_id=sp.id AND sr.id=? AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations pr WHERE pr.storage_profile_revision_id=sr.id)))",
       )
       .join("");
     const storageFenceParams = bindings.flatMap((binding) => [

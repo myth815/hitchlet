@@ -125,3 +125,11 @@ D22a 电源管理协议的唯一运行时权威为 `packages/contracts/src/power
 ```sh
 tsc --noEmit --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --target ES2022 --module ESNext --lib ES2022 contracts.ts contracts/contracts.typecheck.ts contracts/usage.examples.ts
 ```
+
+
+D23 运维 DTO 的唯一运行时权威是
+`packages/contracts/src/maintenance.ts`，SDK `AdminCommands` 直接复用；
+恢复接管与固定存储事实协议位于 `recovery.ts` / `runtime-storage.ts` 的 internal
+导出，不暴露给租客。凭据回执只显示一次，恢复审批保持暂停；离线 CLI 不允许
+在线替换当前数据库。部署、期限、幂等过期语义和恢复演练见
+[运行手册](../../runbook.md#d23-operational-maintenance-and-isolated-restore)。

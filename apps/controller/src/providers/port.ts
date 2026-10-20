@@ -1,5 +1,8 @@
 import type { ResourceContract } from "@hitchlet/contracts";
-import type { EffectiveResources } from "@hitchlet/contracts/internal";
+import type {
+  ResolvedStorageMount,
+  EffectiveResources,
+} from "@hitchlet/contracts/internal";
 
 export type PortainerEvidence = Readonly<{
   engineId: string;
@@ -71,19 +74,7 @@ export type ProvisionPlan = Readonly<{
       enforcement: "docker_iptables";
       verificationRequired: true;
     }>;
-    mounts: readonly Readonly<{
-      grantId: string;
-      grantRevision: 1;
-      revisionId: string;
-      protocol: StorageProtocol;
-      authorizedSubpath: string;
-      approvedSourceRef: string;
-      resolvedSourceRef: string;
-      sourceValidationEvidenceId: string;
-      target: string;
-      mode: "read_only" | "read_write";
-      secretVersionRef: string | null;
-    }>[];
+    mounts: readonly ResolvedStorageMount[];
   }>;
   /** Cleanup has its own short command deadline; the create deadline stays frozen. */
   executionPhase?: "provision" | "cleanup" | "observe";
@@ -206,6 +197,10 @@ export interface ResourceJournal {
 
 /** Small internal D04 execution boundary; providers return evidence, never Ticket state. */
 export interface ExecutionPort {
+  /** Read-only runtime path resolution before binding the immutable provision contract. */
+  resolveMounts?(
+    plan: ProvisionPlan,
+  ): Promise<ProvisionPlan["resolved"]["mounts"]>;
   create(
     plan: ProvisionPlan,
     journal: ResourceJournal,

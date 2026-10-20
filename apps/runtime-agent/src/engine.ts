@@ -47,6 +47,52 @@ export class LocalEngine {
     return id;
   }
 
+  async ownedInventory(installationId: string) {
+    if (!/^[a-zA-Z0-9-]+$/.test(installationId))
+      throw new Error("Invalid installation identity");
+    const result = [];
+    for (const kind of ["container", "network", "volume"] as const) {
+      const args =
+        kind === "container" ? ["container", "ls", "--all"] : [kind, "ls"];
+      const raw = await this.docker([
+        ...args,
+        "--filter",
+        `label=io.hitchlet.installation=${installationId}`,
+        "--format",
+        kind === "volume" ? "{{.Name}}" : "{{.ID}}",
+      ]);
+      for (const id of raw.split("\n").filter(Boolean)) {
+        if (!/^[a-zA-Z0-9_.-]+$/.test(id))
+          throw new Error("Invalid inventory identity");
+        const objects = JSON.parse(
+          await this.docker([kind, "inspect", id]),
+        ) as Json[];
+        if (objects.length !== 1) throw new Error("Incomplete inventory");
+        const object = objects[0]!,
+          labels = kind === "container" ? object.Config?.Labels : object.Labels;
+        if (!labels || labels["io.hitchlet.installation"] !== installationId)
+          throw new Error("Inventory ownership changed");
+        result.push({
+          kind,
+          id: String(object.Id ?? object.Name),
+          allocationId: String(labels["io.hitchlet.allocation"] ?? ""),
+          generation: String(labels["io.hitchlet.generation"] ?? ""),
+          operationId: String(labels["io.hitchlet.operation"] ?? ""),
+          contractHash: String(labels["io.hitchlet.contract"] ?? ""),
+        });
+      }
+    }
+    return result;
+  }
+
+  async imageStoreRoot(): Promise<string> {
+    await this.assertEngine();
+    const root = await this.docker(["info", "--format", "{{.DockerRootDir}}"]);
+    if (!root.startsWith("/") || root.includes("\0"))
+      throw new Error("Invalid Docker image store root");
+    return root;
+  }
+
   private async firewallBackend(): Promise<{
     driver: string;
     userlandProxy: boolean;

@@ -1153,7 +1153,7 @@ describe("persistent simulator lifecycle", () => {
       .prepare("UPDATE managed_resources SET provider_id=NULL WHERE id=?")
       .run(child.provider_id);
     raw.exec(
-      `DROP INDEX machine_plug_binding_id;
+      `DROP TRIGGER cache_maintenance_gate; DROP TRIGGER ticket_maintenance_gate; DROP TRIGGER allocation_maintenance_gate; DROP TRIGGER allocation_runtime_disk_gate; DROP TABLE system_maintenance; DROP INDEX machine_plug_binding_id;
        DROP INDEX machine_plug_device_id;
        DROP INDEX machine_plug_mac;
        DROP INDEX machine_active_power_intent;

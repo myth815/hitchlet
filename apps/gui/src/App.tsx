@@ -74,6 +74,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
   const [principal, setPrincipal] =
     React.useState<AuthenticatedPrincipal | null>(null);
   const [sessionReady, setSessionReady] = React.useState(false);
+  const [issuedCredential, setIssuedCredential] = React.useState("");
   const [health, setHealth] = React.useState<Health | null>(null);
   const [healthError, setHealthError] = React.useState("");
   const [tickets, setTickets] = React.useState<readonly TicketSummary[]>([]);
@@ -535,9 +536,30 @@ export function App({ client: injected }: { client?: HitchletClient }) {
             <span>03</span>
           </div>
         </section>
+        {issuedCredential ? (
+          <section className="panel">
+            <h2>新控制 token（立即安全保存）</h2>
+            <textarea
+              aria-label="新控制 token"
+              readOnly
+              value={issuedCredential}
+            />
+            <p>
+              旧 token
+              与其会话已失效。此值仅在当前页面内存中显示，刷新页面后无法再次领取。
+            </p>
+            <button onClick={() => setIssuedCredential("")}>
+              已保存，清除 token 显示
+            </button>
+          </section>
+        ) : null}
         <HealthPanel health={health} error={healthError} />
         {principal?.role === "admin" ? (
-          <AdminPanel client={client} principal={principal} />
+          <AdminPanel
+            client={client}
+            principal={principal}
+            onCredentialIssued={setIssuedCredential}
+          />
         ) : null}
         {notice ? (
           <div className="notice" role="status">

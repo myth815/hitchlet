@@ -1,3 +1,4 @@
+import { SystemPanel } from "./SystemPanel.js";
 import React from "react";
 import { MachinePanel } from "./MachinePanel.js";
 import {
@@ -35,9 +36,11 @@ function activeValidation(run: AdminValidationHistoryItem | undefined) {
 export function AdminPanel({
   client,
   principal,
+  onCredentialIssued,
 }: {
   client: HitchletClient;
   principal: AuthenticatedPrincipal;
+  onCredentialIssued?: (token: string) => void;
 }) {
   const canRead =
     principal.role === "admin" &&
@@ -716,6 +719,12 @@ export function AdminPanel({
           安排验证
         </button>
       </div>
+      <SystemPanel
+        key={principal.consumerId}
+        client={client}
+        canWrite={canWrite}
+        {...(onCredentialIssued ? { onCredentialIssued } : {})}
+      />
       <div className="admin-card">
         <h3>验证历史与回收</h3>
         {runs.length ? (

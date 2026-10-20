@@ -64,6 +64,8 @@ export class NetworkWorker {
         throw new Error("Command id was replayed with different content");
       if (prior.result) return prior.result;
     }
+    if (Date.parse(command.deadline) > Date.now() + 86400000)
+      throw new Error("Runtime command lifetime exceeds one day");
     if (Date.parse(command.deadline) <= Date.now())
       throw new Error("Command deadline expired");
     const allocation = this.journal.allocationMap[plan.allocationId];
@@ -77,6 +79,8 @@ export class NetworkWorker {
     }
     this.journal.setCommand(command.commandId, {
       hash: command.contentHash,
+      notAfterMs: Date.parse(command.deadline),
+      allocationId: command.allocationId,
     });
     await this.journal.save();
     let resultStatus: RuntimeNetworkResult["status"];
@@ -184,6 +188,8 @@ export class NetworkWorker {
     if (resultStatus !== "unknown") {
       this.journal.setCommand(command.commandId, {
         hash: command.contentHash,
+        notAfterMs: Date.parse(command.deadline),
+        allocationId: command.allocationId,
         result: value,
       });
       await this.journal.save();

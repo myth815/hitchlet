@@ -329,6 +329,15 @@ export const NodeCapabilityAttestationSchema = z
       .object({
         runId: id,
         sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        storageScopes: z
+          .object({
+            readOnly: z.literal("passed"),
+            independentWrite: z.literal("passed"),
+            sourceBoundary: z.literal("passed"),
+            persistentSurvival: z.literal("passed"),
+          })
+          .strict()
+          .optional(),
         scopes: z
           .object(
             Object.fromEntries(
@@ -355,8 +364,17 @@ export const NodeCapabilityAttestationSchema = z
       })
       .strict(),
     networkProfileRevisionIds: z.array(id).min(1),
+    storageProfileRevisionIds: z.array(id).default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((value, ctx) => {
+    if (value.storageProfileRevisionIds.length && !value.report.storageScopes)
+      ctx.addIssue({
+        code: "custom",
+        path: ["report", "storageScopes"],
+        message: "All four storage scopes require real manual evidence",
+      });
+  });
 export const NodeRuntimeConfigReceiptSchema = z
   .object({
     nodeId: id,
@@ -867,3 +885,5 @@ export const AdminSchemas = {
 };
 
 export * from "./power.js";
+
+export * from "./maintenance.js";

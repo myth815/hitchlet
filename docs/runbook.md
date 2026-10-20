@@ -31,9 +31,9 @@ Use a separate empty installation for real registration. Start the built control
 4. Create authorized network/storage profiles at `/v1/network-profiles` and `/v1/storage-profiles`; create immutable subsequent revisions at `/{profileId}/revisions` with `If-Match`. New current revisions do not rewrite existing frozen contracts. Storage profiles declare a fixed `sourceRef`, `allowedSubpaths`, `allowedModes`, protocol, and optional secret version; consumers cannot submit arbitrary host mount options.
 5. `POST /v1/images` creates a logical image and its first draft. Add subsequent versions at `/v1/images/{imageId}/versions` and artifacts at `/v1/image-versions/{versionId}/artifacts`. Read drafts through `/v1/admin/image-versions/{versionId}`. Consumer image/version routes keep their existing published-only DTOs. A pinned digest/platform declaration is not manifest verification or publication.
 6. `POST /v1/image-versions/{versionId}/validate` accepts the explicit image artifact, node, network profile, storage requests, resource contract, and bounded deadline. It freezes the selection and uses the shared capacity ledger, without a consumer Ticket, Lease, or access endpoint. Missing verified capabilities return a persisted blocked run, not running/success. Read `/v1/image-validations/{validationId}`.
-7. Node `/image-cache/prewarm` and `/image-cache/gc` routes persist exact-artifact operations. Repeating the same action reuses its active operation; an opposite active action returns409. Read the safe receipt at `/v1/nodes/{nodeId}/image-cache/operations/{operationId}`. In Portainer execution mode, an already-present image can be adopted only after registry manifest, platform and local digest verification. GC rechecks pins, allocations and validation references before exact-image deletion; it never runs Docker prune. New pulls remain blocked with `capacity_unverified` until verified image-store capacity is supplied by the later Host/storage work. `queued`, `unknown` or `evicting` never means ready or deleted.
+7. Node `/image-cache/prewarm` and `/image-cache/gc` routes persist exact-artifact operations. Repeating the same action reuses its active operation; an opposite active action returns409. Read the safe receipt at `/v1/nodes/{nodeId}/image-cache/operations/{operationId}`. In Portainer execution mode, an already-present image can be adopted only after registry manifest, platform and local digest verification. GC rechecks pins, allocations and validation references before exact-image deletion; it never runs Docker prune. New pulls require fresh authenticated Runtime Agent facts for the actual DockerRootDir filesystem. Missing/unknown facts, local maintenance or low storage block pulls; safe exact-image GC remains available. Unknown image size uses the configured conservative IMAGE_PULL_BUDGET_MIB estimate, not a claim of exact registry disk usage. `queued`, `unknown` or `evicting` never means ready or deleted.
 
-Do not enable a node by editing SQLite or reuse the Simulator as proof of Docker isolation. The Docker implementation below is still undergoing batch5 acceptance; its presence does not mean M1 or M2 has been released. Hyper-V, Tart, WOL, and smart-plug actions remain outside these steps.
+Do not enable a node by editing SQLite or reuse the Simulator as proof of Docker isolation. M1 experimental Docker and D23 maintenance/storage/recovery have passed independent review in the recorded Linux arm64 test environment; M2 still requires D24/D25 delivery acceptance. Hyper-V, Tart, WOL, and smart-plug actions remain outside these steps.
 
 ## Experimental Docker validation and renting
 
@@ -47,7 +47,7 @@ Restart with `EXECUTION_MODE=portainer` and the same control directory/master ke
 
 Publish with `POST /v1/image-versions/{versionId}/publish` using `expectedEntityVersion`, then move the desired image alias using its own expected version. The server rechecks every required artifact, report, cleanup result, frozen contract and live runtime fingerprint. Consumers can then use the normal Ticket API/SDK: acquire, wait ready, claim, request access, renew and release. SSH material is per allocation and returned only through the authorized access endpoint. Release acceptance is not proof of cleanup: wait until released before considering capacity reusable.
 
-The administrator GUI currently covers Node status, image versions, explicit validation selection/history, cleanup evidence, publication and alias changes. Full credential/profile/Node configuration forms, backup/restore and final installation acceptance remain in later batches. See [the implementation evidence](IMPLEMENTATION.md) for the exact accepted scope.
+The administrator GUI currently covers Node status, image versions, explicit validation selection/history, cleanup evidence, publication and alias changes. D23 adds operational pause/backup/recovery approval and safe credential listing/rotation. Restore itself is an offline CLI. Complete profile/Node configuration forms and final installation acceptance remain in D24/D25. See [the implementation evidence](IMPLEMENTATION.md) for the exact accepted scope.
 
 This runbook starts the controller against an explicitly initialized local
 Simulator. It does not configure Docker, Portainer, VM isolation, host power,
@@ -180,9 +180,9 @@ browser uses the cookie for same-origin requests and sends the CSRF value in
 principal summary and is `no-store`. Logout is
 `DELETE /v1/auth/session` with the session cookies and `X-CSRF-Token`; it
 revokes that session. A session also stops authenticating when its issuing
-credential expires or is revoked, or its Consumer is disabled. There is no
-D05 credential-management API; credential rotation and full account
-administration remain future work. Login failures are rate-limited per source
+credential expires or is revoked, or its Consumer is disabled. D23 provides full-administrator credential metadata and rotation through
+`/v1/system/credentials` and `/v1/system/credentials/rotate`; full account
+administration remains outside this operational API. Login failures are rate-limited per source
 IP.
 
 ## Migrations, shutdown, and limitations
@@ -206,3 +206,121 @@ provide a real SSH endpoint. Simulator reports
 `offlineLeaseEnforcement=unsupported`; strict offline lease guards remain
 future work. This runbook does not establish real-provider, Docker/network,
 storage-mount, VM, or machine-power acceptance.
+
+## D23 operational maintenance and isolated restore
+
+D23 has passed independent Docker/local/NFS4.2 and isolated restore acceptance
+in the recorded Linux arm64 review environment. A small fixture took 44 seconds
+from backup through restored cleanup; this is not a general production RTO.
+Daily-backup RPO ≤24 hours remains an operational objective; validate your data
+volume, NAS and recovery procedure before relying on that objective. Automatic
+daily snapshots continue while admission is administratively paused. Low/full/
+unknown local disk and recovery isolation skip deferrable backups. Cleanup,
+accepted lease continuation and history/log reclamation stay available. A disk
+failure can still prevent durable writes; no software promises cleanup commits
+on a physically unwritable filesystem. `/v1/system/health` exposes the gate and
+per-Node Runtime capacity facts. Freshness uses the controller receipt time after
+an authenticated nonce-bound complete HTTP exchange (default10-second total
+deadline, configurable up to30 seconds). Agent sample time is retained separately
+as diagnostic sampledAtMs; cross-host clock skew does not gate admission. Missing/
+stale (>30 seconds since receipt) real Node facts block
+reservation and creation even with no persistent mounts.
+
+Full administrators may call (all responses `Cache-Control: no-store`):
+
+- `GET /v1/system/health`, `/diagnostics`, `/backups`, `/credentials?consumerId=...`.
+- `POST /v1/system/admission/pause` or `/resume`, body `{ "reason": "..." }`.
+- `POST /v1/system/backups`, with JSON body `{}` and `Idempotency-Key`. Reusing the key returns the
+  original receipt, including after a lost response; failed backups need a new key.
+- `POST /v1/system/credentials/rotate`, body `{ "consumerId": "...", "credentialId": "..." }`.
+  Obtain IDs from the metadata list, never SQLite. Old bearer and all its derived
+  GUI sessions immediately fail. Save the one-time token securely. Restored
+  consumers whose credentials were all revoked may receive a replacement through
+  this same API. A lost rotation response requires explicit administrator recovery.
+- `POST /v1/system/recovery/approve`, body `{ "reason": "...", "oldControllerStopped": true,
+"oldProviderCredentialsRevoked": true, "oldRuntimeCredentialsRevoked": true }`.
+  Approval checks evidence and leaves admission paused; resume is separate.
+
+Use `client.admin.systemHealth/diagnostics/backups/backup/credentials`,
+`pauseAdmission/resumeAdmission`, `rotateCredential` and `approveRecovery` in the
+TypeScript SDK. Rotation never retries automatically. Browser one-time token
+output lives only in memory, including when self-rotation invalidates that session.
+Clear the output after safely recording it; closing/reloading the page loses it.
+
+The worker uses better-sqlite3's online backup API, serializes it with SQL/close,
+checks integrity and foreign keys, fsyncs and publishes a self-contained snapshot
+under `DATA_DIR/backups/<id>.sqlite` plus safe metadata. Do not copy the active
+SQLite file or ignore WAL. A filesystem snapshot alone is not a verified backup.
+Copy completed snapshots to independently protected external storage using your
+normal backup facility. Independently protect the encrypted `DATA_DIR/secrets`
+directory and inject its original read-only master key file separately; the
+controller never bundles that key into a backup or diagnostics response.
+
+Offline restore sequence (run from `apps/controller`, Node24, compiled dist):
+
+1. Stop and disable restart of the old controller. Preserve its whole fault data
+   directory. Restore is allowed only into an empty, separate destination.
+2. `BACKUP_FILE=/safe/snapshot.sqlite RESTORE_DATA_DIR=/new/isolated-data OLD_CONTROLLER_STOPPED=true RESTORE_SECRETS_DIR=/safe/encrypted-secrets HITCHLET_SECRET_KEY_FILE=/separate/master-key node dist/recovery-cli.js restore`.
+   Secret directory may be omitted only when no encrypted backend secrets are
+   needed. The fresh admin token is emitted once to the controlled terminal.
+   Migration/integrity/FK failure leaves the isolated destination closed and the
+   original fault directory untouched. Do not remove failure markers to force start.
+3. Start the restored controller against this isolated DATA_DIR and separate key.
+   The `controls_required` gate permits administration but no backend loops.
+   All old consumer tokens/sessions and Host credentials were revoked; pair Hosts
+   again through the normal enrollment API. Restored Nodes remain disabled.
+4. Using independent provider administration, revoke **all** keys and control
+   sessions held by the old controller account, including keys created after the
+   backup (the restored ledger cannot enumerate facts it never recorded). Stop/
+   disable old deployments and remove their access to replacement secrets. The
+   takeover verifier additionally requires rejection of **every historical**
+   Portainer key represented by the restored ledger,
+   including inactive revisions. Create, probe and activate new revisions for
+   each logical connection using the normal API, proving the same immutable
+   Engine. Recreate/rotate the Runtime Agent bearer; retain trusted TLS material
+   long enough to prove old bearer HTTP401/403 (network/TLS timeout is not proof).
+   Preserve the Agent journal; its authenticated epoch is a fence, not identity.
+   New secrets are added with `secret-cli.js` and their refs used in APIs/plan.
+5. Stop the restored controller. Write a protected CONTROL_TAKEOVER_FILE JSON:
+   `{ "oldControllerStopped": true, "connections": [{ "connectionId": "...", "revisionId": "new-current-revision" }], "runtimes": [{ "nodeId": "...", "runtimeProfile": { "...": "complete NodeRuntimeConfig including new bearer ref" } }] }`.
+   Supply one new revision per logical connection and one Runtime profile per
+   Node. `DATA_DIR=/new/isolated-data HITCHLET_SECRET_KEY_FILE=/separate/master-key CONTROL_TAKEOVER_FILE=/safe/plan.json node dist/recovery-cli.js takeover`.
+   This performs read-only authenticated old-key rejection, same-Engine and owned
+   inventory checks. Extra native objects, including reappearing completed
+   allocations, quarantine their Node; none is destroyed automatically.
+6. Restart in `reconciling`. Ordinary integrity audits inspect each restored ready
+   tenant manifest with new authenticated transport, retaining the same container,
+   lease deadline, Claim and entry when healthy. Expired/revoked leases follow
+   normal cleanup; unknowns stay occupied and disabled. Internal validation has no
+   tenant Lease: its authenticated inventory may remain isolated, never published
+   or released merely to finish recovery. Resolve failures or explicitly terminate
+   resources through normal APIs; do not edit SQLite.
+7. Review fresh integrity and isolated Nodes, approve recovery, then explicitly
+   resume admission. Enable/re-attest only Nodes whose identity, storage/network
+   capability and Host inputs have been checked. Unknown Nodes remain disabled.
+
+An activated connection/Agent credential is a replaceable authenticated transport
+for the same runtime. Existing operation identity, labels and frozen network/
+storage contract do not change; actual transport revision is recorded in result
+metadata. The resolver changes only Agent transport credentials, preserving frozen
+network semantics. A different Engine cannot take over the old runtime identity.
+
+Retention defaults: resource events/success details30 days, released Ticket
+summaries/acquire keys/audit180 days, terminal released-ticket renewal history7
+days only without unresolved command/receipt/reference dependencies. Published
+validation reports, unknown effects, current power restore obligations, active
+Claims and referenced JSON/FK graphs survive. Agent completed receipts survive
+command deadline+7 days; unresolved effects and active/revoked fences are retained.
+A removed fence can expire after8 days only without unresolved commands. Very old
+keys may become new requests; persist Ticket IDs. A pruned renewal404 never proves
+success. Regular and pre-upgrade backups retain7 daily plus4 weekly buckets
+(configurable); upgrade snapshots have fixed `upgrade-<ms>-v<schema>.sqlite` names.
+Logs rotate to a bounded count; low storage discards archived logs before probing.
+
+Configuration: DISK_LOW_WATER_MIB=1024, DISK_RESERVE_MIB=128,
+IMAGE_PULL_BUDGET_MIB=8192, LOG_MAX_BYTES=10485760, LOG_FILES=5,
+BACKUP_DAILY_COPIES=7, BACKUP_WEEKLY_COPIES=4. Reserve must be less than low water.
+D23 adds migration007;001–006 remain byte-for-byte unchanged. Every upgrade from
+an older schema first creates and verifies an online snapshot; failure leaves
+maintenance markers and does not start a partially migrated service. Offline
+lease enforcement remains unsupported; VM and actual power actions remain deferred.

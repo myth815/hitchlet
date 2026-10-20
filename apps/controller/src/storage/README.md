@@ -25,8 +25,12 @@ remain outside the worker; this API is an internal package interface, not an
 HTTP surface.
 
 SQLite 3.53.4 is the version embedded by the pinned `better-sqlite3` package in
-the tested macOS arm64 environment. Backup/restore and online backup API are
-not implemented in this storage foundation.
+the tested macOS arm64 environment. D23 adds serialized online `backup` and `check` worker commands. Snapshot checks
+include integrity/FK and conversion to self-contained DELETE journal mode.
+Migration007 adds one local maintenance row and database-side admission gates;
+001–006 are unchanged. Pre-upgrade snapshots precede migrations; failures preserve
+maintenance/restore markers. See the [operational runbook](../../../../docs/runbook.md#d23-operational-maintenance-and-isolated-restore)
+for offline restore, independent secrets, credential revocation and retention.
 
 D21 adds no migration: versioned HumanUsePolicy lives in existing Machine
 management JSON and uses the existing root pool reserve columns. Migrations
@@ -49,3 +53,13 @@ include active/preparing/cleanup allocations even before a Claim exists, pending
 operations, dependency/Host inputs and policy version. Completed unrelated
 history is excluded. Due restore duties are continued every five seconds without
 network/device calls; cancellation/restart never resets their original deadline.
+
+
+D23 keeps SQL/history/CAS and local operational filesystem work in
+`maintenance-store.ts`, `history-retention.ts` and `recovery-store.ts`; application
+services decide gates and orchestrate external evidence. Recovery never copies a
+live database file or overwrites the current data directory. The volatile write
+failure latch blocks new work even if a full filesystem cannot persist its own
+maintenance row. Healthy disk sampling clears it only after a successful write.
+Retention uses fixed candidate-reference guards in the same deletion transaction;
+no full-ledger JSON snapshot or second ownership ledger is created.

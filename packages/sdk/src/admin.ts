@@ -1,4 +1,16 @@
 import {
+  DiagnosticsSchema,
+  CredentialListSchema,
+  SystemHealthSchema,
+  AdmissionPauseSchema,
+  BackupViewSchema,
+  BackupListSchema,
+  BackupCreateSchema,
+  CredentialRotationSchema,
+  CredentialReceiptSchema,
+  RecoveryApprovalSchema,
+} from "@hitchlet/contracts/admin";
+import {
   AdminSchemas,
   PowerSchemas,
   type AdminImageValidationRequest,
@@ -8,6 +20,85 @@ import type { HttpTransport } from "./transport.js";
 /** Narrow management API backed by the controller's shared runtime schemas. */
 export class AdminCommands {
   constructor(private readonly http: HttpTransport) {}
+  /** Lists only administrative credential metadata; bearer values and hashes never appear. */
+  credentials(consumerId?: string) {
+    return this.http.request(
+      `/v1/system/credentials${consumerId ? `?consumerId=${encodeURIComponent(consumerId)}` : ""}`,
+      "GET",
+      undefined,
+      (v) => CredentialListSchema.parse(v),
+    );
+  }
+  /** Deliberately limited to operational summaries; no tokens, source paths, raw sessions or secret files. */
+  diagnostics() {
+    return this.http.request("/v1/system/diagnostics", "GET", undefined, (v) =>
+      DiagnosticsSchema.parse(v),
+    );
+  }
+  /** Reads local and Runtime capacity gates without initiating maintenance work. */
+  systemHealth() {
+    return this.http.request("/v1/system/health", "GET", undefined, (v) =>
+      SystemHealthSchema.parse(v),
+    );
+  }
+  /** Lists verified online snapshots; restoring requires the offline CLI. */
+  backups() {
+    return this.http.request("/v1/system/backups", "GET", undefined, (v) =>
+      BackupListSchema.parse(v),
+    );
+  }
+  /** Reuse the key after a lost response to retrieve the original backup result. */
+  backup(key: string = crypto.randomUUID()) {
+    return this.http.request(
+      "/v1/system/backups",
+      "POST",
+      BackupCreateSchema.parse({}),
+      (v) => BackupViewSchema.parse(v),
+      { key, retry: false },
+    );
+  }
+  /** Stops new requests/reservations/prewarm while preserving cleanup and renewals. */
+  pauseAdmission(reason: string) {
+    return this.http.request(
+      "/v1/system/admission/pause",
+      "POST",
+      AdmissionPauseSchema.parse({ reason }),
+      (v) => SystemHealthSchema.parse(v),
+      { key: crypto.randomUUID(), retry: false },
+    );
+  }
+  /** Explicit reopening succeeds only after healthy disk and approved recovery. */
+  resumeAdmission(reason: string) {
+    return this.http.request(
+      "/v1/system/admission/resume",
+      "POST",
+      AdmissionPauseSchema.parse({ reason }),
+      (v) => SystemHealthSchema.parse(v),
+      { key: crypto.randomUUID(), retry: false },
+    );
+  }
+  /** Approves reconciled or isolated allocations; leaves admission paused for final review. */
+  approveRecovery(body: import("@hitchlet/contracts/admin").RecoveryApproval) {
+    return this.http.request(
+      "/v1/system/recovery/approve",
+      "POST",
+      RecoveryApprovalSchema.parse(body),
+      (v) => SystemHealthSchema.parse(v),
+      { key: crypto.randomUUID(), retry: false },
+    );
+  }
+  /** One-time token response. A lost response requires explicit administrative recovery, never automatic retry. */
+  rotateCredential(
+    body: import("@hitchlet/contracts/admin").CredentialRotationRequest,
+  ) {
+    return this.http.request(
+      "/v1/system/credentials/rotate",
+      "POST",
+      CredentialRotationSchema.parse(body),
+      (v) => CredentialReceiptSchema.parse(v),
+      { key: crypto.randomUUID(), retry: false },
+    );
+  }
   /** Management-only power projection; executable is always false in D22a. */
   powerConfiguration(machineId: string, isCancelled?: () => boolean) {
     return this.http.request(

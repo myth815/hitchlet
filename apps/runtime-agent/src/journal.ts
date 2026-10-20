@@ -5,12 +5,18 @@ import type {
   RuntimeNetworkResult,
 } from "@hitchlet/contracts/internal";
 
-type Entry = { hash: string; result?: RuntimeNetworkResult };
+type Entry = {
+  hash: string;
+  result?: RuntimeNetworkResult;
+  notAfterMs?: number;
+  allocationId?: string;
+};
 type Allocation = {
   generation: number;
   controlVersion: number;
   state: "active" | "revoked" | "removed";
   rulesetHash: string | null;
+  retainUntilMs?: number;
 };
 type JournalData = {
   controllerEpoch: number;
@@ -59,6 +65,7 @@ export class FileJournal {
 
   async save(): Promise<void> {
     await mkdir(dirname(this.path), { recursive: true, mode: 0o700 });
+    this.prune(Date.now());
     const temp = `${this.path}.tmp`;
     const file = await open(temp, "w", 0o600);
     try {
@@ -86,7 +93,35 @@ export class FileJournal {
     this.data.commands[id] = entry;
   }
   setAllocation(id: string, value: Allocation): void {
-    this.data.allocations[id] = value;
+    this.data.allocations[id] = {
+      ...value,
+      retainUntilMs: Date.now() + 8 * 86400000,
+    };
+  }
+
+  /** Completed command receipts outlive their deadlines by seven days.
+   * Unknown commands and active/revoked allocation fences are never aged out. */
+  prune(now: number): void {
+    for (const [id, entry] of Object.entries(this.data.commands))
+      if (
+        entry.result &&
+        entry.result.status !== "unknown" &&
+        entry.notAfterMs !== undefined &&
+        entry.notAfterMs + 7 * 86400000 < now
+      )
+        delete this.data.commands[id];
+    for (const [id, allocation] of Object.entries(this.data.allocations))
+      if (
+        allocation.state === "removed" &&
+        allocation.retainUntilMs !== undefined &&
+        allocation.retainUntilMs < now &&
+        !Object.values(this.data.commands).some(
+          (c) =>
+            c.allocationId === id &&
+            (!c.result || c.result.status === "unknown"),
+        )
+      )
+        delete this.data.allocations[id];
   }
 
   private async load(): Promise<void> {

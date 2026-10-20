@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   RuntimeNetworkCommand,
   RuntimeNetworkResult,
+  RuntimeStorageRequest,
+  RuntimeStorageResult,
 } from "@hitchlet/contracts/internal";
 import { PortainerExecutionProvider } from "../src/providers/portainer-provider.js";
 import { hashRuntimeNetworkRules } from "../src/providers/runtime-network-client.js";
@@ -90,6 +92,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 function provider(options?: {
+  storageFacts?: (
+    request: RuntimeStorageRequest,
+  ) => Promise<RuntimeStorageResult>;
   getOrCreate?: () => Promise<{
     privateKey: string;
     publicKey: string;
@@ -119,6 +124,16 @@ function provider(options?: {
       accessHost: "192.0.2.1",
       userlandProxy: false,
       managementDenyRules: [],
+      storageFacts:
+        options?.storageFacts ??
+        (async (request) => ({
+          ...request,
+          observedAtMs: Date.now(),
+          controllerEpoch: 1,
+          imageStore: { root: "/var/lib/docker", availableMiB: 100000 },
+          mounts: [],
+          inventory: null,
+        })),
       runtimeNetwork: {
         ensure: options?.ensure ?? unused,
         inspect: options?.networkInspect ?? unused,
@@ -130,6 +145,55 @@ function provider(options?: {
   );
 }
 describe("Portainer partial cleanup recovery", () => {
+  it("never sends persistent references to any delete transport", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    await expect(
+      provider().destroy(plan, {
+        ...owned("persistent", "storage_reference"),
+        ownership: "reference",
+      }),
+    ).rejects.toThrow("never destroy");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each(["low", "unknown"])(
+    "requires actual runtime capacity before creating even without mounts (%s)",
+    async (state) => {
+      const fetch = vi.fn(
+        async (input: RequestInfo | URL, _init?: RequestInit) =>
+          String(input).includes("system/version")
+            ? Response.json({ ServerVersion: "2.45.2" })
+            : Response.json({ ID: "test-engine", ServerVersion: "29.0.0" }),
+      );
+      vi.stubGlobal("fetch", fetch);
+      const getOrCreate = vi.fn();
+      const execution = provider({
+        getOrCreate,
+        storageFacts: async (request) => {
+          if (state === "unknown") throw new Error("capacity unknown");
+          return {
+            ...request,
+            observedAtMs: Date.now(),
+            controllerEpoch: 1,
+            imageStore: { root: "/var/lib/docker", availableMiB: 0 },
+            mounts: [],
+            inventory: null,
+          };
+        },
+      });
+      await expect(
+        execution.create(plan, { recordCreated: async () => {} }),
+      ).rejects.toThrow(
+        state === "unknown" ? "capacity unknown" : "below admission reserve",
+      );
+      expect(getOrCreate).not.toHaveBeenCalled();
+      expect(
+        fetch.mock.calls.every(
+          ([, init]) => !init || (init as RequestInit).method === "GET",
+        ),
+      ).toBe(true);
+    },
+  );
   it.each(["container", "volume"] as const)(
     "accepts journaled %s absence from a complete same-Engine inventory while the network remains",
     async (kind) => {

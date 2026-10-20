@@ -1,3 +1,15 @@
+import {
+  DiagnosticsSchema,
+  CredentialListSchema,
+  SystemHealthSchema,
+  AdmissionPauseSchema,
+  BackupViewSchema,
+  BackupListSchema,
+  BackupCreateSchema,
+  CredentialRotationSchema,
+  CredentialReceiptSchema,
+  RecoveryApprovalSchema,
+} from "@hitchlet/contracts/admin";
 import { toPublicJsonSchema } from "@hitchlet/contracts";
 import { z } from "zod";
 import {
@@ -873,6 +885,92 @@ export function openApiDocument() {
           AdminSchemas.CacheArtifactSchema,
           AdminSchemas.CachePlanReceiptSchema,
           [pathId("nodeId")],
+        ),
+      },
+      "/v1/system/credentials": {
+        get: adminOperation(
+          "List credential metadata without hashes or token values",
+          "200",
+          undefined,
+          CredentialListSchema,
+          [
+            {
+              name: "consumerId",
+              in: "query",
+              required: false,
+              schema: { type: "string", minLength: 1 },
+            },
+          ],
+        ),
+      },
+      "/v1/system/diagnostics": {
+        get: adminOperation(
+          "Read credential-free operational summary",
+          "200",
+          undefined,
+          DiagnosticsSchema,
+          [],
+        ),
+      },
+      "/v1/system/health": {
+        get: adminOperation(
+          "Read disk/admission/recovery state",
+          "200",
+          undefined,
+          SystemHealthSchema,
+          [],
+        ),
+      },
+      "/v1/system/backups": {
+        get: adminOperation(
+          "List verified backups",
+          "200",
+          undefined,
+          BackupListSchema,
+          [],
+        ),
+        post: adminOperation(
+          "Create consistent online backup",
+          "200",
+          BackupCreateSchema,
+          BackupViewSchema,
+          [],
+        ),
+      },
+      "/v1/system/admission/pause": {
+        post: adminOperation(
+          "Pause new work; cleanup remains enabled",
+          "200",
+          AdmissionPauseSchema,
+          SystemHealthSchema,
+          [],
+        ),
+      },
+      "/v1/system/admission/resume": {
+        post: adminOperation(
+          "Explicitly reopen after disk and recovery checks",
+          "200",
+          AdmissionPauseSchema,
+          SystemHealthSchema,
+          [],
+        ),
+      },
+      "/v1/system/recovery/approve": {
+        post: adminOperation(
+          "Approve completed isolated recovery; remains paused",
+          "200",
+          RecoveryApprovalSchema,
+          SystemHealthSchema,
+          [],
+        ),
+      },
+      "/v1/system/credentials/rotate": {
+        post: adminOperation(
+          "Rotate credential and revoke its sessions; one-time no-store secret",
+          "200",
+          CredentialRotationSchema,
+          CredentialReceiptSchema,
+          [],
         ),
       },
       "/v1/nodes/{nodeId}/image-cache/gc": {

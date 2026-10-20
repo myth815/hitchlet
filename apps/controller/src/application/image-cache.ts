@@ -11,7 +11,10 @@ import {
 export type CacheCapacityEvidence = Readonly<{
   verified: true;
   evidenceId: string;
+  /** Controller receipt time; remote sample time never gates admission. */
   observedAtMs: number;
+  /** Optional remote wall-clock sample retained only for diagnosis. */
+  sampledAtMs?: number;
   availableMiB: number;
   requiredMiB: number;
   lowWaterMiB: number;

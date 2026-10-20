@@ -286,8 +286,9 @@ export class SQLiteImageCacheStore {
        WHERE o.id=? AND o.state='running' AND o.owner_token=? AND o.version=?
          AND n.admission='enabled' AND n.observed_health='healthy' AND n.observed_at_ms+120000>?
          AND m.admission='enabled' AND m.observed_power='on' AND m.source='local' AND pc.enabled=1
-         AND o.controller_epoch=(SELECT controller_epoch FROM installations WHERE singleton=1)`,
-      [op.operationId, op.ownerToken, op.version, this.now()],
+         AND o.controller_epoch=(SELECT controller_epoch FROM installations WHERE singleton=1)
+         AND EXISTS(SELECT 1 FROM system_maintenance WHERE paused=0 AND disk_state='healthy' AND recovery_json IS NULL) AND NOT EXISTS(SELECT 1 FROM system_maintenance s,json_each(s.runtime_disks_json) d WHERE d.key=n.id AND (json_extract(d.value,'$.state')<>'healthy' OR json_extract(d.value,'$.observedAtMs')+30000<?))`,
+      [op.operationId, op.ownerToken, op.version, this.now(), this.now()],
     );
     return !!row;
   }

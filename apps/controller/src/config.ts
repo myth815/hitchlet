@@ -6,6 +6,13 @@ const ConfigSchema = z
     LOG_LEVEL: z
       .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
       .default("info"),
+    BACKUP_DAILY_COPIES: z.coerce.number().int().min(1).max(365).default(7),
+    BACKUP_WEEKLY_COPIES: z.coerce.number().int().min(1).max(52).default(4),
+    DISK_LOW_WATER_MIB: z.coerce.number().int().min(1).default(1024),
+    DISK_RESERVE_MIB: z.coerce.number().int().min(1).default(128),
+    IMAGE_PULL_BUDGET_MIB: z.coerce.number().int().min(1).default(8192),
+    LOG_MAX_BYTES: z.coerce.number().int().min(1024).default(10485760),
+    LOG_FILES: z.coerce.number().int().min(1).max(20).default(5),
     DATA_DIR: z.string().min(1),
     GUI_DIR: z.string().default("/app/gui"),
     EXECUTION_MODE: z
@@ -23,6 +30,12 @@ const ConfigSchema = z
       .transform((value) => value === "true"),
   })
   .superRefine((config, context) => {
+    if (config.DISK_RESERVE_MIB >= config.DISK_LOW_WATER_MIB)
+      context.addIssue({
+        code: "custom",
+        path: ["DISK_RESERVE_MIB"],
+        message: "must be below DISK_LOW_WATER_MIB",
+      });
     if (config.EXECUTION_MODE === "simulator" && !config.SIMULATOR_DATA_DIR)
       context.addIssue({
         code: "custom",
@@ -55,6 +68,13 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     "HOST",
     "PORT",
     "LOG_LEVEL",
+    "BACKUP_DAILY_COPIES",
+    "BACKUP_WEEKLY_COPIES",
+    "DISK_LOW_WATER_MIB",
+    "DISK_RESERVE_MIB",
+    "IMAGE_PULL_BUDGET_MIB",
+    "LOG_MAX_BYTES",
+    "LOG_FILES",
     "DATA_DIR",
     "GUI_DIR",
     "EXECUTION_MODE",

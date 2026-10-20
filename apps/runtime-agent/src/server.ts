@@ -1,7 +1,9 @@
+import type { RuntimeStorageFacts } from "./storage.js";
 import https from "node:https";
 import type { AddressInfo } from "node:net";
 import { readFile } from "node:fs/promises";
 import {
+  runtimeStorageRequestSchema,
   runtimeNetworkCommandSchema,
   runtimeNetworkResultSchema,
 } from "@hitchlet/contracts/internal";
@@ -20,6 +22,7 @@ export type ServerConfig = Readonly<{
 export async function createRuntimeServer(
   config: ServerConfig,
   worker: NetworkWorker,
+  storage?: RuntimeStorageFacts,
 ): Promise<https.Server> {
   const [tokenText, ca, cert, key] = await Promise.all([
     readFile(config.tokenFile, "utf8"),
@@ -36,7 +39,8 @@ export async function createRuntimeServer(
       void (async () => {
         if (
           request.method !== "POST" ||
-          request.url !== "/v1/network-actions"
+          (request.url !== "/v1/network-actions" &&
+            request.url !== "/v1/storage-facts")
         ) {
           response.writeHead(404).end();
           return;
@@ -62,6 +66,25 @@ export async function createRuntimeServer(
           json = JSON.parse(raw);
         } catch {
           response.writeHead(400).end();
+          return;
+        }
+        if (request.url === "/v1/storage-facts") {
+          const facts = runtimeStorageRequestSchema.safeParse(json);
+          if (!storage || !facts.success) {
+            response.writeHead(400).end();
+            return;
+          }
+          try {
+            const result = await storage.inspect(facts.data);
+            response
+              .writeHead(200, {
+                "content-type": "application/json",
+                "cache-control": "no-store",
+              })
+              .end(JSON.stringify(result));
+          } catch {
+            response.writeHead(409, { "cache-control": "no-store" }).end();
+          }
           return;
         }
         const parsed = runtimeNetworkCommandSchema.safeParse(json);

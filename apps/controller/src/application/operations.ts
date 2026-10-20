@@ -1,3 +1,5 @@
+import { resolvedStorageMountSchema } from "@hitchlet/contracts/internal";
+import { admissionOpen } from "./maintenance.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
 import { randomUUID } from "node:crypto";
 import {
@@ -471,6 +473,11 @@ export class OperationWorker {
     if (inspection.presence === "unknown") return this.defer(op, token);
     if (
       allowCreate &&
+      (await admissionOpen(
+        this.options.storage,
+        String(op.node_id),
+        this.now(),
+      )) &&
       (inspection.presence === "absent" || inspection.presence === "present")
     ) {
       await this.options.execution.create(plan, {
@@ -648,7 +655,7 @@ export class OperationWorker {
       parseObject(stringField(val(row, "access_recipe_json"))),
     );
     const selectionHash = stringField(frozen.selectionHash);
-    const mounts = storage.map((entry) => ({
+    let mounts: ProvisionPlan["resolved"]["mounts"] = storage.map((entry) => ({
       grantId: stringField(entry.grantId),
       grantRevision: grantRevision(entry.grantRevision),
       revisionId: stringField(entry.storageProfileRevisionId),
@@ -664,6 +671,27 @@ export class OperationWorker {
           ? entry.secretVersionRef
           : null,
     }));
+    if (typeof row.resolved_provision_contract_id !== "string")
+      mounts = mounts.map((m) => resolvedStorageMountSchema.parse(m));
+    if (
+      typeof row.resolved_provision_contract_id === "string" &&
+      mounts.length
+    ) {
+      const bound = await this.store.resolvedContract(
+        row.resolved_provision_contract_id,
+      );
+      const persisted = JSON.parse(String(bound?.storage_bindings_json));
+      if (!Array.isArray(persisted))
+        throw new Error("Bound mount facts missing");
+      if (persisted.every((m) => typeof m.resolvedSourceRef === "string"))
+        mounts = persisted.map((m) => resolvedStorageMountSchema.parse(m));
+      else if (
+        parseObject(row.frozen_config_json).executionMode === "portainer"
+      )
+        throw new Error("Real runtime mount evidence missing");
+      // Pre-D23 Simulator contracts stored frozen selections rather than host
+      // facts. Their explicit simulated references retain the original hash.
+    }
     const networkContract = {
       grantId: stringField(network.grantId),
       revisionId: stringField(network.networkProfileRevisionId),
@@ -689,7 +717,7 @@ export class OperationWorker {
       network: networkContract,
       mounts,
     };
-    const contractHash = createHash("sha256")
+    let contractHash = createHash("sha256")
       .update(JSON.stringify(contractPayload))
       .digest("hex");
     const binding = stringField(val(op, "connection_revision_id"));
@@ -697,7 +725,7 @@ export class OperationWorker {
       .update(stringField(val(op, "allocation_id")))
       .digest("hex")
       .slice(0, 32)}`;
-    const plan: ProvisionPlan = {
+    let plan: ProvisionPlan = {
       deadlineMs: Number(op.deadline_ms),
       ...(typeof row.frozen_config_json === "string"
         ? { runtimeConfig: parseObject(row.frozen_config_json) }
@@ -758,6 +786,21 @@ export class OperationWorker {
             : "simulator",
       },
     };
+    if (
+      typeof row.resolved_provision_contract_id !== "string" &&
+      mounts.length &&
+      parseObject(row.frozen_config_json).executionMode === "portainer"
+    ) {
+      if (!this.options.execution.resolveMounts)
+        throw new Error("Runtime storage facts unavailable");
+      mounts = (await this.options.execution.resolveMounts(plan)).map((m) =>
+        resolvedStorageMountSchema.parse(m),
+      );
+      contractHash = createHash("sha256")
+        .update(JSON.stringify({ ...contractPayload, mounts }))
+        .digest("hex");
+      plan = { ...plan, resolved: { ...plan.resolved, mounts, contractHash } };
+    }
     const boundId = row.resolved_provision_contract_id;
     if (typeof boundId === "string") {
       const bound = await this.store.resolvedContract(boundId);
@@ -779,7 +822,7 @@ export class OperationWorker {
       networkRevisionId: networkContract.revisionId,
       denyRevisionId: stringField(network.platformDenyRevisionId),
       contractHash,
-      storageJson: JSON.stringify(storage),
+      storageJson: JSON.stringify(mounts.length ? mounts : storage),
       networkJson: JSON.stringify(network),
       allocationId: stringField(val(op, "allocation_id")),
       generation: Number(op.generation),

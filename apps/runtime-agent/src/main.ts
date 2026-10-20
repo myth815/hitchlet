@@ -1,3 +1,5 @@
+import { storageRootSchema } from "@hitchlet/contracts/internal";
+import { RuntimeStorageFacts } from "./storage.js";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { FileJournal } from "./journal.js";
@@ -16,6 +18,7 @@ const configSchema = z
     agentId: z.string().min(1),
     dockerHost: z.string().startsWith("unix://"),
     ipv6SysctlRoot: z.string().min(1),
+    storageRoots: z.array(storageRootSchema).default([]),
     journalFile: z.string().min(1),
     tokenFile: z.string().min(1),
     caFile: z.string().min(1),
@@ -52,7 +55,23 @@ async function start(): Promise<void> {
     engine,
     new IptablesFirewall(),
   );
-  const server = await createRuntimeServer(parsed, worker);
+  const server = await createRuntimeServer(
+    parsed,
+    worker,
+    new RuntimeStorageFacts(
+      {
+        installationId: parsed.installationId,
+        runtimeIdentityId: parsed.runtimeIdentityId,
+        nativeEngineId: parsed.nativeEngineId,
+      },
+      parsed.storageRoots,
+      engine,
+      undefined,
+      undefined,
+      undefined,
+      () => journal.epoch,
+    ),
+  );
   const address = await listenRuntimeServer(server, parsed.host, parsed.port);
   process.stdout.write(
     `Hitchlet Runtime Agent listening on ${address.address}:${address.port}\n`,

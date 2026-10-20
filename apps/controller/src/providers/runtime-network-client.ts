@@ -2,6 +2,10 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import https from "node:https";
 import {
+  runtimeStorageRequestSchema,
+  runtimeStorageResultSchema,
+  type RuntimeStorageRequest,
+  type RuntimeStorageResult,
   canonicalRuntimeNetworkValue,
   runtimeNetworkCommandSchema,
   runtimeNetworkPlanSchema,
@@ -53,6 +57,10 @@ export type RuntimeNetworkClientConfig = Readonly<{
   loadCredentials: () => Promise<RuntimeNetworkCredentials>;
   timeoutMs?: number;
 }>;
+/** Authenticated, nonce-bound response plus a local receipt clock. The remote
+ * observedAtMs is diagnostic only; capacity age is measured from receivedAtMs. */
+export type ReceivedRuntimeStorageFacts = RuntimeStorageResult &
+  Readonly<{ receivedAtMs: number }>;
 export type RuntimeNetworkCredentials = Readonly<{
   token: string;
   ca: Buffer;
@@ -94,6 +102,14 @@ export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
     if (this.baseUrl.protocol !== "https:")
       throw new Error("Runtime Agent URL must use HTTPS");
     this.timeoutMs = config.timeoutMs ?? 10_000;
+    if (
+      !Number.isSafeInteger(this.timeoutMs) ||
+      this.timeoutMs < 1 ||
+      this.timeoutMs > 30_000
+    )
+      throw new RangeError(
+        "Runtime Agent timeout must be between 1 and 30000ms",
+      );
     this.loadCredentials = config.loadCredentials;
   }
 
@@ -120,16 +136,37 @@ export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
     return this.send(command, "network.remove");
   }
 
-  private async send(
-    command: RuntimeNetworkCommand,
-    kind: RuntimeNetworkCommand["kind"],
-  ): Promise<RuntimeNetworkResult> {
-    const parsed = runtimeNetworkCommandSchema.parse(command);
-    if (parsed.kind !== kind)
-      throw new Error("Runtime Agent command/action mismatch");
+  async storageFacts(
+    request: Omit<RuntimeStorageRequest, "inventory"> & { inventory?: boolean },
+  ): Promise<ReceivedRuntimeStorageFacts> {
+    const parsed = runtimeStorageRequestSchema.parse(request);
+    const result = runtimeStorageResultSchema.parse(
+      await this.exchange("/v1/storage-facts", parsed),
+    );
+    if (
+      result.requestId !== parsed.requestId ||
+      result.installationId !== parsed.installationId ||
+      result.runtimeIdentityId !== parsed.runtimeIdentityId ||
+      result.nativeEngineId !== parsed.nativeEngineId
+    )
+      throw new Error("Runtime storage facts identity mismatch");
+    if (
+      result.mounts.length !== parsed.mounts.length ||
+      parsed.mounts.some(
+        (m) =>
+          result.mounts.filter((r) => r.grantId === m.grantId).length !== 1,
+      )
+    )
+      throw new Error("Runtime storage facts incomplete");
+    // TLS/bearer authentication, the request nonce and a bounded complete HTTP
+    // exchange prove this live sample. Agent wall-clock skew cannot age/future
+    // date a controller admission record. Preserve its timestamp for diagnosis.
+    return { ...result, receivedAtMs: Date.now() };
+  }
+  private async exchange(path: string, payload: unknown): Promise<unknown> {
     const credentials = await this.loadCredentials();
-    const body = Buffer.from(JSON.stringify(parsed));
-    const target = new URL("/v1/network-actions", this.baseUrl);
+    const body = Buffer.from(JSON.stringify(payload));
+    const target = new URL(path, this.baseUrl);
     const response = await new Promise<{ status: number; body: Buffer }>(
       (resolve, reject) => {
         const request = https.request(
@@ -163,6 +200,12 @@ export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
             );
           },
         );
+        // Socket inactivity alone does not bound a peer that drips body bytes.
+        const deadline = setTimeout(
+          () => request.destroy(new Error("Runtime Agent request timed out")),
+          this.timeoutMs,
+        );
+        request.once("close", () => clearTimeout(deadline));
         request.on("timeout", () =>
           request.destroy(new Error("Runtime Agent request timed out")),
         );
@@ -180,6 +223,17 @@ export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
     } catch {
       throw new Error("Runtime Agent returned invalid JSON");
     }
+    return json;
+  }
+
+  private async send(
+    command: RuntimeNetworkCommand,
+    kind: RuntimeNetworkCommand["kind"],
+  ): Promise<RuntimeNetworkResult> {
+    const parsed = runtimeNetworkCommandSchema.parse(command);
+    if (parsed.kind !== kind)
+      throw new Error("Runtime Agent command/action mismatch");
+    const json = await this.exchange("/v1/network-actions", parsed);
     const result = runtimeNetworkResultSchema.parse(json);
     assertRuntimeNetworkResponse(parsed, result);
     return result;

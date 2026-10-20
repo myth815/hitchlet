@@ -2,6 +2,8 @@ import { resourceManifest } from "../domain/resource-manifest.js";
 import { createHash, randomUUID } from "node:crypto";
 import { Client } from "ssh2";
 import type {
+  RuntimeStorageRequest,
+  RuntimeStorageResult,
   RuntimeNetworkCommand,
   RuntimeNetworkPlan,
   RuntimeNetworkResult,
@@ -46,6 +48,11 @@ type RuntimeAccess = Readonly<{
   userlandProxy: boolean;
   managementDenyRules: ProvisionPlan["resolved"]["network"]["managementDenyRules"];
   runtimeNetwork: RuntimeNetworkPort;
+  storageLowWaterMiB?: number;
+  storageReserveMiB?: number;
+  storageFacts?: (
+    request: RuntimeStorageRequest,
+  ) => Promise<RuntimeStorageResult>;
 }>;
 type Json = Record<string, unknown>;
 
@@ -67,11 +74,83 @@ export class PortainerExecutionProvider implements ExecutionPort {
     private readonly now = Date.now,
   ) {}
 
+  async resolveMounts(
+    plan: ProvisionPlan,
+  ): Promise<ProvisionPlan["resolved"]["mounts"]> {
+    if (!plan.resolved.mounts.length) return [];
+    const runtime = await this.runtime(plan, true);
+    if (!runtime.storageFacts)
+      throw new Error("Runtime Agent storage facts unavailable");
+    const facts = await runtime.storageFacts({
+      requestId: randomUUID(),
+      installationId: plan.identity.installationId,
+      runtimeIdentityId: plan.identity.runtimeIdentityId,
+      nativeEngineId: runtime.engineId,
+      inventory: false,
+      mounts: plan.resolved.mounts.map((m) => ({
+        grantId: m.grantId,
+        revisionId: m.revisionId,
+        approvedSourceRef: m.approvedSourceRef,
+        authorizedSubpath: m.authorizedSubpath,
+        protocol: m.protocol,
+        secretVersionRef: m.secretVersionRef,
+        target: m.target,
+        mode: m.mode,
+      })),
+    });
+    return plan.resolved.mounts.map((m) => {
+      const found = facts.mounts.find((f) => f.grantId === m.grantId);
+      if (!found) throw new Error("Incomplete mount facts");
+      return { ...m, ...found };
+    });
+  }
+  private async assertStorageCapacity(plan: ProvisionPlan): Promise<void> {
+    const runtime = await this.runtime(plan, true);
+    if (!runtime.storageFacts)
+      throw new Error("Runtime Agent image-store facts unavailable");
+    const facts = await runtime.storageFacts({
+      requestId: randomUUID(),
+      installationId: plan.identity.installationId,
+      runtimeIdentityId: plan.identity.runtimeIdentityId,
+      nativeEngineId: runtime.engineId,
+      mounts: [],
+      inventory: false,
+    });
+    const reserve = runtime.storageReserveMiB ?? 128,
+      low = runtime.storageLowWaterMiB ?? 1024;
+    if (
+      facts.imageStore.availableMiB <= low ||
+      facts.imageStore.availableMiB <
+        plan.resources.request.scratchMiB + reserve
+    )
+      throw new Error("Runtime image-store is below admission reserve");
+  }
+  private async assertMounts(plan: ProvisionPlan): Promise<void> {
+    if (!plan.resolved.mounts.length) return;
+    const fresh = await this.resolveMounts(plan);
+    if (JSON.stringify(fresh) !== JSON.stringify(plan.resolved.mounts))
+      throw new Error("Frozen storage source changed");
+  }
+  private storageReferences(plan: ProvisionPlan): OwnedResource[] {
+    return plan.resolved.mounts.map((m) => ({
+      ...this.owned(plan, `storage:${m.grantId}`, "storage_reference", {
+        persistent: true,
+        source: m.resolvedSourceRef,
+        target: m.target,
+        mode: m.mode,
+      }),
+      ownership: "reference" as const,
+      referenceKey: m.revisionId,
+    }));
+  }
+
   async create(
     plan: ProvisionPlan,
     journal: ResourceJournal,
   ): Promise<readonly OwnedResource[]> {
     assertNodeSshRecipe(plan);
+    await this.assertStorageCapacity(plan);
+    await this.assertMounts(plan);
     await journal.assertActive?.();
     const runtime = await this.runtime(plan, true);
     const accessMaterial = await this.accessMaterials.getOrCreate(
@@ -248,6 +327,13 @@ export class PortainerExecutionProvider implements ExecutionPort {
                 "net.ipv6.conf.default.disable_ipv6": "1",
               },
               Mounts: [
+                ...plan.resolved.mounts.map((m) => ({
+                  Type: "bind",
+                  Source: m.resolvedSourceRef,
+                  Target: m.target,
+                  ReadOnly: m.mode === "read_only",
+                  BindOptions: { Propagation: "rprivate", NonRecursive: true },
+                })),
                 {
                   Type: "volume",
                   Source: volumeName,
@@ -364,6 +450,8 @@ export class PortainerExecutionProvider implements ExecutionPort {
       "present",
       networkPlan.expectedRulesetHash,
     );
+    await this.assertStorageCapacity(plan);
+    await this.assertMounts(plan);
     await journal.assertActive?.();
     if (record(inspectedContainer.State).Running !== true)
       await this.request(
@@ -402,7 +490,9 @@ export class PortainerExecutionProvider implements ExecutionPort {
       })),
     });
     await journal.recordCreated(completedNetwork);
-    return [completedNetwork, volumeResource, containerResource];
+    const references = this.storageReferences(plan);
+    for (const reference of references) await journal.recordCreated(reference);
+    return [completedNetwork, volumeResource, containerResource, ...references];
   }
 
   private async createNative(
@@ -607,6 +697,8 @@ export class PortainerExecutionProvider implements ExecutionPort {
         };
       }
       if (plan.executionPhase === "observe") await this.runtime(plan, true);
+      if (owned.some((r) => r.kind === "container"))
+        owned.push(...this.storageReferences(plan));
       const evidence: InventoryEvidence = {
         completeness: "complete",
         runtime: {
@@ -708,6 +800,17 @@ export class PortainerExecutionProvider implements ExecutionPort {
           evidence,
           integrity: { state: "lost", reason: "NETWORK_GUARANTEE_LOST" },
         };
+      {
+        try {
+          await this.assertMounts(plan);
+        } catch {
+          return {
+            presence: "present",
+            evidence,
+            integrity: { state: "lost", reason: "STORAGE_SOURCE_UNVERIFIED" },
+          };
+        }
+      }
       return { presence: "present", evidence, integrity: { state: "healthy" } };
     } catch {
       return { presence: "unknown", reason: "inventory_incomplete" };
@@ -720,10 +823,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
   ): Promise<ReadyReceipt> {
     const plan = _plan;
     assertNodeSshRecipe(plan);
-    if (plan.resolved.mounts.length > 0)
-      throw new Error(
-        "This Docker recipe does not yet claim persistent storage readiness without host-agent mount evidence",
-      );
+    await this.assertMounts(plan);
     if (plan.resources.scratchEnforcement === "required")
       throw new Error(
         "Docker overlay scratch hard limits are unsupported by this Provider",
@@ -997,6 +1097,8 @@ export class PortainerExecutionProvider implements ExecutionPort {
     plan: ProvisionPlan,
     resource: OwnedResource,
   ): Promise<CleanupReceipt> {
+    if (resource.ownership !== "owned" || resource.kind === "storage_reference")
+      throw new Error("Persistent references are never destroy targets");
     const runtime = await this.runtime(plan);
     const inspection = await this.inspect(plan);
     if (inspection.presence === "unknown")
@@ -1843,7 +1945,17 @@ function containerMatchesFrozen(
     record(host.Sysctls)["net.ipv6.conf.default.disable_ipv6"] === "1" &&
     Array.isArray(host.Binds) &&
     host.Binds.length === 0 &&
-    mounts.length === 1 &&
+    mounts.length === 1 + plan.resolved.mounts.length &&
+    plan.resolved.mounts.every((expected) =>
+      mounts.some(
+        (actual) =>
+          actual.Type === "bind" &&
+          actual.Source === expected.resolvedSourceRef &&
+          actual.Destination === expected.target &&
+          actual.RW === (expected.mode === "read_write") &&
+          actual.Propagation === "rprivate",
+      ),
+    ) &&
     workspace?.Type === "volume" &&
     workspace.Name === volumeName &&
     workspace.RW === true &&
@@ -1871,10 +1983,6 @@ function assertNodeSshRecipe(plan: ProvisionPlan) {
   )
     throw new Error(
       "Only the fixed hitchlet-node-ssh-v1 bootstrap/access contract is supported by this Provider",
-    );
-  if (plan.resolved.mounts.length > 0)
-    throw new Error(
-      "This Provider currently rejects persistent mounts until host-agent source evidence is available",
     );
 }
 function containerPorts(container: Json): Array<{

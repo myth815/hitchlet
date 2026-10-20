@@ -1,3 +1,4 @@
+import { admissionOpen } from "./maintenance.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
   AcquireRequestSchema,
@@ -324,6 +325,7 @@ export class TicketService {
     nodeId: string;
   } | null> {
     const now = this.now();
+    if (!(await admissionOpen(this.options.storage))) return null;
     const tickets = await this.store.queuedTickets(now);
     for (const ticket of tickets) {
       const contract = AcceptedAcquireRequestSchema.parse(
@@ -434,16 +436,23 @@ export class TicketService {
           continue;
         if (candidate.observed_power !== "on" && !canSafelyWake(candidate, now))
           continue;
+        if (
+          !(await admissionOpen(
+            this.options.storage,
+            String(candidate.node_id),
+            now,
+          ))
+        )
+          continue;
         const frozenStorage = Array.isArray(frozen.storage)
           ? frozen.storage.map((item) => object(item))
           : [];
         if (
           executionMode(candidate.config_json) === "portainer" &&
-          (!supportsNodeSshRecipe(
+          !supportsNodeSshRecipe(
             { bootstrap: artifactRequirements.bootstrap },
             accessRecipe,
-          ) ||
-            frozenStorage.length > 0)
+          )
         )
           continue;
         if (

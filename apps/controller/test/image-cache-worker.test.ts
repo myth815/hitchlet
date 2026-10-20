@@ -100,7 +100,7 @@ describe("image cache operation worker", () => {
     );
   });
 
-  it("verifies a fixed digest and platform, pulls only after capacity proof, and records readback", async () => {
+  it("uses receipt freshness despite remote clock skew, verifies the fixed digest and records readback", async () => {
     const sql = store();
     const port = provider();
     const worker = new ImageCacheWorker(
@@ -110,6 +110,7 @@ describe("image cache operation worker", () => {
         verified: true,
         evidenceId: "host-disk-snapshot",
         observedAtMs: 99_999,
+        sampledAtMs: 105_000,
         availableMiB: 1200,
         requiredMiB: 800,
         lowWaterMiB: 200,

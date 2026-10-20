@@ -1,4 +1,4 @@
-# Linux Runtime Agent: Docker network rules
+# Linux Runtime Agent: Docker network and fixed storage facts
 
 The `dist/main.js` entry point implements the D10b network boundary. The independent D20 native physical Host observation entry point is documented in [HOST.md](HOST.md); it requires no Docker socket and does not change this Runtime network deployment. Portainer creates and removes networks and containers. The Agent accepts four schema-checked actions (`network.ensure`, `inspect`, `revoke`, `remove`) and invokes fixed Docker/iptables argument vectors; there is no shell, command string, or caller-supplied interface in the protocol. The config schema, daemon startup, TLS client-certificate checks, and local Engine binding are defined in [`main.ts`](src/main.ts), [`server.ts`](src/server.ts), [`engine.ts`](src/engine.ts), and [`worker.ts`](src/worker.ts); treat those files as the field and behavior authority.
 
@@ -40,7 +40,7 @@ For an isolated Linux Engine host, an explicit-context container launch is:
 docker --context "$HITCHLET_DOCKER_CONTEXT" build \
   -f apps/runtime-agent/Dockerfile -t hitchlet-runtime-agent:0.1.0 .
 docker --context "$HITCHLET_DOCKER_CONTEXT" run --detach --name hitchlet-runtime-agent --restart unless-stopped \
-  --network host --group-add "$(stat -c '%g' /var/run/docker.sock)" \
+  --network host --pid=host --group-add "$(stat -c '%g' /var/run/docker.sock)" \
   --cap-drop ALL --cap-add NET_ADMIN --read-only \
   --tmpfs /tmp:rw,noexec,nosuid,size=16m \
   --mount type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock,readonly \
@@ -85,3 +85,79 @@ Unit tests exercise the rule compiler, persistent command replay, epoch/control-
 - Docker and Agent restarts preserve the rules before workloads are allowed to start. Repeat the allow/deny and NAS probes after restart.
 
 The real probes must originate from the actual allowed and denied LAN paths. A loopback-only probe, mocked Engine, successful API response, or preflight alone is not evidence of isolation. Keep the target context isolated from unrelated workloads; the Agent never flushes global firewall state and only manages its allocation-owned rules and jumps.
+
+
+## D23 fixed storage and real image capacity
+
+`POST /v1/storage-facts` uses the same mTLS and bearer boundary as network actions.
+It returns fixed source evidence, actual DockerRootDir filesystem capacity, and
+(optionally for takeover) installation-owned container/network/volume labels.
+It has no mount/unmount/shell action and never creates a missing source directory.
+Administrators pre-mount local/NFS/SMB roots on the **same Linux daemon host**.
+Unsupported protocols, missing capabilities or absent mounts fail closed; simulator
+facts do not attest real Docker storage.
+
+Add `storageRoots` to the protected Agent config, e.g.:
+
+```json
+[
+  {"sourceRef":"/srv/hitchlet/approved/local","protocol":"local","secretVersionRef":null,"mountPoint":"/srv/hitchlet/approved","mountSource":"/dev/actual-host-device"},
+  {"sourceRef":"/srv/hitchlet/approved/nas","protocol":"nfs","secretVersionRef":"secret:00000000000000000000000000000000","mountPoint":"/srv/hitchlet/approved/nas","mountSource":"nas.example:/export/hitchlet"}
+]
+```
+
+These are examples: obtain exact mount source/mountpoint from the deployed Agent
+view; never guess the device. `sourceRef`, protocol and secret revision must
+exactly match the immutable authorized storage profile. SMB uses protocol `smb`,
+actual filesystem `cifs` and exact `//server/share` mount source. NAS authentication
+is performed by the host's pre-mounted filesystem; Hitchlet does not interpolate
+credentials into mount options. Its separate secret reference identifies that
+approved mount credential version and must still be available before prepare.
+Local profiles normally use null. Secret rotation requires explicit new mount/
+profile/Agent static approval; it does not retarget frozen grants.
+
+The Agent container requires `--pid=host` to compare `/proc/1/mountinfo` with
+`/proc/self/mountinfo`, a same-absolute-path readonly `rslave` bind of the approved
+parent, and a same-path readonly bind of the daemon's actual DockerRootDir. For
+example add (only after preparing those host paths):
+
+```sh
+--mount type=bind,source=/srv/hitchlet/approved,target=/srv/hitchlet/approved,readonly,bind-propagation=rslave
+--mount type=bind,source=/var/lib/docker,target=/var/lib/docker,readonly
+```
+
+Use the actual DockerRootDir, which may differ from `/var/lib/docker`. The host
+parent must propagate unmount events; verify propagation during deployment. An
+Agent overlay directory or wrong local bind cannot prove host source/capacity:
+checks compare filesystem type/source, major:minor and mount-root-relative mapping
+against host PID1. A legitimate host bind root such as `/docker` is allowed;
+mount-root need not equal mountpoint. Self namespace IDs are excluded from frozen
+evidence, so replacing the Agent container preserves evidence when the host mount
+and source inode are unchanged. Actual host remount/source replacement invalidates
+it and requires explicit reconciliation.
+
+Approved root and every ancestor of a selected source must prevent the shipped
+workspace uid1000 from renaming components. No symlinks are accepted; tenant-owner
+write, group-write (including ACL masks) and world-write ancestors are rejected,
+except root/admin-owned sticky parents protecting a non-tenant-owned next entry.
+The selected source itself may be writable for an independent output grant.
+Administrator changes remain trusted; these checks do not claim to eliminate all
+TOCTOU races against a privileged host administrator. NFS/SMB server permissions
+must honor this identity and prevent tenant parent replacement. Verify read-only
+writes fail and a separate authorized output works with the actual deployed UID.
+
+Persistent bind targets may nest under `/workspace/persistent`; `/workspace`
+itself remains the per-allocation owned volume. Grants cannot overlap each other
+or reserved control targets. Docker binds disable recursive submount inclusion
+and use rprivate propagation; readback checks exact source/target/RW. Persistent
+references are always manifest `reference`/`keep`, never destroy objects. Cleanup
+removes the container before its temporary volume and never recursively visits
+NAS paths. Missing/unmounted/replaced roots prevent preparation/readiness, while
+cleanup and persistent source preservation remain possible.
+
+To rotate Runtime control: prepare a new independent bearer secret, stop the
+Agent, replace token/config atomically and restart with the same journal/Engine
+identity; update the controller Node Runtime credential configuration. Old bearer
+HTTP401/403 and new authenticated facts prove takeover; an epoch number or timeout
+alone does not. Do not grant SYS_ADMIN for this storage protocol. D23 only reads
+mount facts; host mount administration stays outside Hitchlet.

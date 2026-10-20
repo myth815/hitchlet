@@ -564,6 +564,7 @@ export class SQLiteMachineNodeStore {
     report: Readonly<{
       runId: string;
       sha256: string;
+      storageScopes?: Readonly<Record<string, "passed">> | undefined;
       scopes: Readonly<
         Record<
           string,
@@ -572,6 +573,7 @@ export class SQLiteMachineNodeStore {
       >;
     }>;
     networkProfileRevisionIds: readonly string[];
+    storageProfileRevisionIds?: readonly string[];
     operatorId: string;
     requestId: string;
   }) {
@@ -615,6 +617,20 @@ export class SQLiteMachineNodeStore {
       throw new RangeError(
         "Capability report references an unknown network revision",
       );
+    const storageRevisions = input.storageProfileRevisionIds ?? [];
+    if (storageRevisions.length) {
+      if (
+        !input.report.storageScopes ||
+        Object.keys(input.report.storageScopes).length !== 4
+      )
+        throw new RangeError("Storage attestation requires four passed scopes");
+      const found = await this.db.all<Row>(
+        `SELECT id FROM storage_profile_revisions WHERE id IN (${storageRevisions.map(() => "?").join(",")})`,
+        storageRevisions,
+      );
+      if (found.length !== storageRevisions.length)
+        throw new RangeError("Unknown storage revision");
+    }
     const config = parseJson(String(node.config_json)) as Record<
       string,
       unknown
@@ -639,6 +655,7 @@ export class SQLiteMachineNodeStore {
         architecture: input.architecture,
         checkedAt: input.checkedAt,
         networkProfileRevisionIds: input.networkProfileRevisionIds,
+        storageProfileRevisionIds: storageRevisions,
         report: input.report,
       }),
     );
@@ -647,7 +664,9 @@ export class SQLiteMachineNodeStore {
       memoryHardLimit: "verified",
       scratchHardLimit: "unsupported",
       networkPolicyEnforcement: "verified",
-      storagePolicyEnforcement: "unsupported",
+      storagePolicyEnforcement: storageRevisions.length
+        ? "verified"
+        : "unsupported",
       supportedAccess: ["ssh"],
       resourceKinds: ["container"],
       architectures: [input.architecture],
@@ -658,7 +677,7 @@ export class SQLiteMachineNodeStore {
         scratchMiB: integer(pool.total_scratch_mib),
       },
       verifiedNetworkProfileRevisionIds: [...input.networkProfileRevisionIds],
-      verifiedStorageProfileRevisionIds: [],
+      verifiedStorageProfileRevisionIds: [...storageRevisions],
       providerVersion: `Portainer/${input.portainerVersion}; Docker/${input.dockerVersion}`,
       expiresAt: new Date(checkedAt + 60 * 60_000).toISOString(),
       observedAt: new Date(checkedAt).toISOString(),
@@ -673,7 +692,7 @@ export class SQLiteMachineNodeStore {
     await this.db.batchTransaction([
       {
         kind: "run",
-        sql: "UPDATE machines SET admission='enabled',desired_power='on',observed_power='on',power_lifecycle='idle',version=version+1,updated_at_ms=? WHERE id=? AND admission='disabled'",
+        sql: "UPDATE machines SET admission='enabled',desired_power='on',observed_power='on',power_lifecycle='idle',version=version+1,updated_at_ms=? WHERE id=? AND admission IN('disabled','enabled')",
         params: [time, String(node.machine_id)],
         expectChanges: 1,
       },

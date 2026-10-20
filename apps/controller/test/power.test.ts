@@ -141,7 +141,7 @@ async function fixture() {
       await db.close();
       const legacy = new Database(join(dir, "hitchlet.sqlite"));
       legacy.exec(
-        "DROP INDEX machine_plug_binding_id; DROP INDEX machine_plug_device_id; DROP INDEX machine_plug_mac; DROP INDEX machine_active_power_intent; DELETE FROM schema_migrations WHERE version=6; PRAGMA user_version=5;",
+        "DROP TRIGGER cache_maintenance_gate; DROP TRIGGER ticket_maintenance_gate; DROP TRIGGER allocation_maintenance_gate; DROP TRIGGER allocation_runtime_disk_gate; DROP TABLE system_maintenance; DELETE FROM schema_migrations WHERE version=7; DROP INDEX machine_plug_binding_id; DROP INDEX machine_plug_device_id; DROP INDEX machine_plug_mac; DROP INDEX machine_active_power_intent; DELETE FROM schema_migrations WHERE version=6; PRAGMA user_version=5;",
       );
       legacy.close();
       db = await openStorage(dir);
@@ -316,7 +316,7 @@ describe("persistent isolated power previews", () => {
     );
     expect(
       await f.db.get("SELECT max(version) AS version FROM schema_migrations"),
-    ).toEqual({ version: 6n });
+    ).toEqual({ version: 7n });
     expect(await f.db.get("PRAGMA integrity_check")).toEqual({
       integrity_check: "ok",
     });

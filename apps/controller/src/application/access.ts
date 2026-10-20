@@ -60,6 +60,7 @@ export class AccessService {
       row.phase !== "ready" ||
       row.lease_state !== "active" ||
       row.desired_state !== "present" ||
+      row.observed_state !== "running" ||
       row.claimed_at_ms === null ||
       Number(row.generation) !== generation ||
       !Number.isSafeInteger(expires) ||

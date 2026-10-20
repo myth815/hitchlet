@@ -315,8 +315,8 @@ export class SQLiteOperationStore {
     now: number,
   ) {
     const renewed = await this.db.run(
-      "UPDATE operations SET locked_until_ms=? WHERE id=? AND owner_token=? AND version=? AND state='running' AND locked_until_ms>? AND deadline_ms>? AND EXISTS(SELECT 1 FROM allocations a WHERE a.id=operations.allocation_id AND a.desired_state='present' AND a.control_version=operations.control_version AND EXISTS(SELECT 1 FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN provider_connections pc ON pc.id=n.provider_connection_id WHERE n.id=a.node_id AND n.admission='enabled' AND m.admission='enabled' AND m.observed_power='on' AND n.observed_health='healthy' AND n.observed_at_ms+120000>? AND pc.enabled=1)) AND controller_epoch=(SELECT controller_epoch FROM installations WHERE singleton=1)",
-      [now + 30_000, operationId, token, version, now, now, now],
+      "UPDATE operations SET locked_until_ms=? WHERE id=? AND owner_token=? AND version=? AND state='running' AND locked_until_ms>? AND deadline_ms>? AND EXISTS(SELECT 1 FROM allocations a WHERE a.id=operations.allocation_id AND a.desired_state='present' AND a.control_version=operations.control_version AND EXISTS(SELECT 1 FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN provider_connections pc ON pc.id=n.provider_connection_id WHERE n.id=a.node_id AND n.admission='enabled' AND m.admission='enabled' AND m.observed_power='on' AND n.observed_health='healthy' AND n.observed_at_ms+120000>? AND pc.enabled=1)) AND EXISTS(SELECT 1 FROM system_maintenance WHERE paused=0 AND disk_state='healthy' AND recovery_json IS NULL) AND NOT EXISTS(SELECT 1 FROM allocations a JOIN nodes n ON n.id=a.node_id WHERE a.id=operations.allocation_id AND json_extract(n.config_json,'$.executionMode')='portainer' AND NOT EXISTS(SELECT 1 FROM system_maintenance s,json_each(s.runtime_disks_json) d WHERE d.key=n.id AND json_extract(d.value,'$.state')='healthy' AND json_extract(d.value,'$.observedAtMs')<=? AND json_extract(d.value,'$.observedAtMs')+30000>=? AND json_extract(d.value,'$.availableMiB')-json_extract(d.value,'$.reserveMiB')>=json_extract(a.resource_contract_json,'$.request.scratchMiB'))) AND controller_epoch=(SELECT controller_epoch FROM installations WHERE singleton=1)",
+      [now + 30_000, operationId, token, version, now, now, now, now, now],
     );
     if (renewed.changes !== 1n)
       throw new Error("Provision operation fence is no longer active");
@@ -331,7 +331,7 @@ export class SQLiteOperationStore {
   }) {
     const path = `$.createEffects.${input.effect.kind}`;
     const result = await this.db.run(
-      "UPDATE operations SET result_json=json_set(COALESCE(result_json,'{}'),?,json(?)) WHERE id=? AND kind='allocation.provision' AND owner_token=? AND version=? AND state='running' AND locked_until_ms>? AND deadline_ms>? AND controller_epoch=(SELECT controller_epoch FROM installations WHERE singleton=1) AND json_extract(result_json,'$.createJournalVersion')=1 AND json_type(result_json,?) IS NULL AND EXISTS(SELECT 1 FROM allocations a WHERE a.id=operations.allocation_id AND a.desired_state='present' AND a.control_version=operations.control_version)",
+      "UPDATE operations SET result_json=json_set(COALESCE(result_json,'{}'),?,json(?)) WHERE id=? AND kind='allocation.provision' AND owner_token=? AND version=? AND state='running' AND locked_until_ms>? AND deadline_ms>? AND EXISTS(SELECT 1 FROM system_maintenance WHERE paused=0 AND disk_state='healthy' AND recovery_json IS NULL) AND NOT EXISTS(SELECT 1 FROM allocations a JOIN nodes n ON n.id=a.node_id WHERE a.id=operations.allocation_id AND json_extract(n.config_json,'$.executionMode')='portainer' AND NOT EXISTS(SELECT 1 FROM system_maintenance s,json_each(s.runtime_disks_json) d WHERE d.key=n.id AND json_extract(d.value,'$.state')='healthy' AND json_extract(d.value,'$.observedAtMs')<=? AND json_extract(d.value,'$.observedAtMs')+30000>=? AND json_extract(d.value,'$.availableMiB')-json_extract(d.value,'$.reserveMiB')>=json_extract(a.resource_contract_json,'$.request.scratchMiB'))) AND controller_epoch=(SELECT controller_epoch FROM installations WHERE singleton=1) AND json_extract(result_json,'$.createJournalVersion')=1 AND json_type(result_json,?) IS NULL AND EXISTS(SELECT 1 FROM allocations a WHERE a.id=operations.allocation_id AND a.desired_state='present' AND a.control_version=operations.control_version)",
       [
         path,
         JSON.stringify({
@@ -342,6 +342,8 @@ export class SQLiteOperationStore {
         input.operationId,
         input.token,
         input.operationVersion,
+        input.now,
+        input.now,
         input.now,
         input.now,
         path,
@@ -479,7 +481,7 @@ export class SQLiteOperationStore {
   }
   resolvedContract(id: string): Promise<Row | undefined> {
     return this.db.get<Row>(
-      "SELECT contract_hash,selection_hash,node_id FROM resolved_provision_contracts WHERE id=?",
+      "SELECT contract_hash,selection_hash,node_id,storage_bindings_json FROM resolved_provision_contracts WHERE id=?",
       [id],
     );
   }
@@ -499,7 +501,7 @@ export class SQLiteOperationStore {
     await this.db.batchTransaction([
       {
         kind: "run",
-        sql: "INSERT INTO resolved_provision_contracts(id,node_id,selection_hash,resolved_at_ms,network_profile_revision_id,platform_deny_revision_id,contract_hash,storage_bindings_json,network_binding_json) SELECT ?,a.node_id,?,?,?, ?,?,?,? FROM allocations a LEFT JOIN tickets t ON t.id=a.ticket_id LEFT JOIN image_validations v ON v.id=a.image_validation_id WHERE a.id=? AND a.resolved_provision_contract_id IS NULL AND a.control_version=? AND a.desired_state='present' AND ((a.purpose='tenant' AND t.phase IN ('reserved','provisioning')) OR (a.purpose='validation' AND v.state IN ('queued','running') AND v.deadline_ms>?)) AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=COALESCE(t.network_profile_revision_id,json_extract(v.accepted_contract_json,'$.networkRevisionId'))) AND NOT EXISTS(SELECT 1 FROM ticket_storage_grants g JOIN profile_grant_revocations r ON r.storage_profile_revision_id=g.storage_profile_revision_id WHERE g.ticket_id=t.id)",
+        sql: "INSERT INTO resolved_provision_contracts(id,node_id,selection_hash,resolved_at_ms,network_profile_revision_id,platform_deny_revision_id,contract_hash,storage_bindings_json,network_binding_json) SELECT ?,a.node_id,?,?,?, ?,?,?,? FROM allocations a LEFT JOIN tickets t ON t.id=a.ticket_id LEFT JOIN image_validations v ON v.id=a.image_validation_id WHERE a.id=? AND a.resolved_provision_contract_id IS NULL AND a.control_version=? AND a.desired_state='present' AND ((a.purpose='tenant' AND t.phase IN ('reserved','provisioning')) OR (a.purpose='validation' AND v.state IN ('queued','running') AND v.deadline_ms>?)) AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=COALESCE(t.network_profile_revision_id,json_extract(v.accepted_contract_json,'$.networkRevisionId'))) AND NOT EXISTS(SELECT 1 FROM ticket_storage_grants g JOIN profile_grant_revocations r ON r.storage_profile_revision_id=g.storage_profile_revision_id WHERE g.ticket_id=t.id) AND NOT EXISTS(SELECT 1 FROM json_each(v.accepted_contract_json,'$.storageBindings') b JOIN profile_grant_revocations r ON r.storage_profile_revision_id=json_extract(b.value,'$.storageProfileRevisionId'))",
         params: [
           input.contractId,
           input.selectionHash,

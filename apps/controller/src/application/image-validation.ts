@@ -1,3 +1,4 @@
+import { runtimeStorageMountSchema } from "@hitchlet/contracts/internal";
 import { randomUUID } from "node:crypto";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { z } from "zod";
@@ -39,10 +40,6 @@ export class ImageValidationService {
       deadlineMs: number;
     },
   ) {
-    if (input.storage.length > 0)
-      throw new RangeError(
-        "Persistent validation mounts are unsupported until source evidence is available",
-      );
     const context = await this.store.loadContext(input);
     const { consumer, target, deny } = context;
     let network = context.network;
@@ -93,7 +90,69 @@ export class ImageValidationService {
     const nodeAccess = stringArray(caps.supportedAccess);
     const accessProtocols = stringArray(recipe.accessProtocols);
     const networkPolicy = object(network.policy_json, "network policy");
-    const bindings: [] = [];
+    const bindings = [];
+    for (const [index, request] of input.storage.entries()) {
+      if (!permitted("storageProfileIds", request.storageProfileId))
+        throw new RangeError("Storage profile not authorized for validation");
+      const frozen =
+        retry && Array.isArray(retry.contract.storageBindings)
+          ? retry.contract.storageBindings[index]
+          : undefined;
+      const profile = frozen
+        ? await this.store.frozenStorage(
+            request.storageProfileId,
+            String(JsonObject.parse(frozen).storageProfileRevisionId),
+          )
+        : context.storageProfiles.get(request.storageProfileId);
+      if (
+        !profile ||
+        profile.status !== "active" ||
+        !profile.current_revision_id
+      )
+        throw new RangeError("Storage profile unavailable");
+      const config = object(profile.config_json, "storage config");
+      const subpaths = stringArray(config.allowedSubpaths),
+        modes = stringArray(config.allowedModes);
+      if (
+        !modes.includes(request.mode) ||
+        !subpaths.some(
+          (p) =>
+            request.authorizedSubpath === p ||
+            request.authorizedSubpath.startsWith(p.replace(/\/$/, "") + "/"),
+        )
+      )
+        throw new RangeError("Storage path or mode exceeds authorization");
+      runtimeStorageMountSchema.parse({
+        grantId: `validation:${index}`,
+        revisionId: profile.current_revision_id,
+        approvedSourceRef: config.sourceRef,
+        authorizedSubpath: request.authorizedSubpath,
+        protocol: profile.kind,
+        secretVersionRef: profile.secret_version_ref,
+        target: request.mountPath,
+        mode: request.mode,
+      });
+      if (
+        !stringArray(caps.verifiedStorageProfileRevisionIds).includes(
+          String(profile.current_revision_id),
+        )
+      )
+        throw new RangeError("Storage revision not verified on Node");
+      bindings.push({
+        storageProfileId: request.storageProfileId,
+        storageProfileRevisionId: String(profile.current_revision_id),
+        profileVersion: Number(profile.version),
+        protocol: String(profile.kind),
+        sourceRef: String(config.sourceRef),
+        authorizedSubpath: request.authorizedSubpath,
+        mountPath: request.mountPath,
+        mode: request.mode,
+        secretVersionRef:
+          typeof profile.secret_version_ref === "string"
+            ? profile.secret_version_ref
+            : null,
+      });
+    }
     const requested = input.resources.request;
     const minimum = {
       cpuMillis: Number(target.minimum_cpu_millis),
@@ -203,7 +262,17 @@ export class ImageValidationService {
         enforcement: "docker_iptables",
         verificationRequired: true,
       },
-      storage: [],
+      storage: bindings.map((b, index) => ({
+        grantId: `validation:${validationId}:${index}`,
+        grantRevision: 1,
+        storageProfileRevisionId: b.storageProfileRevisionId,
+        protocol: b.protocol,
+        approvedSourceRef: b.sourceRef,
+        authorizedSubpath: b.authorizedSubpath,
+        mountPath: b.mountPath,
+        mode: b.mode,
+        secretVersionRef: b.secretVersionRef,
+      })),
     };
     if (retry && blockReason) return;
     const result = await this.store.persistSchedule({

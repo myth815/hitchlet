@@ -113,3 +113,29 @@ describe("admin SDK commands", () => {
     expect(calls).toBe(1);
   });
 });
+
+it("keeps system credential queries safe and never retries a lost rotation response", async () => {
+  let calls = 0;
+  const client = new HitchletClient("https://controller.test", {
+    auth: { kind: "bearer", token: "test" },
+    fetch: async (input) => {
+      calls++;
+      if (String(input).includes("rotate"))
+        throw new TypeError("connection lost after response");
+      expect(String(input)).toBe(
+        "https://controller.test/v1/system/credentials?consumerId=consumer%2Fid",
+      );
+      return new Response("[]", {
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  expect(await client.admin.credentials("consumer/id")).toEqual([]);
+  await expect(
+    client.admin.rotateCredential({
+      consumerId: "consumer/id",
+      credentialId: id,
+    }),
+  ).rejects.toBeDefined();
+  expect(calls).toBe(2);
+});

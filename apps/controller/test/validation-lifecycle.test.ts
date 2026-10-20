@@ -222,6 +222,20 @@ async function fixture(options: { blocked?: boolean; capacity?: number } = {}) {
     operatorId: adminId,
     requestId: randomUUID(),
   });
+  await db.run(
+    "UPDATE system_maintenance SET runtime_disks_json=? WHERE singleton=1",
+    [
+      JSON.stringify({
+        [node.id]: {
+          nodeId: node.id,
+          state: "healthy",
+          availableMiB: 100000,
+          reserveMiB: 128,
+          observedAtMs: time,
+        },
+      }),
+    ],
+  );
   const attest = () =>
     admin.attestNodeCapabilities({
       nodeId: node.id,
@@ -424,6 +438,17 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
     f.simulator.ready = async (...args) => {
       for (let i = 0; i < 4; i++) {
         f.advance(10_000);
+        await f.db.run("UPDATE system_maintenance SET runtime_disks_json=?", [
+          JSON.stringify({
+            [f.node.id]: {
+              nodeId: f.node.id,
+              state: "healthy",
+              availableMiB: 100000,
+              reserveMiB: 128,
+              observedAtMs: f.now(),
+            },
+          }),
+        ]);
         await vi.advanceTimersByTimeAsync(10_000);
         const lock = await f.db.get<{ locked_until_ms: bigint }>(
           "SELECT locked_until_ms FROM operations WHERE id=?",
@@ -908,7 +933,7 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
     });
   }, 20_000);
 
-  it("rejects unsupported mounts and never treats a manual capability attestation as an image validation report", async () => {
+  it("rejects unavailable mount grants and never treats a manual capability attestation as an image validation report", async () => {
     const f = await fixture();
     await expect(
       f.admin.publishVersion(f.draft.versionId, await f.version()),
@@ -925,7 +950,7 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
           },
         ],
       }),
-    ).rejects.toThrow("Persistent validation mounts are unsupported");
+    ).rejects.toThrow("Storage profile unavailable");
     expect(await f.db.get("SELECT count(*) n FROM image_validations")).toEqual({
       n: 0n,
     });

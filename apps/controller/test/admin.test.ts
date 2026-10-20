@@ -167,6 +167,20 @@ describe("D10 Portainer identity and D11a catalog", () => {
       sha256: createHash("sha256").update("manual test fixture").digest("hex"),
       scopes,
     };
+    await db.run(
+      "UPDATE system_maintenance SET runtime_disks_json=? WHERE singleton=1",
+      [
+        JSON.stringify({
+          [node.id]: {
+            nodeId: node.id,
+            state: "healthy",
+            availableMiB: 100000,
+            reserveMiB: 128,
+            observedAtMs: clock,
+          },
+        }),
+      ],
+    );
     await service.attestNodeCapabilities({
       nodeId: node.id,
       expectedVersion: configured.version,
@@ -882,7 +896,7 @@ describe("D10 Portainer identity and D11a catalog", () => {
           },
         ],
       }),
-    ).rejects.toThrow("Persistent validation mounts are unsupported");
+    ).rejects.toThrow("Storage revision not verified on Node");
     const cache = await service.prewarmImageCache({
       nodeId: node.id,
       artifactId: draft.artifactId,

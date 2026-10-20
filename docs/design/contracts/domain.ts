@@ -699,7 +699,7 @@ export interface FrozenProfileSelection {
 export interface ResolvedStorageGrant extends FrozenStorageGrant {
   /** 节点实际源路径/端点，必须处于原批准范围。 */
   readonly resolvedSourceRef: string; // 选 Node 后解析的真实源；必须在 approvedSourceRef 授权范围内。
-  /** 实际源路径及挂载安全检查证据。 */
+  /** D23：已核验的宿主 mount/dev/inode 与授权摘要；不含 Agent 自身 namespace mount ID。实际宿主源变更会拒绝沿用，Agent 容器重启不会伪造源变更。 */
   readonly sourceValidationEvidenceId: Id;
 }
 

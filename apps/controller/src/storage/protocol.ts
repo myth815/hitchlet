@@ -16,6 +16,8 @@ export type RunResult = { changes: bigint; lastInsertRowid: bigint };
 export type Command =
   | { kind: "run" | "get" | "all"; sql: string; params?: readonly SqlValue[] }
   | { kind: "batch"; statements: readonly Statement[] }
+  | { kind: "backup"; destination: string }
+  | { kind: "check" }
   | { kind: "close" };
 export type Reply = {
   id: number;
