@@ -1,3 +1,4 @@
+import { ProfileRevocation } from "./ProfileRevocation.js";
 import React from "react";
 import { NetworkProtection } from "./NetworkProtection.js";
 import {
@@ -375,6 +376,17 @@ export function ProfileSetup({
           </button>
         </fieldset>
       </form>
+      {profile ? (
+        <ProfileRevocation
+          key={`${kind}:${profile.id}`}
+          client={client}
+          disabled={disabled || !!snapshot.error}
+          action={action}
+          kind={kind}
+          profile={profile}
+          onRevoked={() => void snapshot.refresh()}
+        />
+      ) : null}
       <div className="admin-grid">
         {[
           ...(snapshot.data?.networks ?? []),

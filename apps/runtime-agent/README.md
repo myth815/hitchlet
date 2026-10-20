@@ -8,6 +8,24 @@ For each fully inspected allocation, `ensure` and `revoke` also disable and read
 
 ## Build and start
 
+On the Linux Engine host, check `test -d /sys/module/br_netfilter` before
+admitting the Node, including after a host or Docker-base VM reboot. Docker
+daemon readiness alone does not prove this prerequisite. For an administrator
+managed Ubuntu/systemd host, module loading and boot persistence can be prepared
+explicitly:
+
+```sh
+sudo modprobe br_netfilter
+printf 'br_netfilter\n' | sudo tee /etc/modules-load.d/hitchlet.conf >/dev/null
+test -d /sys/module/br_netfilter
+```
+
+Run these on the actual Engine host under its change policy, then verify again
+after reboot. The Runtime Agent keeps only `NET_ADMIN`; it never loads modules.
+If the module is missing, keep admission paused, restore the prerequisite and
+let existing cleanup recover before admitting new work. Never release a Claim
+or delete its journal to bypass this failure.
+
 The Agent requires Node 24, the official Docker CLI 29, iptables commands, `conntrack-tools`, `iproute2`, the local Docker Unix socket, the host network namespace, and access to the Engine's `DOCKER-USER` chain. The [Dockerfile](Dockerfile) defines the image contents and pinned CLI default. Build only against an explicitly selected, isolated Linux Docker context; never rely on the caller's default context:
 
 ```sh

@@ -1,6 +1,6 @@
 # TypeScript 接口使用与设计审阅
 
-版本：1.3。这里是可供实现的合同与编译期示例，尚未包含HTTP客户端、控制服务或Provider实现。
+版本：1.3。Docker M2 的HTTP客户端、控制器、Portainer Provider和GUI已实现。此目录保留行为设计与编译期示例；当前部署限制和责任索引见[仓库README](../../../README.md#当前架构与权威索引)。VM与实际电源执行仍属后置设计。
 
 ## 从哪个入口开始
 
@@ -16,7 +16,7 @@
 
 [../contracts.ts](../contracts.ts) 保留为内部总索引。新消费者只从 `public.ts` 导入，避免误用包含管理地址、真实路径和秘密定位符的类型。所有模块依赖均为 `import type`；公开模块只依赖共享值类型，不反向依赖持久模型。
 
-运行时公开 DTO 的权威定义位于 `@hitchlet/contracts`：其 `public.ts` 维护包导出白名单，`schemas.ts` 提供 Zod 校验和 Draft 2020-12 JSON Schema 生成。本文的 `common.ts`、`consumer.ts` 与 `public.ts` 是指向该包源码的 type-only re-export；领域、Provider 和 Agent 设计仍留在本文档，且不进入运行包导出。
+运行时公开 DTO 的权威定义位于 `@hitchlet/contracts`：其 `public.ts` 维护包导出白名单，`schemas.ts` 提供 Zod 校验和 Draft 2020-12 JSON Schema 生成。本文的 `common.ts`、`consumer.ts` 与 `public.ts` 是指向该包源码的 type-only re-export；领域、Provider 和 Agent 设计仍留在本文档，且不进入运行包导出。管理授权吊销请求、影响与回执从 `packages/contracts/src/admin.ts` 的运行时schema推导并在设计类型中re-export，不维护第二套手写字段。实际SQLite以控制器migrations为准，内部设计实体不是JSON合同/证据列的逐列映射。
 
 管理GUI的Machine/Node/Consumer等视图由对应管理路由的response schema生成，按角色投影；不能直接把services返回的内部对象当HTTP响应。这里列核心用例端口，不为每个管理列表手工维护第二套字段定义。
 

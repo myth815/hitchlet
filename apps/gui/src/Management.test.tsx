@@ -1,3 +1,4 @@
+import { ProfileRevocation } from "./ProfileRevocation.js";
 // @vitest-environment jsdom
 import React, { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -497,5 +498,116 @@ describe("D24 structured GUI and recovery", () => {
     await act(async () => vi.advanceTimersByTime(10000));
     expect(element.textContent).toContain("以下为历史观测");
     expect(element.textContent).toContain("last server state");
+  });
+});
+
+describe("profile revocation GUI SDK chain", () => {
+  it("selects historical revisions, previews without execution and sends the reviewed CAS/reason with an idempotency key", async () => {
+    const old = "00000000-0000-4000-8000-000000000004",
+      current = "00000000-0000-4000-8000-000000000005";
+    const calls: Array<{
+      path: string;
+      method: string;
+      body: unknown;
+      key: string | null;
+    }> = [];
+    const impact = {
+      affectedTicketIds: [id],
+      affectedValidationIds: [],
+      affectedInfrastructureAllocationIds: [],
+      canRevoke: true,
+      disabledReasons: [],
+    };
+    const client = new HitchletClient("https://profiles.test", {
+      auth: { kind: "bearer", token: "admin-fixture" },
+      fetch: async (input, init) => {
+        const path = new URL(String(input)).pathname;
+        const body = init?.body ? JSON.parse(String(init.body)) : null;
+        calls.push({
+          path,
+          method: init?.method ?? "GET",
+          body,
+          key: new Headers(init?.headers).get("Idempotency-Key"),
+        });
+        const result = path.endsWith("/revisions")
+          ? [
+              {
+                id: current,
+                profileId: network,
+                revision: 2,
+                isCurrent: true,
+                revokedAt: null,
+              },
+              {
+                id: old,
+                profileId: network,
+                revision: 1,
+                isCurrent: false,
+                revokedAt: null,
+              },
+            ]
+          : path.endsWith("/preview")
+            ? impact
+            : {
+                ...impact,
+                id: version,
+                profileKind: "network",
+                profileRevisionId: old,
+                reason: "Incident review",
+                createdAt: new Date().toISOString(),
+                createdBy: id,
+                operationId: current,
+              };
+        return new Response(JSON.stringify(result), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    });
+    const refreshed = vi.fn();
+    const { element } = await mount(
+      <ProfileRevocation
+        client={client}
+        disabled={false}
+        action={async (_label, work) => {
+          await work("gui-original-revocation");
+          return true;
+        }}
+        kind="network"
+        profile={{ id: network, version: 2 }}
+        onRevoked={refreshed}
+      />,
+    );
+    const select = element.querySelector("select")!;
+    expect([...select.options].map((o) => o.textContent).join(" ")).toContain(
+      "历史",
+    );
+    await change(select, old);
+    await change(element.querySelector("input")!, "Incident review");
+    expect(
+      [...element.querySelectorAll("button")].find((b) =>
+        b.textContent?.includes("预览吊销影响"),
+      )!.disabled,
+      element.innerHTML,
+    ).toBe(false);
+    await click(element, "预览吊销影响");
+    expect(calls.filter((c) => c.method === "POST")).toHaveLength(1);
+    expect(calls.at(-1)!.path).toBe("/v1/admin/profile-grants/revoke/preview");
+    expect(element.textContent).toContain("Ticket 1");
+    expect(element.textContent).toContain(old);
+    await click(element, "确认永久吊销");
+    expect(
+      calls.find((c) => c.path === "/v1/admin/profile-grants/revoke"),
+    ).toMatchObject({
+      method: "POST",
+      key: "gui-original-revocation",
+      body: {
+        profileKind: "network",
+        profileRevisionId: old,
+        expectedProfileVersion: 2,
+        reason: "Incident review",
+      },
+    });
+    expect(refreshed).toHaveBeenCalledOnce();
   });
 });

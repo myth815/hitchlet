@@ -150,6 +150,18 @@ Do not enable a node by editing SQLite or reuse the Simulator as proof of Docker
 
 Use an isolated Linux Engine. Follow the [Runtime Agent deployment instructions](../apps/runtime-agent/README.md) and the [Node SSH image recipe](../docker/node-ssh-v1/Dockerfile). The controller and Agent must agree on installation, runtime identity, native Engine and Agent identities; keep Agent credentials in the versioned secret store and journal data on persistent storage.
 
+Before admission, and after every Engine-host or Docker-base VM reboot, verify
+`br_netfilter` is loaded on that Linux host and approved NAS mounts are present.
+The Runtime deployment guide includes the explicit Ubuntu boot configuration;
+daemon/Agent readiness alone is insufficient. Missing prerequisites must block
+new work while Claims remain held for verified cleanup.
+
+If an older allocation already contains malformed SSH access material, do not
+replace its key silently or edit its secret reference. Revoke/reclaim that
+allocation through the normal cleanup path, verify capacity release, and use a
+new Ticket with newly generated material; authorized persistent outputs remain
+outside the destruction set.
+
 While the Node is disabled, configure `/v1/nodes/{nodeId}/runtime-config` with its current `If-Match` version. Supply the access host, allocation CIDR base, actual userland-proxy mode, Agent endpoint and secret version references, and explicit management-deny rules/baseline. The current schema is available in OpenAPI; the runtime profile is not a consumer-supplied shell or mount template.
 
 Before admitting the Node, collect actual resource-limit, INPUT/FORWARD, IPv6, SSH-bootstrap and cleanup-recovery evidence for the exact Engine and network profile revisions. Submit the report at `/v1/nodes/{nodeId}/capability-attestations` with `If-Match`; a new Node enters the constant-online/manual-inventory trial path, while re-attesting a Node already in observed-host mode preserves that mode and its independent Host guard. The default capability evidence lifetime remains one hour, while `validForSeconds` may explicitly set 3600–2592000 seconds. Choose an interval suitable for the evidence and operations calendar; seven days or one day is an operational choice, not a stronger test. Node observations and Host heartbeats never extend capability expiry. On expiry, new Ticket/validation selection and publication stop using that Node until it is re-tested and re-attested. The report does not establish human absence, safe power control, persistent storage or strict offline lease enforcement. Unsupported hard requirements are rejected.

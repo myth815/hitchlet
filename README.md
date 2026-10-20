@@ -32,6 +32,22 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 | 首个后端 | Portainer → Docker Engine |
 | 后续按需接入 | Windows Hyper-V、Apple Silicon 上的 Tart |
 
+## 当前架构与权威索引
+
+控制器保持模块化单体：一个常驻进程、一个本地 SQLite 账本；容量和所有权由账本裁决，Provider回执或GUI观测不能替代删除查实。依赖方向为 `gui → sdk → contracts`、`controller → contracts`。
+
+| 责任 | 当前权威 |
+| --- | --- |
+| DTO、运行时校验、可恢复管理命令白名单 | `packages/contracts/src`；管理协议在 `admin.ts` / `management.ts`，OpenAPI复用这些schema |
+| 浏览器/Node传输、认证与原命令恢复 | `packages/sdk/src`；GUI只通过SDK访问控制器 |
+| HTTP认证、CSRF、角色投影与响应 | `apps/controller/src/app.ts`、`http/`；不直接编排SQL或Provider副作用 |
+| 用例与恢复编排 | `apps/controller/src/application`；纯规则位于无HTTP/SQLite依赖的 `domain/` |
+| 持久事务与版本fence | `apps/controller/src/storage`；实际DDL以 `migrations/001–007` 为准 |
+| 原生执行、Runtime/Host协议 | `apps/controller/src/providers`、`apps/runtime-agent`；Docker经Portainer管理，代理只执行批准的动作 |
+| 当前部署证据与限制 | [Docker验收](docs/DOCKER-ACCEPTANCE.md)、[运行手册](docs/runbook.md)；[实施记录](docs/IMPLEMENTATION.md)与设计VERIFICATION保留历史批次事实 |
+
+设计目录描述行为和后置扩展；设计内部类型不是SQLite行对象的一对一映射。JSON合同、manifest、证据和结果保存在既有JSON列，关联与关键不变量由SQL列、约束和短事务共同维护。`GET /healthz` 的 `stage: "D05"` 是兼容既有客户端的协议标记，不是当前M2验收状态。
+
 ## 从这里开始
 
 - [完整设计与分阶段开发计划](docs/design/README.md)

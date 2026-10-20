@@ -714,6 +714,57 @@ export const AdminProfileViewSchema = z
     createdAtMs: z.number().int().nonnegative().nullable(),
   })
   .strict();
+/** Immutable revision history contains no storage roots or credentials. */
+export const ProfileRevisionViewSchema = z
+  .object({
+    id,
+    profileId: id,
+    revision: z.number().int().positive(),
+    isCurrent: z.boolean(),
+    revokedAt: z.string().datetime().nullable(),
+  })
+  .strict();
+/** Targets an immutable revision; preview does not lock references and execution re-enumerates atomically. */
+export const ProfileGrantRevokeRequestSchema = z
+  .object({
+    profileKind: z.enum(["storage", "network"]),
+    profileRevisionId: id,
+    reason: z.string().trim().min(1).max(1000),
+    /** Logical Profile CAS version, not the immutable revision number. */
+    expectedProfileVersion: z.number().int().positive().safe(),
+  })
+  .strict();
+export type ProfileGrantRevokeRequest = z.infer<
+  typeof ProfileGrantRevokeRequestSchema
+>;
+export const RevocationImpactSchema = z
+  .object({
+    affectedTicketIds: z.array(id),
+    affectedValidationIds: z.array(id),
+    affectedInfrastructureAllocationIds: z.array(id),
+    canRevoke: z.boolean(),
+    disabledReasons: z.array(
+      z.enum([
+        "infrastructure_revocation_unsupported",
+        "vm_revocation_unsupported",
+      ]),
+    ),
+  })
+  .strict();
+export type RevocationImpact = z.infer<typeof RevocationImpactSchema>;
+/** A persisted fence and termination intents; cleanup/Claim completion remains asynchronous. */
+export const ProfileGrantRevocationSchema = RevocationImpactSchema.extend({
+  id,
+  profileKind: z.enum(["storage", "network"]),
+  profileRevisionId: id,
+  reason: z.string(),
+  createdAt: z.string().datetime(),
+  createdBy: id,
+  operationId: id,
+}).strict();
+export type ProfileGrantRevocation = z.infer<
+  typeof ProfileGrantRevocationSchema
+>;
 export const AdminValidationViewSchema = z
   .object({
     id,
@@ -855,6 +906,10 @@ export const AdminCacheOperationReceiptSchema = z
   .strict();
 
 export const AdminSchemas = {
+  ProfileRevisionViewSchema,
+  ProfileGrantRevokeRequestSchema,
+  RevocationImpactSchema,
+  ProfileGrantRevocationSchema,
   ImageAliasNameSchema,
   ImagePublishRequestSchema,
   ImagePublishReceiptSchema,
@@ -941,6 +996,12 @@ export function managementRequestContract(
   const route = (pattern: string) =>
     new RegExp(`^${pattern.replaceAll(":id", uuid)}$`).test(path);
   if (method === "POST") {
+    if (path === "/v1/admin/profile-grants/revoke")
+      return {
+        request: ProfileGrantRevokeRequestSchema,
+        response: ProfileGrantRevocationSchema,
+        cas: false,
+      };
     if (route("/v1/tickets/:id/revoke"))
       return {
         request: RevokeRequestSchema,
@@ -1081,6 +1142,18 @@ export function managementRequestContract(
       };
   }
   if (method === "PUT") {
+    if (route("/v1/machines/:id/human-use-policy"))
+      return {
+        request: MachinePolicyUpdateSchema,
+        response: MachinePolicyReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/nodes/:id/admission-mode"))
+      return {
+        request: NodeAdmissionModeSchema,
+        response: NodeAdmissionModeReceiptSchema,
+        cas: false,
+      };
     if (path === "/v1/admin/network-deny")
       return {
         request: ManagementDenyUpdateSchema,

@@ -790,7 +790,7 @@ export class SQLiteOperationStore {
         ? [
             {
               kind: "run" as const,
-              sql: "UPDATE image_validations SET state=CASE WHEN json_extract(checks_json,'$.terminationReason')='cancelled' THEN 'cancelled' WHEN json_extract(checks_json,'$.testedEvidence.outcome')='passed' THEN 'succeeded' ELSE 'failed' END,test_outcome=CASE WHEN json_extract(checks_json,'$.testedEvidence.outcome')='passed' THEN 'passed' ELSE 'failed' END,cleanup_status='complete',report_id=id,finished_at_ms=?,version=version+1,checks_json=json_set(checks_json,'$.scheduler','complete','$.cleanupEvidence',json(?)),updated_at_ms=? WHERE id=? AND state='releasing'",
+              sql: "UPDATE image_validations SET state=CASE WHEN json_extract(checks_json,'$.terminationReason') IN ('cancelled','PROFILE_GRANT_REVOKED') THEN 'cancelled' WHEN json_extract(checks_json,'$.testedEvidence.outcome')='passed' THEN 'succeeded' ELSE 'failed' END,test_outcome=CASE WHEN json_extract(checks_json,'$.terminationReason') IN ('cancelled','PROFILE_GRANT_REVOKED') THEN 'failed' WHEN json_extract(checks_json,'$.testedEvidence.outcome')='passed' THEN 'passed' ELSE 'failed' END,cleanup_status='complete',report_id=id,finished_at_ms=?,version=version+1,checks_json=json_set(checks_json,'$.scheduler','complete','$.cleanupEvidence',json(?)),updated_at_ms=? WHERE id=? AND state='releasing'",
               params: [
                 now,
                 JSON.stringify({ ...input.cleanupEvidence, operationId }),

@@ -705,6 +705,29 @@ export function openApiDocument() {
           AdminSchemas.MachineReceiptSchema,
         ),
       },
+      "/v1/admin/profile-grants/revoke/preview": {
+        post: adminOperation(
+          "Preview revision revocation without mutation; unsupported VM/infrastructure dependencies disable execution",
+          "200",
+          AdminSchemas.ProfileGrantRevokeRequestSchema,
+          AdminSchemas.RevocationImpactSchema,
+        ),
+      },
+      "/v1/admin/profile-grants/revoke": {
+        post: adminOperation(
+          "Atomically CAS-revoke an immutable grant and persist termination intents; Idempotency-Key required, cleanup completes asynchronously",
+          "200",
+          AdminSchemas.ProfileGrantRevokeRequestSchema,
+          AdminSchemas.ProfileGrantRevocationSchema,
+          [
+            parameter("Idempotency-Key", "header", {
+              type: "string",
+              minLength: 1,
+              maxLength: 200,
+            }),
+          ],
+        ),
+      },
       "/v1/machines/{machineId}/dry-run": {
         get: adminOperation(
           "Evaluate current machine admission policy without side effects",
@@ -802,6 +825,13 @@ export function openApiDocument() {
         ),
       },
       "/v1/network-profiles/{profileId}/revisions": {
+        get: adminOperation(
+          "List immutable network revision history including revoked grants",
+          "200",
+          undefined,
+          AdminSchemas.ProfileRevisionViewSchema.array(),
+          [pathId("profileId")],
+        ),
         post: adminOperation(
           "Create and CAS-activate a network profile revision",
           "201",
@@ -811,6 +841,13 @@ export function openApiDocument() {
         ),
       },
       "/v1/storage-profiles/{profileId}/revisions": {
+        get: adminOperation(
+          "List immutable storage revision history including revoked grants",
+          "200",
+          undefined,
+          AdminSchemas.ProfileRevisionViewSchema.array(),
+          [pathId("profileId")],
+        ),
         post: adminOperation(
           "Create and CAS-activate a storage profile revision",
           "201",

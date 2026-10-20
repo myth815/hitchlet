@@ -44,7 +44,7 @@ export class SQLiteImagePublicationStore {
     const selected: Report[] = [];
     for (const artifact of artifacts) {
       const candidates = await this.db.all<Row>(
-        `SELECT v.*,n.capabilities_json AS current_capabilities,n.config_json AS current_config,n.version AS current_node_version,n.admission AS node_admission,pc.current_revision_id,cr.evidence_json AS current_provider,cr.endpoint_ref,cr.provider_endpoint_id,cr.secret_version_ref,np.current_revision_id AS current_network,d.id AS current_deny FROM image_validations v JOIN nodes n ON n.id=v.node_id JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions cr ON cr.id=pc.current_revision_id JOIN network_profiles np ON np.id=json_extract(v.accepted_contract_json,'$.networkProfileId') JOIN platform_network_deny_revisions d ON d.revision=(SELECT max(revision) FROM platform_network_deny_revisions) WHERE v.image_artifact_id=? AND v.state='succeeded' AND v.test_outcome='passed' AND v.cleanup_status='complete' AND v.report_id IS NOT NULL AND (v.evidence_expires_at_ms IS NULL OR v.evidence_expires_at_ms>?) AND pc.enabled=1 AND np.status='active' AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=np.current_revision_id) ORDER BY v.finished_at_ms DESC`,
+        `SELECT v.*,n.capabilities_json AS current_capabilities,n.config_json AS current_config,n.version AS current_node_version,n.admission AS node_admission,pc.current_revision_id,cr.evidence_json AS current_provider,cr.endpoint_ref,cr.provider_endpoint_id,cr.secret_version_ref,np.current_revision_id AS current_network,d.id AS current_deny FROM image_validations v JOIN nodes n ON n.id=v.node_id JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions cr ON cr.id=pc.current_revision_id JOIN network_profiles np ON np.id=json_extract(v.accepted_contract_json,'$.networkProfileId') JOIN platform_network_deny_revisions d ON d.revision=(SELECT max(revision) FROM platform_network_deny_revisions) WHERE v.image_artifact_id=? AND v.state='succeeded' AND v.test_outcome='passed' AND v.cleanup_status='complete' AND v.report_id IS NOT NULL AND (v.evidence_expires_at_ms IS NULL OR v.evidence_expires_at_ms>?) AND pc.enabled=1 AND np.status='active' AND NOT EXISTS(SELECT 1 FROM json_each(v.accepted_contract_json,'$.storageBindings') b JOIN profile_grant_revocations r ON r.storage_profile_revision_id=json_extract(b.value,'$.storageProfileRevisionId')) AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=np.current_revision_id) ORDER BY v.finished_at_ms DESC`,
         [String(artifact.id), this.now()],
       );
       let report: Report | undefined;
@@ -97,7 +97,7 @@ export class SQLiteImagePublicationStore {
           contract.networkRevisionId !== row.current_network ||
           contract.platformDenyRevisionId !== row.current_deny ||
           typeof caps.expiresAt !== "string" ||
-          Date.parse(caps.expiresAt) <= this.now()
+          !(Date.parse(caps.expiresAt) > this.now())
         )
           continue;
         report = { row, contract, snapshot };
@@ -117,14 +117,17 @@ export class SQLiteImagePublicationStore {
       )
         return undefined;
     }
+    const commitTime = this.now();
     const statements: Statement[] = selected.map(({ row, contract }) => ({
       kind: "run",
-      sql: `UPDATE image_validations SET version=version WHERE id=? AND EXISTS(SELECT 1 AS matched FROM image_validations v JOIN nodes n ON n.id=v.node_id JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions cr ON cr.id=pc.current_revision_id JOIN network_profiles np ON np.id=? WHERE v.id=? AND v.version=? AND v.state='succeeded' AND v.cleanup_status='complete' AND n.version=? AND n.capabilities_json=? AND n.config_json=? AND n.admission='enabled' AND pc.enabled=1 AND pc.current_revision_id=? AND cr.evidence_json=? AND np.status='active' AND np.current_revision_id=? AND ?=(SELECT id FROM platform_network_deny_revisions ORDER BY revision DESC LIMIT 1) AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=np.current_revision_id))`,
+      sql: `UPDATE image_validations SET version=version WHERE id=? AND EXISTS(SELECT 1 AS matched FROM image_validations v JOIN nodes n ON n.id=v.node_id JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions cr ON cr.id=pc.current_revision_id JOIN network_profiles np ON np.id=? WHERE v.id=? AND v.version=? AND v.state='succeeded' AND v.cleanup_status='complete' AND (v.evidence_expires_at_ms IS NULL OR v.evidence_expires_at_ms>?) AND julianday(json_extract(n.capabilities_json,'$.expiresAt'))>julianday(?,'unixepoch') AND NOT EXISTS(SELECT 1 FROM json_each(v.accepted_contract_json,'$.storageBindings') b JOIN profile_grant_revocations r ON r.storage_profile_revision_id=json_extract(b.value,'$.storageProfileRevisionId')) AND n.version=? AND n.capabilities_json=? AND n.config_json=? AND n.admission='enabled' AND pc.enabled=1 AND pc.current_revision_id=? AND cr.evidence_json=? AND np.status='active' AND np.current_revision_id=? AND ?=(SELECT id FROM platform_network_deny_revisions ORDER BY revision DESC LIMIT 1) AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=np.current_revision_id))`,
       params: [
         String(row.id),
         String(contract.networkProfileId),
         String(row.id),
         Number(row.version),
+        commitTime,
+        commitTime / 1000,
         Number(row.current_node_version),
         String(row.current_capabilities),
         String(row.current_config),
@@ -139,8 +142,8 @@ export class SQLiteImagePublicationStore {
       kind: "run",
       sql: "UPDATE image_versions SET status='published',entity_version=entity_version+1,published_at_ms=?,updated_at_ms=? WHERE id=? AND entity_version=? AND status IN ('draft','validating') AND manifest_json=? AND (SELECT count(*) FROM image_artifacts WHERE image_version_id=?)=?",
       params: [
-        this.now(),
-        this.now(),
+        commitTime,
+        commitTime,
         versionId,
         expected,
         String(version.manifest_json),

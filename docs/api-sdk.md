@@ -163,3 +163,18 @@ if (profile)
 GUI 在每个 Consumer 的标签页 sessionStorage 中保留最多8条安全原请求，刷新可恢复，关闭标签页可能丢失。长期令牌、凭据签发响应和访问材料不在其中。签发凭据以同一个键原子记录**元数据**并只返回一次 token，重复同键返回409，不重发token；丢响应后先查凭据列表，撤销/轮换那一凭据，不能自动多发。D23轮换也不自动重试；自轮换使旧会话失效，新token仍只在当前页面内存显示。
 
 `409/412` 后读取当前配置/CAS，再明确提出新意图和新键；不能静默覆盖。断线时 GUI 保留历史快照并禁用写入，不将未知值算零、不把202受理算回收成功。consumer事件由 `watchEvents(cursor,signal,onEvent,onConnected)` 使用可续接 SSE；十进制游标不转 Number，断开后有界重连和快照轮询补偿。历史已裁剪时重新抓取快照，事件历史缺失不证明状态成功。
+
+## 紧急吊销固定授权修订
+
+full admin用 `client.admin.profileRevisions(kind, profileId)` 查询历史，选择明确的不可变修订。
+`previewGrantRevocation({profileKind, profileRevisionId, expectedProfileVersion, reason})`
+对应 `POST /v1/admin/profile-grants/revoke/preview`，无持久副作用。
+`revokeGrants(body, key)` 对应 `POST /v1/admin/profile-grants/revoke`，要求原因、逻辑Profile CAS与幂等键。
+执行事务重新枚举影响；任何引用/版本变化使整个事务冲突，必须重新读取和预览。
+收到200只说明永久fence、Ticket的admin_revoke/PROFILE_GRANT_REVOKED及validation取消/清理意图和幂等回执已落账。
+通过Ticket/validation/Claim观察后续回收；暂停准入不阻止清理，删除查实前容量保留，NAS源文件和共享输出不会删除。
+预览发现底座或VM依赖会返回不可执行原因，当前执行入口拒绝该路径。
+
+这项写入及 `updateHumanUsePolicy` / `updateNodeAdmissionMode` 均可在
+`onManagementPrepared` 保存原命令，通过 `client.admin.resumeManagement(command)`
+原body、CAS和key恢复丢失的回执；当前权限与会话CSRF先于重放检查。

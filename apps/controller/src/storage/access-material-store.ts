@@ -1,4 +1,9 @@
-import { createHash } from "node:crypto";
+import {
+  createHash,
+  generateKeyPairSync,
+  randomBytes,
+  type KeyObject,
+} from "node:crypto";
 import ssh2 from "ssh2";
 import type { Storage } from "./index.js";
 import { LocalSecretStore } from "./secret-store.js";
@@ -24,13 +29,17 @@ export class SQLiteAccessMaterialStore {
       const privateKey = await this.secrets.get(current.access_secret_ref);
       return material(privateKey, current.access_secret_ref);
     }
-    const privatePem = sshUtils.generateKeyPairSync("ed25519").private;
+    const privatePem = encodeEd25519OpenSshKey(
+      generateKeyPairSync("ed25519").privateKey,
+    );
+    // Validate before any secret or Allocation reference is persisted.
+    const generated = material(privatePem, "pending");
     const ref = await this.secrets.put(privatePem);
     const result = await this.db.run(
       "UPDATE allocations SET access_secret_ref=?,version=version+1,updated_at_ms=? WHERE id=? AND access_secret_ref IS NULL",
       [ref, this.now(), allocationId],
     );
-    if (result.changes === 1n) return material(privatePem, ref);
+    if (result.changes === 1n) return { ...generated, secretRef: ref };
     const winner = await this.db.get<Row>(
       "SELECT access_secret_ref FROM allocations WHERE id=?",
       [allocationId],
@@ -46,6 +55,57 @@ export class SQLiteAccessMaterialStore {
   async read(secretRef: string) {
     return this.secrets.get(secretRef);
   }
+}
+
+/** OpenSSH envelope around Node's Ed25519 bytes; no key arithmetic is implemented here.
+ * ssh2's generator strips leading zero public-key bytes, which are significant
+ * for Ed25519. JWK preserves the exact 32-byte public key and private seed. */
+export function encodeEd25519OpenSshKey(key: KeyObject): string {
+  if (key.type !== "private" || key.asymmetricKeyType !== "ed25519")
+    throw new Error("An Ed25519 private key is required");
+  const jwk = key.export({ format: "jwk" });
+  if (!jwk.x || !jwk.d) throw new Error("Ed25519 key bytes are missing");
+  const publicBytes = Buffer.from(jwk.x, "base64url"),
+    seed = Buffer.from(jwk.d, "base64url");
+  if (publicBytes.length !== 32 || seed.length !== 32)
+    throw new Error("Ed25519 keys require 32-byte public and seed values");
+  const uint32 = (n: number) => {
+    const b = Buffer.alloc(4);
+    b.writeUInt32BE(n);
+    return b;
+  };
+  const sshString = (value: string | Buffer) => {
+    const b = typeof value === "string" ? Buffer.from(value) : value;
+    return Buffer.concat([uint32(b.length), b]);
+  };
+  const publicBlob = Buffer.concat([
+    sshString("ssh-ed25519"),
+    sshString(publicBytes),
+  ]);
+  const check = randomBytes(4);
+  const privateBlock = Buffer.concat([
+    check,
+    check,
+    publicBlob,
+    sshString(Buffer.concat([seed, publicBytes])),
+    sshString("hitchlet"),
+  ]);
+  const padding = Buffer.from(
+    Array.from({ length: 8 - (privateBlock.length % 8) }, (_, i) => i + 1),
+  );
+  const envelope = Buffer.concat([
+    Buffer.from("openssh-key-v1\0"),
+    sshString("none"),
+    sshString("none"),
+    sshString(""),
+    uint32(1),
+    sshString(publicBlob),
+    sshString(Buffer.concat([privateBlock, padding])),
+  ]);
+  return `-----BEGIN OPENSSH PRIVATE KEY-----\n${envelope
+    .toString("base64")
+    .match(/.{1,70}/g)!
+    .join("\n")}\n-----END OPENSSH PRIVATE KEY-----\n`;
 }
 
 function material(privateKey: string, secretRef: string) {

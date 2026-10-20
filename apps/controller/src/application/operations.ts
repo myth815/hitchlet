@@ -885,7 +885,9 @@ export class OperationWorker {
         return this.defer(op, token, "create_effect_outcome_unknown");
       const knownObjects =
         createInspection.presence === "present"
-          ? [...createInspection.evidence.objects]
+          ? createInspection.evidence.objects.filter(
+              (item) => item.ownership === "owned",
+            )
           : [];
       for (const row of journaled) {
         const resource = journaledOwnedResource(createPlan, row);

@@ -342,12 +342,21 @@ export class PersistentSimulator implements ExecutionPort {
         Number(current?.controlVersion ?? 0),
       ),
     });
-    if (found.presence === "present")
+    if (found.presence === "present") {
       await this.save(join(this.allocationPath(plan), "revoked.json"), {
         identity: plan.identity,
         controlVersion: plan.identity.controlVersion,
         revoked: true,
       });
+      // Stopping the simulated environment detaches only local reference
+      // metadata, as removing a real container detaches its bind mounts.
+      // External source/output paths never enter the destruction path.
+      for (const item of found.evidence.objects)
+        if (item.ownership === "reference")
+          await rm(join(this.allocationPath(plan), `${item.id}.json`), {
+            force: true,
+          });
+    }
   }
   async destroy(plan: ProvisionPlan, resource: OwnedResource): Promise<void> {
     return withAllocationLock(plan, () =>

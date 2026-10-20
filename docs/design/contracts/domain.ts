@@ -967,23 +967,8 @@ export interface ExpiryPolicy {
   readonly allowLocalDestruction: false; // Agent 断网时只撤销接入/停止；清理由控制端核实。
 }
 
-/** 永久撤销记录及受影响对象摘要；终止意图已落库不代表资源已全部清理。 */
-export interface ProfileGrantRevocation extends RevocationImpact {
-  /** 该对象的稳定标识。 */
-  readonly id: Id;
-  /** 被操作授权的逻辑种类。 */
-  readonly profileKind: 'storage' | 'network';
-  /** 被明确撤销的不可变修订标识。 */
-  readonly profileRevisionId: Id;
-  /** 非空、可审计的操作原因。 */
-  readonly reason: string;
-  /** 记录创建时间。 */
-  readonly createdAt: UtcTimestamp;
-  /** 创建记录的管理主体标识。 */
-  readonly createdBy: Id;
-  /** 关联持久操作标识。 */
-  readonly operationId: Id;
-}
+/** 当前管理 DTO 的唯一权威是运行时 contracts schema。 */
+export type { ProfileGrantRevocation, RevocationImpact } from "../../../packages/contracts/src/admin.js";
 
 /** 原生运行时身份的判别联合。provider 与 nativeKind 在类型层面保持一致。 */
 export type RuntimeDescriptor = {
@@ -1032,13 +1017,3 @@ export type AllocationOwner = {
   /** 所属管理员验证标识；非验证资源为 null。 */
   readonly imageValidationId: null;
 };
-
-/** 脱敏的撤销影响预览；真正执行时必须重新查询，不能把预览当作锁或授权。 */
-export interface RevocationImpact {
-  /** 执行或预览时受影响的租客票据。 */
-  readonly affectedTicketIds: readonly Id[];
-  /** 受影响的管理员验证运行。 */
-  readonly affectedValidationIds: readonly Id[];
-  /** 受影响的平台底座；必须先处理其依赖子树。 */
-  readonly affectedInfrastructureAllocationIds: readonly Id[];
-}

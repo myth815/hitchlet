@@ -1,6 +1,6 @@
 /**
  * 消费者接入示例。只描述调用顺序，不创建网络客户端、不在导入时执行任务。
- * 真实 ComputeClient 由后续 SDK 实现并注入认证；平台服务尚未实现。
+ * 真实客户端由已实现的 @hitchlet/sdk HitchletClient 提供并注入认证；可执行接入和管理恢复示例见 docs/api-sdk.md。此文件只做编译期调用合同校验。
  */
 import type { AccessGrant, ComputeClient, Id, PreparedTicketCommand, RenewReceipt } from './public';
 

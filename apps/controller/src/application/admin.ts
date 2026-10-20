@@ -1,3 +1,4 @@
+import { SQLiteProfileRevocationStore } from "../storage/profile-revocation-store.js";
 import { ImagePublishingService } from "./image-publishing.js";
 import type { Storage } from "../storage/index.js";
 import {
@@ -25,6 +26,7 @@ export class AdminService {
   private readonly connections: SQLiteProviderConnectionStore;
   private readonly connectionUseCases: PortainerConnectionService;
   private readonly inventory: SQLiteMachineNodeStore;
+  private readonly revocations: SQLiteProfileRevocationStore;
   private readonly profiles: SQLiteProfileStore;
   private readonly images: SQLiteImageValidationStore;
   private readonly validations: ImageValidationService;
@@ -51,6 +53,7 @@ export class AdminService {
       readSecret,
     );
     this.inventory = new SQLiteMachineNodeStore(db, now);
+    this.revocations = new SQLiteProfileRevocationStore(db, now);
     this.profiles = new SQLiteProfileStore(db, now);
     this.images = new SQLiteImageValidationStore(db, now);
     this.validations = new ImageValidationService(
@@ -239,6 +242,19 @@ export class AdminService {
   }
   getInstallation() {
     return this.inventory.getInstallation();
+  }
+  profileRevisions(
+    ...args: Parameters<SQLiteProfileRevocationStore["revisions"]>
+  ) {
+    return this.revocations.revisions(...args);
+  }
+  previewGrantRevocation(
+    ...args: Parameters<SQLiteProfileRevocationStore["preview"]>
+  ) {
+    return this.revocations.preview(...args);
+  }
+  revokeGrants(...args: Parameters<SQLiteProfileRevocationStore["revoke"]>) {
+    return this.revocations.revoke(...args);
   }
   createProfile(...args: Parameters<SQLiteProfileStore["createProfile"]>) {
     return this.profiles.createProfile(...args);

@@ -1,5 +1,5 @@
 /**
- * 计算资源服务接口设计 v1.3（尚非运行实现）。
+ * Hitchlet 当前公开合同；Docker M2 已实现，VM 字段保留为后置协议设计。
  * 公开 DTO、消费者 SDK 与管理请求类型。所有公开响应显式列字段，禁止展开内部实体；本文件不实现 HTTP 或调度。
  * 所有 number 均须验证有限值；整数/范围/跨字段不变量由运行时 schema 与事务共同保障。
  * 可选字段省略表示使用明确默认；null 表示明确不存在/尚未取得，不互相替换。
@@ -101,17 +101,8 @@ export interface ImageValidationRequest {
   readonly deadlineSeconds: number; // 受管理员验证策略上限约束，不得无限运行。
 }
 
-/** 显式撤销某授权修订的管理请求。版本条件检查逻辑 Profile，影响范围在执行事务重新查询。 */
-export interface ProfileGrantRevokeRequest {
-  /** 被操作授权的逻辑种类。 */
-  readonly profileKind: "storage" | "network";
-  /** 被明确撤销的不可变修订标识。 */
-  readonly profileRevisionId: Id;
-  /** 非空、可审计的操作原因。 */
-  readonly reason: string;
-  /** 逻辑 Profile 的 CAS 版本；不是不可变修订号。 */
-  readonly expectedProfileVersion: number; // 逻辑 profile 的 CAS 版本，revisionId 已固定不可变修订。
-}
+/** 管理请求以运行时 schema 推导类型为唯一字段来源。 */
+export type { ProfileGrantRevokeRequest } from "./admin.js";
 
 /** 消费者从授权配置中选择相对子路径、容器内挂载点和读写模式。 */
 export interface StorageRequest {

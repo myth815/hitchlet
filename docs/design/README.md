@@ -1,12 +1,12 @@
 # 独立计算资源租用系统：架构与开发设计
 
-版本：1.3｜日期：2026-10-19｜状态：经整体复核的开发基线，尚未实现或通过实机验收。
+版本：1.3｜更新：2026-10-20｜状态：Docker M2 已实现并完成部署组合验收；VM、云与实际电源控制按明确后置范围保留设计。当前责任与权威索引见[仓库README](../../README.md#当前架构与权威索引)，实际证据见[Docker验收](../DOCKER-ACCEPTANCE.md)。
 
 本系统以 Ticket 为入口，向消费者按需交付隔离的容器或虚拟机，负责资源预留、环境准备、续租、回收，以及机器的人机共用和节能策略。它可以独立于 OpenClaw 部署。Agent、开发工具、媒体处理程序和人工使用者均是消费者；调度器不理解它们的业务。
 
 架构兼容 **Portainer、Hyper-V、Tart 三个后端**，开发顺序明确为 **Docker 优先，VM 按实际需求后置**。当前交付目标是 Portainer Docker 的独立生产闭环，Hyper-V/Tart 不作为其上线前提。控制服务、宿主代理和 GUI 的自研部分使用 **TypeScript**；控制数据使用本地 **SQLite**。未来专用计算机优先安装 Ubuntu，直接提供 Docker。Windows 和 Mac 保留原生系统；需要 VM 时再分别启用 Hyper-V、Tart，也可用它们提供受管 Linux Docker 底座。
 
-本目录是独立的设计交付包：
+本目录保留行为设计和历史设计交付记录；运行实现位于仓库的 apps 与 packages：
 
 | 文件 | 用途 |
 | --- | --- |
@@ -19,7 +19,7 @@
 | [verify-schema.cjs](verify-schema.cjs) | 用临时数据库重复验证DDL、关键约束和示例记账事务；只依赖Node与sqlite3命令 |
 | [VERIFICATION.md](VERIFICATION.md) | 本次设计交付的校验方法、结果和未覆盖范围 |
 
-正文规定行为；接口骨架和建表草案为实现起点。开发时用同一份运行时 Schema 生成 OpenAPI、SDK 类型与契约测试，避免长期维护三个互相漂移的定义。本文的超时、额度和性能数字是**设计默认或容量估算**，不是已实测的设备能力。文中 v1 指协议与行为基线，具体在哪个发布阶段实现以第19节为准；VM设计先保留，不要求当前编码。
+正文规定行为；当前公开与管理DTO以 packages/contracts 运行时schema为权威，SDK、GUI与OpenAPI复用它们。实际SQLite升级以 apps/controller/src/storage/migrations 为权威；本目录DDL保留初始模型校验，内部设计接口不能当作逐列ORM映射，冻结合同、manifest、观测及操作结果使用既有JSON列。本文的超时、额度和性能数字是**设计默认或容量估算**，不是已实测的设备能力。文中 v1 指协议与行为基线，具体在哪个发布阶段实现以第19节为准；VM设计先保留，不要求当前编码。
 
 `siteId` 是安装内逻辑键，默认值为 `local`；也可使用管理员登记的非空字符串。它不代表独立 Site 实体或 UUID。
 
@@ -477,7 +477,7 @@ D20物理Host观测使用出站HTTPS心跳（默认10秒，完整请求总截止
 | POST /v1/agents/{id}/revoke | expectedSessionEpoch、reason；成功204无响应体 | full admin；session CAS；立即失效凭据、配对和boot并递增sessionEpoch；actor/request/reason审计 |
 | GET /v1/machines/{id}/snapshot | 返回snapshot、receivedAt、fresh、humanPresence、offlineLeaseEnforcement=false；无观测为null | full admin；过期、撤销或控制代次变化为unknown；资源未知保留null，不能授权关机 |
 
-以下命令投递、结果和清单路由仅为后置 VM/电源执行设计，D20 尚未实现；不得据此宣称支持本地离线守卫、受控 VM 或电源动作：
+以下命令投递、结果和清单路由仅为后置 VM/电源执行设计；D20当前已实现注册认证与可信Host观测，未实现这些执行路由；不得据此宣称支持本地离线守卫、受控 VM 或电源动作：
 
 | 后置设计路由 | 输入 / 返回 | 未来必须检查 |
 | --- | --- | --- |
@@ -534,7 +534,7 @@ bootstrap：登记Host Agent→验证Hyper-V/Tart Node→选已发布Docker底�
 
 Hold 的用途与容量观测分开：`infrastructure`（包括外部常开 Docker/Portainer 底座）、`manual`、`unmanaged_work` 保留开机保护与可见解释。Portainer 清单可能包含自身、Registry、Runtime Agent等外部服务；unmanaged_work Hold 不自动意味着超预算，也不授权删除这些对象，准入仍受管理员已批准的物理预算/保留量与实际压力约束。`maintenance`、`recovery` 同时阻止新增。所有有效 Hold 均出现在停机禁用解释中；D21不执行电源动作。
 
-管理 API 与 SDK：`GET /v1/machines`、`GET /v1/machines/{id}/dry-run` 读取依赖树、全机预算、各 Node 可用余量、观测完整性与禁用原因；`POST /v1/machines/{id}/human-use-policy/dry-run` 接受 `{expectedVersion, policy}`，返回 `{machine, canApply, updateDisabledReasons}`，没有写入；`PUT /v1/machines/{id}/human-use-policy` 以相同体 CAS 更新策略与根池保留量。`PUT /v1/nodes/{id}/admission-mode` 接受 `{expectedVersion, mode, reason}`，显式选择可信观测或人工试用，不修改能力验证证据。默认登记/attestation仍为人工试用；真实 Host 缺证据时切到 observed_host 会自然显示禁用。所有管理写入限 full admin，投影不含凭据、原始会话主体或内部源地址；SDK管理写入传入 key 且不自动重试未知结果，CAS成功后重放旧版本会冲突，调用方应重新查询。
+管理 API 与 SDK：`GET /v1/machines`、`GET /v1/machines/{id}/dry-run` 读取依赖树、全机预算、各 Node 可用余量、观测完整性与禁用原因；`POST /v1/machines/{id}/human-use-policy/dry-run` 接受 `{expectedVersion, policy}`，返回 `{machine, canApply, updateDisabledReasons}`，没有写入；`PUT /v1/machines/{id}/human-use-policy` 以相同体 CAS 更新策略与根池保留量。`PUT /v1/nodes/{id}/admission-mode` 接受 `{expectedVersion, mode, reason}`，显式选择可信观测或人工试用，不修改能力验证证据。默认登记/attestation仍为人工试用；真实 Host 缺证据时切到 observed_host 会自然显示禁用。所有管理写入限 full admin，投影不含凭据、原始会话主体或内部源地址；SDK管理写入传入 key 且不自动重试未知结果；这两个写入接入 contracts 的恢复白名单与HTTP journal。保存 onManagementPrepared 的原请求，响应丢失后通过 resumeManagement 原body/版本/key恢复；认证、当前full admin权限与CSRF先于历史回执重放，不能用新版本重放旧意图。
 
 SQLite适配器先用一个确定性本地读取冻结上述规则的所有输入，再在同一 `BEGIN IMMEDIATE` 写事务内比较完整输入，之后才预留 tenant/validation 或更新策略。精确比较覆盖 Machine/Node/pool、所有未释放 Claim 与必需底座、Hold、Host快照/agent栅栏和controller epoch；因此不增加 Machine.version 的心跳竞态也不能绕过。事务内无网络调用。GUI每5秒有界刷新且不覆盖编辑草稿，身份/权限、连接、Machine版本或预算占用变化会使旧预算预演失效；普通心跳/压力刷新保留预算预演，准入解释标明来自历史观测，保存始终重新核对。断连明确标成历史/未知并禁用保存，文案不将连接故障误称为管理员权限变化。
 
@@ -577,7 +577,7 @@ D22a 策略、能力结论、插座绑定和预演 DTO 由 `packages/contracts/s
 
 同一机器同时只允许一项电源控制意图，每个故障事件最多一个切电周期。通过宿主认证、bootId、新鲜会话/资源观测、底座和 Docker 就绪验证后才能恢复准入；失败转待处理并保留占用，不继续电源循环。小米插座的瞬时功率、温度和开关读数可用于 GUI 辅助诊断；读取失败显示未知，能耗单位未经确认不展示为累计 kWh。
 
-本能力并入 D22a 的模型/dry-run 与 D22b 的逐机实际验收，不新增开发阶段，不提前到 D03。SQLite 的策略/绑定初期放在带版本的 policies.config_json 与 machines.management_json；一次恢复的阶段、读回和截止放在 Operations/回执内，D22 实现时固定配置 schema 和设备身份唯一性，不为尚未实现的电源模块提前增加表。
+本能力并入 D22a 的模型/dry-run 与 D22b 的逐机实际验收，不新增开发阶段，不提前到 D03。SQLite 的策略/绑定初期放在带版本的 policies.config_json 与 machines.management_json；一次恢复的阶段、读回和截止放在 Operations/回执内，D22a已固定配置schema和设备身份唯一性，真实电源动作仍属D22b逐机后置验收，不为其提前增加表。
 
 ## 14. 存储、网络、凭据与清理权限
 
@@ -587,7 +587,7 @@ StorageProfile和NetworkProfile是逻辑目录，各自的Revision不可变。St
 
 预留时先固定Node与授权快照；若节点离线，允许暂未绑定ResolvedProvisionContract。唤醒并完成现场路径/能力检查后，在短事务中重验Ticket仍在准备、授权未撤销及Allocation控制版本未变，再创建不可变合同并把resolvedProvisionContractId从null绑定一次；此后不能改写或清空。任何租客create前必须已有合同。合同固定source/target、协议、secretVersionRef和网络规则；验证实例同样遵循此顺序。公开TicketView不含宿主真实根或秘密引用。禁止路径穿越、符号链接越界和自选mount参数，每次实际挂载仍重验真实路径。
 
-变更配置新建revision，只影响后来受理的申请。需要撤销旧授权时先列出受影响Ticket/验证运行/底座，再通过显式revoke-grants执行。执行事务核对逻辑profile版本、重新枚举所有引用、持久化profile_grant_revocations并禁止继续引用；预览不代替执行时检查。票据走admin_revoke及PROFILE_GRANT_REVOKED原因详情，验证运行取消并回收，底座先终止和清理依赖租客再回收自身。紧急吊销优先于冻结合同，阻止相关新建、续租和领取入口。秘密轮换创建新版本，不偷偷把旧票切到新根或权限；旧秘密版本不可用时拒绝准备并回收，不能降级到更宽权限。持久数据与临时盘在manifest中分别标注：NAS根、源文件、共享输出目录**永不成为destroy对象**。
+变更配置新建revision，只影响后来受理的申请。需要撤销旧授权时先列出受影响Ticket/验证运行/底座，再通过显式revoke-grants执行。执行事务核对逻辑profile版本、重新枚举所有引用、持久化profile_grant_revocations并禁止继续引用；预览不代替执行时检查。当前Docker入口：GET /v1/{network|storage}-profiles/{profileId}/revisions读取含已吊销状态的历史修订；POST /v1/admin/profile-grants/revoke/preview接受ProfileGrantRevokeRequest且不写入；POST /v1/admin/profile-grants/revoke使用相同体并要求Idempotency-Key。执行以当前逻辑Profile版本CAS，在一个事务中复核完整影响集合、写永久吊销、终止意图和幂等回执；引用并发改变则整体冲突，重新预览。profile.revoke的Operation succeeded及HTTP200只确认这些意图落账，后续沿既有allocation.cleanup恢复回收，通过Ticket/validation/Claim状态观察进度。票据走admin_revoke及PROFILE_GRANT_REVOKED原因详情；已处于releasing的Ticket保留原终止原因及已有cleanup，不重复终止，永久授权fence仍立即生效。验证运行取消并回收。底座与VM依赖回收保留为后置设计：当前预览明确列出受影响底座并给出不可执行原因；执行遇到这些路径直接拒绝，不写入部分吊销。未来实现时底座先终止和清理依赖租客再回收自身。紧急吊销优先于冻结合同，阻止相关新建、续租和领取入口。秘密轮换创建新版本，不偷偷把旧票切到新根或权限；旧秘密版本不可用时拒绝准备并回收，不能降级到更宽权限。持久数据与临时盘在manifest中分别标注：NAS根、源文件、共享输出目录**永不成为destroy对象**。
 
 清理临时目录前先解绑挂载并验证mount table/真实路径/ownership，确认不仍指向NAS。每票专用目录只允许位于机器批准的工作根。镜像导入、卷创建与预热同样遵循目录白名单，不限于最终删除步骤。
 

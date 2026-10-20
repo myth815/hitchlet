@@ -51,6 +51,24 @@
 | 数据卷低/满、迁移、历史保留和备份恢复    | [storage](../apps/controller/test/storage.test.ts)、[maintenance](../apps/controller/test/maintenance.test.ts)含真实SQLITE_FULL/独立恢复；D23实际控制权接管与保留租约                                                                            |
 | 持久数据与业务无关                       | local/NFS授权边界、NAS失联、销毁保留的实机证明；通用Node SSH镜像和独立API/SDK/GUI不依赖OpenClaw或媒体业务字段                                                                                                                                    |
 
+## M2 整体复核补充（2026-10-20）
+
+在 D25 放行后，整体复核补齐了以下合同与实现缺口；此前批次记录保留其当时结果。
+
+- 镜像发布在异步 Runtime 探测完成后，于提交事务重新检查能力/验证证据期限与网络/存储修订吊销；探测期间过期或吊销均不能发布。
+- 固定 Profile 修订具备历史查询、影响预览、CAS 永久吊销和 SDK/GUI 入口；永久 fence、Ticket/validation 终止意图与幂等回执原子落账。旧 ready 回执不能恢复授权，未查实清理前不释放 Claim；尚未实现的 VM/底座依赖明确阻止执行。
+- 人机策略与准入模式可恢复原管理命令；HTTP 与 SDK 共用 contracts 白名单，当前授权与 CSRF 检查先于历史回执。
+- 清理只向 Provider 提交自有资源作为删除目标；持久引用仅解绑。实机暴露的无谓 reference 删除拒绝已修复，Simulator 同步停止时解绑本地引用元数据。
+- 替换会剥离 Ed25519 公钥前导零的第三方生成路径，使用 Node 原生密钥及保留完整字节的 OpenSSH 封装，持久化前校验；固定前导零反例及独立签名校验通过，1000 组实际生成样本全部可解析。既有访问材料不静默改写。
+
+最终 Node 24 全仓 **437/437**（contracts22、Runtime50、SDK29、controller302、GUI34）通过，严格类型、构建、格式、设计接口与 SQLite **86项/43表**检查通过；001–007 与设计 DDL 无改动。
+
+本次另在同一隔离 Engine 新建一次性存储修订，实际 SSH 写入持久输出后同时吊销 ready/queued 票据。Runtime Agent 断联时 ready 票据保持 releasing 与 Claim，queued 票据直接释放；重启控制器并恢复 Agent 后，在 paused 状态查实原生回收、容量归零，本地新输出与原有 NAS 输出仍在。原键重复返回同一回执，恢复准入后新申请仍不能使用该已吊销修订。人机策略和准入模式分别通过真实 HTTP 丢响应后恢复原回执；GUI 实际查询历史并完成只读影响预览。
+
+复验开始时，外部 Docker 底座 VM 重启丢失了预先加载的 `br_netfilter`，执行器拒绝启动租客并保留 Claim。恢复模块后，通过原 cleanup 的显式 SDK 重试完成查实回收；没有改账本或释放未查实容量。运行手册补充宿主重启后的模块/NAS检查及 Ubuntu 持久加载示例。这不代表 Hitchlet 已接管 VM 或自动加载宿主内核模块。
+
+最终代码再次从空目录冻结依赖安装、构建与真实 HTTP/安装 SDK M0 闭环通过；正式 Dockerfile 非 root UID1000、持久 SQLite 卷、内置 GUI 与 SDK 闭环通过。M0 包装测试与上述真实租客 Docker 证据分别记录。架构继续保持 TypeScript 模块化单体、单个 SQLite 账本、Docker 优先，VM/云/实际电源后置。
+
 ## 尚未承诺
 
 没有验证的 amd64、Windows Docker、其他NAS型号或SMB、完整无人会话枚举、物理主机断电后的无人启动、OS服务开机监督、严格离线到期停止、临时盘硬限额、自动关机/WOL/小米插座3，以及Hyper-V/Tart/云节点，均不能由本次矩阵推导为支持。

@@ -69,6 +69,11 @@ import { ManagementService } from "./application/management.js";
 import { AdminCommandJournal } from "./application/admin-command-journal.js";
 import { registerManagementRoutes } from "./http/management-routes.js";
 import {
+  managementRequestContract,
+  ProfileRevisionViewSchema,
+  ProfileGrantRevokeRequestSchema,
+  RevocationImpactSchema,
+  ProfileGrantRevocationSchema,
   ImageAliasNameSchema,
   ImagePublishRequestSchema,
   ImagePublishReceiptSchema,
@@ -286,35 +291,7 @@ export async function buildApp(
       string,
       { consumerId: string; key: string; path: string }
     >();
-    // Exact route templates deliberately exclude all auth, access, credential, Host pairing and system/power secret responses.
-    const journalAdminRoutes = new Set([
-      "PUT /v1/admin/network-deny",
-      "POST /v1/provider-connections",
-      "POST /v1/provider-discovery/:operationId/retry",
-      "POST /v1/provider-connections/:connectionId/revisions",
-      "POST /v1/provider-connection-proposals/:operationId/retry",
-      "POST /v1/provider-connections/:connectionId/activate-revision",
-      "POST /v1/machines",
-      "POST /v1/nodes",
-      "PUT /v1/nodes/:nodeId/runtime-config",
-      "POST /v1/nodes/:nodeId/capability-attestations",
-      "POST /v1/network-profiles",
-      "POST /v1/storage-profiles",
-      "POST /v1/network-profiles/:profileId/revisions",
-      "POST /v1/storage-profiles/:profileId/revisions",
-      "POST /v1/images",
-      "POST /v1/images/:imageId/versions",
-      "POST /v1/image-versions/:versionId/artifacts",
-      "POST /v1/image-versions/:versionId/publish",
-      "PUT /v1/images/:imageId/aliases/:alias",
-      "POST /v1/image-validations/:validationId/cancel",
-      "POST /v1/image-versions/:versionId/validate",
-      "POST /v1/admin/consumers",
-      "PUT /v1/admin/consumers/:id",
-      "POST /v1/admin/policies",
-      "PUT /v1/admin/policies/:id",
-      "POST /v1/admin/image-versions/:id/retire",
-    ]);
+    // Contracts own the recoverable-write allowlist; server keeps only current authorization dispatch.
     const journalOperatorRoutes = new Set([
       "POST /v1/nodes/:nodeId/image-cache/prewarm",
       "POST /v1/nodes/:nodeId/image-cache/gc",
@@ -324,29 +301,24 @@ export async function buildApp(
     ]);
     app.addHook("preHandler", async (request, reply) => {
       const template = `${request.method} ${request.routeOptions.url}`;
+      const path = request.url.split("?")[0]!;
       if (
-        !journalAdminRoutes.has(template) &&
-        !journalOperatorRoutes.has(template)
+        !managementRequestContract(request.method, path) ||
+        template === "POST /v1/tickets/:ticketId/revoke"
       )
-        return;
+        return; // Ticket revoke has its own atomic idempotency boundary.
       const key = request.headers["idempotency-key"];
       if (typeof key !== "string") return; // Existing HTTP clients may omit it; SDK management writes always provide it.
-      const actor = journalAdminRoutes.has(template)
-        ? await requireAdmin(request, true)
-        : await identify(request, true);
+      const actor = journalOperatorRoutes.has(template)
+        ? await identify(request, true)
+        : await requireAdmin(request, true);
       if (journalOperatorRoutes.has(template)) {
         if (
           !["admin", "operator"].includes(actor.role) ||
           !actor.scopes.includes("tickets:revoke")
         )
           throw new AuthFailure("forbidden");
-        if (template.includes(":ticketId"))
-          await commands.authorizeRevoke(
-            uuidParam(request.params, "ticketId"),
-            actor.consumerId,
-            actor.role === "admin",
-          );
-        else if (template.includes(":operationId")) {
+        if (template.includes(":operationId")) {
           await managementAuthorization.operationById(
             actor,
             uuidParam(request.params, "operationId"),
@@ -976,6 +948,41 @@ export async function buildApp(
       await requireAdmin(request);
       return AdminProfileViewSchema.array().parse(
         await admin.listProfiles("storage"),
+      );
+    });
+    for (const kind of ["network", "storage"] as const) {
+      app.get(`/v1/${kind}-profiles/:profileId/revisions`, async (request) => {
+        await requireAdmin(request);
+        return ProfileRevisionViewSchema.array().parse(
+          await admin.profileRevisions(
+            kind,
+            uuidParam(request.params, "profileId"),
+          ),
+        );
+      });
+    }
+    app.post("/v1/admin/profile-grants/revoke/preview", async (request) => {
+      await requireAdmin(request, true);
+      return RevocationImpactSchema.parse(
+        await admin.previewGrantRevocation(
+          parseInput(ProfileGrantRevokeRequestSchema, request.body),
+        ),
+      );
+    });
+    app.post("/v1/admin/profile-grants/revoke", async (request) => {
+      const actor = await requireAdmin(request, true);
+      const journal = journalRequests.get(request.id);
+      if (!journal)
+        throw new RangeError(
+          "Idempotency-Key is required for grant revocation",
+        );
+      return ProfileGrantRevocationSchema.parse(
+        await admin.revokeGrants(
+          parseInput(ProfileGrantRevokeRequestSchema, request.body),
+          actor.consumerId,
+          request.id,
+          journal,
+        ),
       );
     });
     app.post("/v1/images", async (request, reply) => {

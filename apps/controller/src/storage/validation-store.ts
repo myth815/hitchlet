@@ -42,7 +42,7 @@ export class SQLiteValidationStore {
         [input.requestedBy],
       ),
       this.db.get<Row>(
-        "SELECT p.id,p.current_revision_id,p.version,p.status,r.policy_json FROM network_profiles p LEFT JOIN network_profile_revisions r ON r.id=p.current_revision_id WHERE p.id=?",
+        "SELECT p.id,p.current_revision_id,p.version,p.status,r.policy_json FROM network_profiles p LEFT JOIN network_profile_revisions r ON r.id=p.current_revision_id WHERE p.id=? AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations pr WHERE pr.network_profile_revision_id=r.id)",
         [input.networkProfileId],
       ),
       this.db.get<Row>(
@@ -59,7 +59,7 @@ export class SQLiteValidationStore {
       storageProfiles.set(
         request.storageProfileId,
         await this.db.get<Row>(
-          "SELECT p.id,p.current_revision_id,p.version,p.status,r.kind,r.config_json,r.secret_version_ref FROM storage_profiles p LEFT JOIN storage_profile_revisions r ON r.id=p.current_revision_id WHERE p.id=?",
+          "SELECT p.id,p.current_revision_id,p.version,p.status,r.kind,r.config_json,r.secret_version_ref FROM storage_profiles p LEFT JOIN storage_profile_revisions r ON r.id=p.current_revision_id WHERE p.id=? AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations pr WHERE pr.storage_profile_revision_id=r.id)",
           [request.storageProfileId],
         ),
       );
@@ -108,6 +108,17 @@ export class SQLiteValidationStore {
       binding.profileVersion,
       binding.storageProfileRevisionId,
     ]);
+    const grantFence: import("./protocol.js").Statement = {
+      kind: "run",
+      sql: `UPDATE network_profiles SET version=version WHERE id=? AND status='active' AND version=? AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations pr WHERE pr.network_profile_revision_id=?)${storageFences}`,
+      params: [
+        request.networkProfileId,
+        Number(network.version),
+        networkRevisionId,
+        ...storageFenceParams,
+      ],
+      expectChanges: 1,
+    };
     const statements: import("./protocol.js").Statement[] = input.retry
       ? [
           {
@@ -243,6 +254,7 @@ export class SQLiteValidationStore {
         },
       );
     }
+    statements.unshift(grantFence);
     let reservationConflict = false;
     try {
       if (!input.blockReason)
@@ -268,6 +280,7 @@ export class SQLiteValidationStore {
       reservationConflict = true;
       if (input.retry) return { reserved: false, reservationConflict };
       await this.db.batchTransaction([
+        grantFence,
         {
           kind: "run",
           sql: "INSERT INTO image_validations(id,image_artifact_id,node_id,requested_by_consumer_id,accepted_contract_json,scope_json,checks_json,deadline_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -401,25 +414,49 @@ export class SQLiteValidationStore {
   }
 
   async terminate(id: string, reason: string, now = this.now()) {
+    await this.db.batchTransaction(
+      await this.terminationStatements(id, reason, now),
+    );
+  }
+
+  async terminationStatements(
+    id: string,
+    reason: string,
+    now = this.now(),
+  ): Promise<import("./protocol.js").Statement[]> {
     const row = await this.db.get<Row>(
       "SELECT v.*,a.id AS allocation_id FROM image_validations v LEFT JOIN allocations a ON a.image_validation_id=v.id WHERE v.id=?",
       [id],
     );
-    if (!row || !["queued", "running"].includes(String(row.state))) return;
+    if (row?.state === "releasing" && reason === "PROFILE_GRANT_REVOKED")
+      return [
+        {
+          kind: "run",
+          sql: "UPDATE image_validations SET test_outcome='failed',checks_json=json_set(checks_json,'$.terminationReason',?),version=version+1,updated_at_ms=? WHERE id=? AND state='releasing' AND version=?",
+          params: [reason, now, id, Number(row.version)],
+          expectChanges: 1,
+        },
+      ];
+    if (!row || !["queued", "running"].includes(String(row.state))) return [];
     if (row.allocation_id === null) {
-      await this.db.run(
-        "UPDATE image_validations SET state=?,test_outcome='failed',cleanup_status='complete',report_id=id,finished_at_ms=?,checks_json=json_set(checks_json,'$.scheduler','complete','$.terminationReason',?,'$.cleanupEvidence',json(?)),version=version+1,updated_at_ms=? WHERE id=? AND version=? AND state='queued'",
-        [
-          reason === "cancelled" ? "cancelled" : "failed",
-          now,
-          reason,
-          JSON.stringify({ noAllocation: true, verifiedAtMs: now }),
-          now,
-          id,
-          Number(row.version),
-        ],
-      );
-      return;
+      return [
+        {
+          kind: "run",
+          sql: "UPDATE image_validations SET state=?,test_outcome='failed',cleanup_status='complete',report_id=id,finished_at_ms=?,checks_json=json_set(checks_json,'$.scheduler','complete','$.terminationReason',?,'$.cleanupEvidence',json(?)),version=version+1,updated_at_ms=? WHERE id=? AND version=? AND state='queued'",
+          params: [
+            ["cancelled", "PROFILE_GRANT_REVOKED"].includes(reason)
+              ? "cancelled"
+              : "failed",
+            now,
+            reason,
+            JSON.stringify({ noAllocation: true, verifiedAtMs: now }),
+            now,
+            id,
+            Number(row.version),
+          ],
+          expectChanges: 1,
+        },
+      ];
     }
     const operation = await this.db.get<Row>(
       "SELECT id,controller_epoch,request_hash,intent_json,result_json,attempt_count FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
@@ -437,7 +474,7 @@ export class SQLiteValidationStore {
           ? parseJson(operation.result_json)
           : null,
     };
-    await this.db.batchTransaction([
+    return [
       {
         kind: "run",
         sql: "UPDATE image_validations SET state='releasing',test_outcome='failed',cleanup_status='running',checks_json=json_set(checks_json,'$.scheduler','releasing','$.terminationReason',?,'$.failureEvidence',json(?)),version=version+1,updated_at_ms=? WHERE id=? AND version=? AND state IN ('queued','running')",
@@ -462,7 +499,7 @@ export class SQLiteValidationStore {
         params: [now, row.allocation_id ?? null],
       },
       this.cleanupIntent(id, now, reason),
-    ]);
+    ];
   }
 
   async expireDue(now: number) {
@@ -484,7 +521,7 @@ export class SQLiteValidationStore {
 
   frozenNetwork(revisionId: string) {
     return this.db.get<Row>(
-      "SELECT p.id,r.id AS current_revision_id,p.version,p.status,r.policy_json FROM network_profiles p JOIN network_profile_revisions r ON r.profile_id=p.id WHERE r.id=?",
+      "SELECT p.id,r.id AS current_revision_id,p.version,p.status,r.policy_json FROM network_profiles p JOIN network_profile_revisions r ON r.profile_id=p.id WHERE r.id=? AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations pr WHERE pr.network_profile_revision_id=r.id)",
       [revisionId],
     );
   }

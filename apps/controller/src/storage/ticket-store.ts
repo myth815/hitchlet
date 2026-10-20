@@ -1,3 +1,4 @@
+import type { Statement } from "./protocol.js";
 import type { Storage } from "./index.js";
 import { createHash } from "node:crypto";
 import type { IdempotencyCompletionRef } from "./termination-context.js";
@@ -373,7 +374,14 @@ export class SQLiteTicketStore {
     audit?: { actorId: string; requestId: string; reason: string };
     completion?: IdempotencyCompletionRef;
   }): Promise<unknown[]> {
-    return this.storage.batchTransaction([
+    return this.storage.batchTransaction(
+      this.queuedTerminationStatements(input),
+    );
+  }
+  queuedTerminationStatements(
+    input: Parameters<SQLiteTicketStore["cancelQueued"]>[0],
+  ): Statement[] {
+    return [
       {
         kind: "run",
         sql: "UPDATE tickets SET phase='released',terminal_reason=?,released_at_ms=?,version=version+1,updated_at_ms=? WHERE id=? AND consumer_id=? AND phase='queued' AND version=?",
@@ -414,7 +422,7 @@ export class SQLiteTicketStore {
             },
           ]
         : []),
-    ]);
+    ];
   }
   cancelAllocated(input: {
     ticketId: string;
@@ -429,7 +437,14 @@ export class SQLiteTicketStore {
     audit?: { actorId: string; requestId: string; reason: string };
     completion?: IdempotencyCompletionRef;
   }): Promise<unknown[]> {
-    return this.storage.batchTransaction([
+    return this.storage.batchTransaction(
+      this.allocatedTerminationStatements(input),
+    );
+  }
+  allocatedTerminationStatements(
+    input: Parameters<SQLiteTicketStore["cancelAllocated"]>[0],
+  ): Statement[] {
+    return [
       {
         kind: "run",
         sql: "UPDATE tickets SET phase='releasing',terminal_reason=?,cleanup_status='pending',termination_requested_at_ms=?,version=version+1,updated_at_ms=? WHERE id=? AND consumer_id=? AND phase=? AND version=?",
@@ -520,7 +535,7 @@ export class SQLiteTicketStore {
             },
           ]
         : []),
-    ]);
+    ];
   }
 
   async reserve(input: ReservationWrite): Promise<void> {

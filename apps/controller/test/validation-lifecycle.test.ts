@@ -1,3 +1,4 @@
+import { SQLiteImagePublicationStore } from "../src/storage/image-publication-store.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -363,6 +364,214 @@ async function fixture(options: { blocked?: boolean; capacity?: number } = {}) {
   };
 }
 
+describe("publication commit fences and grant revocation", () => {
+  it("records persistent references without ever sending them to destroy during cleanup", async () => {
+    const f = await fixture();
+    const run = await f.admin.scheduleValidation(f.request);
+    await f.worker().run(run.operationId);
+    const inspect = f.simulator.inspect.bind(f.simulator);
+    vi.spyOn(f.simulator, "inspect").mockImplementation(async (plan) => {
+      const result = await inspect(plan);
+      if (result.presence !== "present") return result;
+      return {
+        ...result,
+        evidence: {
+          ...result.evidence,
+          objects: [
+            ...result.evidence.objects,
+            {
+              ...result.evidence.objects[0]!,
+              id: "persistent-source-reference",
+              kind: "storage_reference" as const,
+              ownership: "reference" as const,
+              referenceKey: "approved-persistent-source",
+            },
+          ],
+        },
+      };
+    });
+    const destroy = f.simulator.destroy.bind(f.simulator);
+    const deletion = vi
+      .spyOn(f.simulator, "destroy")
+      .mockImplementation(async (plan, resource) => {
+        expect(resource.ownership).toBe("owned");
+        await destroy(plan, resource);
+      });
+    await f.worker().run(await f.cleanupId());
+    expect(deletion).toHaveBeenCalled();
+    expect(await f.admin.getValidation(run.validationId)).toMatchObject({
+      state: "succeeded",
+      cleanupStatus: "complete",
+    });
+    expect(
+      await f.db.get(
+        "SELECT ownership,cleanup_policy FROM managed_resources WHERE provider_id='persistent-source-reference'",
+      ),
+    ).toEqual({ ownership: "reference", cleanup_policy: "keep" });
+  });
+  it.each(["capability expiry", "validation expiry", "storage revocation"])(
+    "rejects %s while the runtime probe is awaited",
+    async (scenario) => {
+      const f = await fixture();
+      const storage = await f.admin.createProfile("storage", {
+        name: "NAS evidence",
+        protocol: "nfs",
+        config: {
+          sourceRef: "/approved-nas",
+          allowedSubpaths: ["workspace"],
+          allowedModes: ["read_only"],
+        },
+        authorizedConsumerIds: [f.request.requestedBy],
+      });
+      await f.db.run(
+        "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.verifiedStorageProfileRevisionIds',json_array(?)) WHERE id=?",
+        [storage.revisionId, f.node.id],
+      );
+      const run = await f.admin.scheduleValidation({
+        ...f.request,
+        storage: [
+          {
+            storageProfileId: storage.id,
+            authorizedSubpath: "workspace",
+            mountPath: "/mnt/persist",
+            mode: "read_only",
+          },
+        ],
+      });
+      Object.assign(f.simulator, {
+        resolveMounts: async (plan: ProvisionPlan) => plan.resolved.mounts,
+      });
+      expect(run).toMatchObject({
+        scheduler: "queued",
+        operationId: expect.any(String),
+      });
+      await f.worker().run(run.operationId);
+      expect(await f.admin.getValidation(run.validationId)).toMatchObject({
+        state: "releasing",
+      });
+      // Exercise the supported finite report expiry using the real cleanup transaction, before report immutability begins.
+      const batch = f.db.batchTransaction.bind(f.db);
+      const finiteExpiry =
+        scenario === "validation expiry"
+          ? vi
+              .spyOn(f.db, "batchTransaction")
+              .mockImplementation((statements) =>
+                batch(
+                  statements.map((statement) =>
+                    statement.sql.startsWith(
+                      "UPDATE image_validations SET state=CASE",
+                    )
+                      ? {
+                          ...statement,
+                          sql: statement.sql.replace(
+                            "SET state=CASE",
+                            `SET evidence_expires_at_ms=${f.now() + 1000},state=CASE`,
+                          ),
+                        }
+                      : statement,
+                  ),
+                ),
+              )
+          : undefined;
+      await f.worker().run(await f.cleanupId());
+      finiteExpiry?.mockRestore();
+      const store = new SQLiteImagePublicationStore(f.db, f.now);
+      let probes = 0;
+      await expect(
+        store.publish(f.draft.versionId, await f.version(), async () => {
+          probes++;
+          if (scenario === "storage revocation")
+            await f.admin.revokeGrants(
+              {
+                profileKind: "storage",
+                profileRevisionId: storage.revisionId,
+                expectedProfileVersion: 1,
+                reason: "probe race",
+              },
+              f.request.requestedBy,
+              "probe-race",
+            );
+          else if (scenario === "capability expiry") {
+            const row = await f.db.get<{ capabilities_json: string }>(
+              "SELECT capabilities_json FROM nodes WHERE id=?",
+              [f.node.id],
+            );
+            f.advance(
+              Date.parse(JSON.parse(row!.capabilities_json).expiresAt) -
+                f.now(),
+            );
+          } else {
+            const row = await f.db.get<{ evidence_expires_at_ms: bigint }>(
+              "SELECT evidence_expires_at_ms FROM image_validations WHERE id=?",
+              [run.validationId],
+            );
+            f.advance(Number(row!.evidence_expires_at_ms) - f.now());
+          }
+          return true;
+        }),
+      ).rejects.toMatchObject({ code: "STORAGE_CAS_FAILED" });
+      expect(probes).toBe(1);
+      expect(
+        (await f.db.get<{ status: string }>(
+          "SELECT status FROM image_versions WHERE id=?",
+          [f.draft.versionId],
+        ))!.status,
+      ).not.toBe("published");
+      if (scenario === "storage revocation") {
+        const probe = vi.fn(async () => true);
+        expect(
+          await store.publish(f.draft.versionId, await f.version(), probe),
+        ).toBeUndefined();
+        expect(probe).not.toHaveBeenCalled();
+      }
+    },
+  );
+  it.each(["queued", "running", "releasing"])(
+    "revokes %s validation, preserves claims while paused and resumes cleanup after restart",
+    async (phase) => {
+      const f = await fixture({ blocked: phase === "queued" });
+      const run = await f.admin.scheduleValidation(f.request);
+      if (phase === "releasing") await f.worker().run(run.operationId);
+      const request = {
+        profileKind: "network" as const,
+        profileRevisionId: f.network.revisionId,
+        expectedProfileVersion: 1,
+        reason: "validation authorization revoked",
+      };
+      const before = await f.db.get("SELECT count(*) n FROM operations");
+      expect(await f.admin.previewGrantRevocation(request)).toMatchObject({
+        affectedValidationIds: [run.validationId],
+        canRevoke: true,
+      });
+      expect(await f.db.get("SELECT count(*) n FROM operations")).toEqual(
+        before,
+      );
+      await f.db.run(
+        "UPDATE system_maintenance SET paused=1 WHERE singleton=1",
+      );
+      await f.admin.revokeGrants(
+        request,
+        f.request.requestedBy,
+        "validation-revoke",
+      );
+      if (phase !== "queued") {
+        expect((await f.claim())!.state).not.toBe("released");
+        await f.db.run(
+          "UPDATE installations SET controller_epoch=2 WHERE singleton=1",
+        );
+        await f.worker(f.simulator, 2).reconcileBeforeScheduling();
+        expect(await f.claim()).toEqual({ state: "released" });
+      }
+      expect(await f.admin.getValidation(run.validationId)).toMatchObject({
+        state: "cancelled",
+        cleanupStatus: "complete",
+        checks: { terminationReason: "PROFILE_GRANT_REVOKED" },
+      });
+      await expect(f.admin.scheduleValidation(f.request)).rejects.toBeDefined();
+    },
+  );
+});
+
 describe("shared durable validation lifecycle (simulated execution; no hardware claim)", () => {
   it("applies the same attended Machine ceiling to internal validations and never releases previous claims on policy reduction", async () => {
     const f = await fixture();
@@ -474,7 +683,7 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
     ).toEqual(deadline);
   });
 
-  it.each(["cancel", "deadline", "epoch"] as const)(
+  it.each(["cancel", "profile revoke", "deadline", "epoch"] as const)(
     "refuses late readiness after %s even while renewing the worker lease",
     async (reason) => {
       const f = await fixture();
@@ -484,6 +693,18 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
         const receipt = await realReady(...args);
         if (reason === "cancel")
           await f.admin.cancelValidation(run.validationId);
+        else if (reason === "profile revoke")
+          await f.admin.revokeGrants(
+            {
+              profileKind: "network",
+              profileRevisionId: f.network.revisionId,
+              expectedProfileVersion: 1,
+              reason:
+                "Authorization revoked while ready acknowledgement was in flight",
+            },
+            f.request.requestedBy,
+            "late-ready-revocation",
+          );
         else if (reason === "deadline") f.advance(1_800_001);
         else
           await f.db.run(

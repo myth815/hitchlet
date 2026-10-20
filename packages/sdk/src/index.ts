@@ -30,6 +30,9 @@ export { PreparedManagementRevokeSchema } from "@hitchlet/contracts/admin";
 export { PreparedManagementRequestSchema } from "@hitchlet/contracts/admin";
 export type { PreparedManagementRequest } from "@hitchlet/contracts/admin";
 export type {
+  ProfileGrantRevokeRequest,
+  RevocationImpact,
+  ProfileGrantRevocation,
   AuthorizedCatalog,
   ConsumerInput,
   ConsumerUpdate,

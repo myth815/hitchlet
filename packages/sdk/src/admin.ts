@@ -335,6 +335,51 @@ export class AdminCommands {
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
+  /** Safe historical revision metadata; no source roots or credentials. */
+  profileRevisions(
+    kind: "network" | "storage",
+    profileId: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/${kind}-profiles/${encodeURIComponent(profileId)}/revisions`,
+      "GET",
+      undefined,
+      (v) => AdminSchemas.ProfileRevisionViewSchema.array().parse(v),
+      isCancelled ? { isCancelled } : {},
+    );
+  }
+  /** Read-only preview does not lock the impact set. Execution checks it again. */
+  previewGrantRevocation(
+    body: import("@hitchlet/contracts/admin").ProfileGrantRevokeRequest,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      "/v1/admin/profile-grants/revoke/preview",
+      "POST",
+      AdminSchemas.ProfileGrantRevokeRequestSchema.parse(body),
+      (v) => AdminSchemas.RevocationImpactSchema.parse(v),
+      {
+        key: crypto.randomUUID(),
+        retry: false,
+        ...(isCancelled ? { isCancelled } : {}),
+      },
+    );
+  }
+  /** Persists a permanent fence and termination intents; does not await native cleanup. */
+  revokeGrants(
+    body: import("@hitchlet/contracts/admin").ProfileGrantRevokeRequest,
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      "/v1/admin/profile-grants/revoke",
+      "POST",
+      AdminSchemas.ProfileGrantRevokeRequestSchema.parse(body),
+      (v) => AdminSchemas.ProfileGrantRevocationSchema.parse(v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
   networkProfiles(isCancelled?: () => boolean) {
     return this.http.request(
       "/v1/network-profiles",

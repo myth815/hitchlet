@@ -1,3 +1,9 @@
+import { AccessService } from "../src/application/access.js";
+import {
+  HumanUsePolicySchema,
+  type PreparedManagementRequest,
+} from "@hitchlet/contracts/admin";
+import { SQLiteProfileRevocationStore } from "../src/storage/profile-revocation-store.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -123,6 +129,400 @@ async function fixture(withSecrets = false) {
     acquire,
   };
 }
+
+describe("profile grant administration and management replay", () => {
+  it.each(["queued", "reserved", "provisioning", "ready"])(
+    "atomically revokes %s tickets and retains claims until cleanup while paused",
+    async (phase) => {
+      const f = await fixture(),
+        t = await f.acquire(),
+        installation = (await f.db.get<{ installation_id: string }>(
+          "SELECT installation_id FROM installations",
+        ))!.installation_id;
+      const worker = new OperationWorker({
+        storage: f.db,
+        installationId: installation,
+        execution: new PersistentSimulator(join(f.dir, "external")),
+      });
+      if (phase !== "queued") await f.tickets.reserveNext();
+      if (phase === "ready") await worker.reconcileBeforeScheduling();
+      if (phase === "provisioning")
+        await f.db.run("UPDATE tickets SET phase='provisioning' WHERE id=?", [
+          t.ticketId,
+        ]);
+      const revision = (await f.db.get<{ current_revision_id: string }>(
+        "SELECT current_revision_id FROM network_profiles WHERE id=?",
+        [f.networkId],
+      ))!.current_revision_id;
+      const input = {
+        profileKind: "network",
+        profileRevisionId: revision,
+        expectedProfileVersion: 1,
+        reason: "Emergency incident",
+      };
+      const preview = await f.app.inject({
+        method: "POST",
+        url: "/v1/admin/profile-grants/revoke/preview",
+        headers: f.headers(),
+        payload: input,
+      });
+      expect(preview.statusCode).toBe(200);
+      expect(preview.json()).toMatchObject({
+        affectedTicketIds: [t.ticketId],
+        canRevoke: true,
+      });
+      expect(
+        await f.db.get("SELECT count(*) n FROM profile_grant_revocations"),
+      ).toEqual({ n: 0n });
+      await f.db.run(
+        "UPDATE system_maintenance SET paused=1 WHERE singleton=1",
+      );
+      const revoke = () =>
+        f.app.inject({
+          method: "POST",
+          url: "/v1/admin/profile-grants/revoke",
+          headers: f.headers(undefined, "revoke-grant"),
+          payload: input,
+        });
+      const first = await revoke();
+      expect(first.statusCode, first.body).toBe(200);
+      expect((await revoke()).json()).toEqual(first.json());
+      const row = await f.db.get<{
+        phase: string;
+        terminal_reason: string;
+        scheduling_reason_json: string;
+      }>(
+        "SELECT phase,terminal_reason,scheduling_reason_json FROM tickets WHERE id=?",
+        [t.ticketId],
+      );
+      expect(row!.terminal_reason).toBe("admin_revoke");
+      expect(row!.scheduling_reason_json).toContain("PROFILE_GRANT_REVOKED");
+      if (phase !== "queued") {
+        expect(row!.phase).toBe("releasing");
+        expect(
+          await f.db.get(
+            "SELECT count(*) n FROM capacity_claims WHERE state<>'released'",
+          ),
+        ).toEqual({ n: 1n });
+        await f.db.run(
+          "UPDATE installations SET controller_epoch=2 WHERE singleton=1",
+        );
+        await new OperationWorker({
+          storage: f.db,
+          installationId: installation,
+          controllerEpoch: 2,
+          execution: new PersistentSimulator(join(f.dir, "external")),
+        }).reconcileBeforeScheduling();
+        expect(
+          await f.db.get(
+            "SELECT count(*) n FROM capacity_claims WHERE state<>'released'",
+          ),
+        ).toEqual({ n: 0n });
+      }
+      expect(
+        (await f.db.get<{ phase: string }>(
+          "SELECT phase FROM tickets WHERE id=?",
+          [t.ticketId],
+        ))!.phase,
+      ).toBe("released");
+      await f.db.run(
+        "UPDATE system_maintenance SET paused=0 WHERE singleton=1",
+      );
+      await expect(f.acquire()).rejects.toBeDefined();
+      await f.db.run(
+        "UPDATE consumer_credentials SET scopes_json=? WHERE consumer_id=?",
+        [JSON.stringify(["tickets:read"]), f.adminId],
+      );
+      expect((await revoke()).statusCode).toBe(403);
+    },
+  );
+  it("checks full admin, CSRF, CAS and reason before revocation and supports historical revisions", async () => {
+    const f = await fixture(),
+      profiles = new SQLiteProfileStore(f.db),
+      old = (await profiles.listProfiles("network"))[0]!;
+    const next = await profiles.newProfileRevision("network", old.id, 1, {
+      config: old.config,
+    });
+    await f.acquire();
+    const body = {
+      profileKind: "network",
+      profileRevisionId: old.currentRevisionId,
+      expectedProfileVersion: 2,
+      reason: "old revision only",
+    };
+    const call = (headers: Record<string, string>, payload: unknown = body) =>
+      f.app.inject({
+        method: "POST",
+        url: "/v1/admin/profile-grants/revoke",
+        headers,
+        payload,
+      });
+    expect((await call(f.headers(f.token, "not-admin"))).statusCode).toBe(403);
+    expect(
+      (await call(f.headers(undefined, "no-reason"), { ...body, reason: " " }))
+        .statusCode,
+    ).toBe(422);
+    expect(
+      (
+        await call(f.headers(undefined, "stale"), {
+          ...body,
+          expectedProfileVersion: 1,
+        })
+      ).statusCode,
+    ).toBe(412);
+    const session = await f.app.inject({
+      method: "POST",
+      url: "/v1/auth/session",
+      headers: f.headers(),
+    });
+    const cookies = session.cookies
+      .map((c) => `${c.name}=${c.value}`)
+      .join("; ");
+    expect(
+      (await call({ cookie: cookies, "idempotency-key": "no-csrf" }))
+        .statusCode,
+    ).toBe(403);
+    const result = await call(f.headers(undefined, "historical-revoke"));
+    expect(result.statusCode, result.body).toBe(200);
+    expect(result.json().affectedTicketIds).toEqual([]);
+    const history = await f.app.inject({
+      url: `/v1/network-profiles/${old.id}/revisions`,
+      headers: f.headers(),
+    });
+    expect(history.statusCode).toBe(200);
+    expect(history.json()).toEqual([
+      expect.objectContaining({
+        id: next.revisionId,
+        isCurrent: true,
+        revokedAt: null,
+      }),
+      expect.objectContaining({
+        id: old.currentRevisionId,
+        isCurrent: false,
+        revokedAt: expect.any(String),
+      }),
+    ]);
+    await expect(f.acquire()).resolves.toBeDefined();
+  });
+  it("rejects a reference added after execution enumeration without partial revocation and reports unsupported infrastructure", async () => {
+    const f = await fixture();
+    await f.acquire();
+    const revision = (await f.db.get<{ current_revision_id: string }>(
+      "SELECT current_revision_id FROM network_profiles WHERE id=?",
+      [f.networkId],
+    ))!.current_revision_id;
+    const body = {
+      profileKind: "network" as const,
+      profileRevisionId: revision,
+      expectedProfileVersion: 1,
+      reason: "atomic enumeration",
+    };
+    const store = new SQLiteProfileRevocationStore(f.db);
+    const batch = f.db.batchTransaction.bind(f.db);
+    let raced = false;
+    const intercept = vi
+      .spyOn(f.db, "batchTransaction")
+      .mockImplementation(async (statements) => {
+        if (
+          !raced &&
+          statements.some((s) =>
+            s.sql.includes("INSERT INTO profile_grant_revocations"),
+          )
+        ) {
+          raced = true;
+          await f.acquire();
+        }
+        return batch(statements);
+      });
+    await expect(store.revoke(body, f.adminId, "race")).rejects.toMatchObject({
+      code: "STORAGE_CAS_FAILED",
+    });
+    intercept.mockRestore();
+    expect(
+      await f.db.get("SELECT count(*) n FROM profile_grant_revocations"),
+    ).toEqual({ n: 0n });
+    expect(
+      await f.db.get("SELECT count(*) n FROM tickets WHERE phase='queued'"),
+    ).toEqual({ n: 2n });
+    await f.tickets.reserveNext();
+    const allocation = (await f.db.get<{ id: string }>(
+      "SELECT id FROM allocations LIMIT 1",
+    ))!.id;
+    const infrastructure = randomUUID();
+    await f.db.run(
+      "INSERT INTO allocations(id,purpose,machine_id,node_id,runtime_identity_id,image_artifact_id,generation,desired_state,ownership_json,created_at_ms,updated_at_ms) SELECT ?,'infrastructure',machine_id,node_id,runtime_identity_id,image_artifact_id,1,'present','{}',created_at_ms,updated_at_ms FROM allocations WHERE id=?",
+      [infrastructure, allocation],
+    );
+    expect(await store.preview(body)).toMatchObject({
+      canRevoke: false,
+      affectedInfrastructureAllocationIds: [infrastructure],
+      disabledReasons: ["infrastructure_revocation_unsupported"],
+    });
+    await expect(
+      store.revoke(body, f.adminId, "unsupported"),
+    ).rejects.toMatchObject({ code: "execution_mode_unsupported" });
+    expect(
+      await f.db.get("SELECT count(*) n FROM profile_grant_revocations"),
+    ).toEqual({ n: 0n });
+  });
+  it("cancels a pending claim and refuses stale renewal confirmation and private access after revocation", async () => {
+    const f = await fixture(),
+      t = await f.acquire();
+    await f.tickets.reserveNext();
+    const installation = (await f.db.get<{ installation_id: string }>(
+      "SELECT installation_id FROM installations",
+    ))!.installation_id;
+    await new OperationWorker({
+      storage: f.db,
+      installationId: installation,
+      execution: new PersistentSimulator(join(f.dir, "external")),
+    }).reconcileBeforeScheduling();
+    const lease = (await f.db.get<{
+      generation: bigint;
+      version: bigint;
+      expires_at_ms: bigint;
+    }>(
+      "SELECT generation,version,expires_at_ms FROM leases WHERE ticket_id=?",
+      [t.ticketId],
+    ))!;
+    const leases = new LeaseService(f.db);
+    const pending = await leases.renew(
+      f.consumerId,
+      t.ticketId,
+      "original-claim",
+      {
+        generation: Number(lease.generation),
+        expectedLeaseVersion: Number(lease.version),
+        requestedTtlSec: 600,
+      },
+    );
+    expect(pending.outcome).toBe("pending");
+    const revision = (await f.db.get<{ current_revision_id: string }>(
+      "SELECT current_revision_id FROM network_profiles WHERE id=?",
+      [f.networkId],
+    ))!.current_revision_id;
+    await new SQLiteProfileRevocationStore(f.db).revoke(
+      {
+        profileKind: "network",
+        profileRevisionId: revision,
+        expectedProfileVersion: 1,
+        reason: "claim race",
+      },
+      f.adminId,
+      "claim-race",
+    );
+    await leases.reconcilePending();
+    expect(
+      await f.db.get(
+        "SELECT state FROM lease_renewals WHERE lease_id=(SELECT id FROM leases WHERE ticket_id=?)",
+        [t.ticketId],
+      ),
+    ).toEqual({ state: "cancelled" });
+    expect(
+      (await f.db.get<{ expires_at_ms: bigint }>(
+        "SELECT expires_at_ms FROM leases WHERE ticket_id=?",
+        [t.ticketId],
+      ))!.expires_at_ms,
+    ).toBe(lease.expires_at_ms);
+    await expect(
+      new AccessService(f.db).get(
+        f.consumerId,
+        t.ticketId,
+        "post-revocation-access",
+        Number(lease.generation),
+      ),
+    ).rejects.toMatchObject({ code: "profile_grant_revoked" });
+    await expect(
+      leases.renew(f.consumerId, t.ticketId, "new-claim", {
+        generation: Number(lease.generation),
+        expectedLeaseVersion: Number(lease.version),
+        requestedTtlSec: 600,
+      }),
+    ).rejects.toBeDefined();
+  });
+  it.each(["policy", "admission"])(
+    "recovers %s writes through the original SDK command after losing the response",
+    async (kind) => {
+      const f = await fixture();
+      const node = (await f.db.get<{
+        id: string;
+        version: bigint;
+        machine_id: string;
+      }>("SELECT id,version,machine_id FROM nodes LIMIT 1"))!;
+      const machine = (await f.db.get<{ version: bigint }>(
+        "SELECT version FROM machines WHERE id=?",
+        [node.machine_id],
+      ))!;
+      let prepared: PreparedManagementRequest | undefined;
+      let lose = true;
+      const client = new HitchletClient("https://management.test", {
+        auth: { kind: "bearer", token: f.adminToken },
+        onManagementPrepared: async (command) => {
+          prepared = command;
+        },
+        fetch: async (input, init) => {
+          const result = await f.app.inject({
+            method: init!.method as "PUT",
+            url: new URL(String(input)).pathname,
+            headers: Object.fromEntries(new Headers(init!.headers).entries()),
+            payload: String(init!.body),
+          });
+          if (lose) {
+            lose = false;
+            expect(result.statusCode, result.body).toBe(200);
+            throw new TypeError("lost reply");
+          }
+          return new Response(result.body, {
+            status: result.statusCode,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+      const zero = { cpuMillis: 0, memoryMiB: 0, scratchMiB: 0 };
+      const policy = HumanUsePolicySchema.parse({
+        blockShutdownForAnyInteractiveSession: true,
+        blockShutdownOnUnknownPresence: true,
+        maximumObservationAgeSeconds: 30,
+        admissionDuringInteraction: "block_new",
+        humanReserved: zero,
+        systemReserve: zero,
+        attendedMaximum: zero,
+        unattendedMaximum: zero,
+        cpuPressureLimitPercent: 80,
+        memoryPressureLimitPercent: 80,
+      });
+      await expect(
+        kind === "policy"
+          ? client.admin.updateHumanUsePolicy(
+              node.machine_id,
+              { expectedVersion: Number(machine.version), policy },
+              "lost-policy",
+            )
+          : client.admin.updateNodeAdmissionMode(
+              node.id,
+              {
+                expectedVersion: Number(node.version),
+                mode: "constant_online_manual_inventory",
+                reason: "explicit trial",
+              },
+              "lost-admission",
+            ),
+      ).rejects.toBeDefined();
+      expect(prepared).toBeDefined();
+      const saved = prepared!;
+      expect(await client.admin.resumeManagement(saved)).toMatchObject({
+        version: Number(kind === "policy" ? machine.version : node.version) + 1,
+      });
+      await f.db.run(
+        "UPDATE consumer_credentials SET scopes_json=? WHERE consumer_id=?",
+        [JSON.stringify(["tickets:read"]), f.adminId],
+      );
+      await expect(client.admin.resumeManagement(saved)).rejects.toMatchObject({
+        statusCode: 403,
+      });
+    },
+  );
+});
 
 describe("D24 management and safe consumer directory", () => {
   it.each(["injected JSON parser", "real loopback HTTP"])(
