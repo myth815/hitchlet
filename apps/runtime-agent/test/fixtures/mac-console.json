@@ -1,0 +1,20 @@
+[
+  {
+    "IOConsoleUsers": [
+      {
+        "kCGSSessionOnConsoleKey": true,
+        "kCGSessionLoginDoneKey": true,
+        "kSCSecuritySessionID": 501,
+        "kCGSSessionSystemSafeBoot": false,
+        "kCGSSessionIDKey": 501,
+        "kCGSSessionUserNameKey": "fixture-user",
+        "kCGSSessionGroupIDKey": 501,
+        "CGSSessionUniqueSessionUUID": "fixture-value",
+        "kCGSessionLongUserNameKey": "fixture-user",
+        "kCGSSessionAuditIDKey": 501,
+        "kCGSSessionLoginwindowSafeLogin": false,
+        "kCGSSessionUserIDKey": 501
+      }
+    ]
+  }
+]

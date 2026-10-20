@@ -78,10 +78,10 @@ node verify-schema.cjs
 项目安装TypeScript后，可用标准命令检查接口骨架：
 
 ```sh
-tsc --noEmit --strict --noUncheckedIndexedAccess --exactOptionalPropertyTypes --target ES2022 --module ESNext --lib ES2022 contracts.ts contracts/contracts.typecheck.ts contracts/usage.examples.ts
+pnpm exec tsc -p tsconfig.json
 ```
 
-本次语义检查使用本机已有的TypeScript编译器API完成，没有为设计文档安装新依赖。
+此前设计语义检查使用本机已有编译器 API。D20 之后从仓库根目录先运行 `pnpm install --frozen-lockfile`，再用固定工作区编译器执行 `pnpm exec tsc -p docs/design/tsconfig.json`。Host 类型引用共享运行时 schema 并传递依赖已有 zod；无额外文档专用依赖，不能再称全部合同仅依赖标准库。配置使用 Bundler 模块解析、ES2022 标准库、无 DOM/Node 全局类型和 noEmit；`skipLibCheck` 仅跳过依赖声明检查，项目源码保持 strict、noUncheckedIndexedAccess 和 exactOptionalPropertyTypes。上表编译器版本与仅标准库的结果是此前设计验证的历史记录。
 
 ## 验证边界
 

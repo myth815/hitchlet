@@ -11,11 +11,8 @@ export interface Principal {
   readonly source: "bearer" | "session";
   readonly csrfHash?: string;
 }
-export class AuthFailure extends Error {
-  constructor(readonly code: "unauthenticated" | "forbidden" | "csrf_failed") {
-    super(code);
-  }
-}
+export { AuthFailure } from "../application/errors.js";
+import { AuthFailure } from "../application/errors.js";
 
 /** Resolves identities exclusively from persisted credential/session records. */
 export class Authenticator {

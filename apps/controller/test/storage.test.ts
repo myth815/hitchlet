@@ -35,7 +35,7 @@ describe("SQLite storage worker", () => {
     const tables = await storage.all<{ name: string }>(
       "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%'",
     );
-    expect(tables).toHaveLength(41);
+    expect(tables).toHaveLength(42);
     expect(
       await storage.get(
         "SELECT version FROM schema_migrations WHERE version = 2",
@@ -50,7 +50,7 @@ describe("SQLite storage worker", () => {
     opened.push(restarted);
     expect(
       await restarted.get("SELECT count(*) AS count FROM schema_migrations"),
-    ).toMatchObject({ count: 4n });
+    ).toMatchObject({ count: 5n });
   });
 
   it("enforces foreign keys, immutable rows, and active grant cleanup guards", async () => {
@@ -246,10 +246,10 @@ describe("SQLite storage worker", () => {
     opened.push(storage);
     expect(
       await storage.get("SELECT count(*) AS count FROM schema_migrations"),
-    ).toMatchObject({ count: 4n });
+    ).toMatchObject({ count: 5n });
     expect(
       await storage.get<{ user_version: bigint }>("PRAGMA user_version"),
-    ).toMatchObject({ user_version: 4n });
+    ).toMatchObject({ user_version: 5n });
     expect(
       await storage.get(
         "SELECT name FROM pragma_table_info('gui_sessions') WHERE name='source_credential_id'",
@@ -312,7 +312,7 @@ describe("SQLite storage worker", () => {
       ),
     ).toEqual({ n: 1n });
     expect(await upgraded.get("PRAGMA user_version")).toEqual({
-      user_version: 4n,
+      user_version: 5n,
     });
     expect(
       (

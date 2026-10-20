@@ -34,6 +34,11 @@ let timer: NodeJS.Timeout | undefined;
 let backgroundLoops: PortainerBackgroundLoops | undefined;
 let app: Awaited<ReturnType<typeof buildApp>> | undefined;
 try {
+  // Every serving process owns a new controller epoch, including observation-only mode.
+  // Opening a ledger for CLI/tests does not implicitly acquire control.
+  await storage.run(
+    "UPDATE installations SET controller_epoch=controller_epoch+1 WHERE singleton=1",
+  );
   if (config.EXECUTION_MODE === "simulator") {
     recoveryState = "recovering";
     let installation = await storage.get<{
@@ -46,10 +51,6 @@ try {
       throw new Error(
         "Simulator is not initialized. Run `pnpm --filter @hitchlet/controller init:simulator` and restart.",
       );
-    await storage.run(
-      "UPDATE installations SET controller_epoch=controller_epoch+1 WHERE singleton=1 AND installation_id=?",
-      [installation.installation_id],
-    );
     installation = await storage.get<{
       installation_id: string;
       controller_epoch: bigint;
@@ -115,10 +116,6 @@ try {
       throw new Error(
         "Installation is not initialized. Initialize the control ledger before starting Portainer mode.",
       );
-    await storage.run(
-      "UPDATE installations SET controller_epoch=controller_epoch+1 WHERE singleton=1 AND installation_id=?",
-      [installation.installation_id],
-    );
     installation = await storage.get<{
       installation_id: string;
       controller_epoch: bigint;

@@ -1,4 +1,5 @@
 export type ApplicationErrorCode =
+  | "agent_epoch_conflict"
   | "invalid_request"
   | "not_found"
   | "conflict"
@@ -34,3 +35,9 @@ export const preconditionFailed = (
     | "lease_version_conflict"
     | "ticket_version_conflict" = "lease_version_conflict",
 ) => new ApplicationError(code);
+
+export class AuthFailure extends Error {
+  constructor(readonly code: "unauthenticated" | "forbidden" | "csrf_failed") {
+    super(code);
+  }
+}

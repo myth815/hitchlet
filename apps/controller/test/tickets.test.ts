@@ -1125,7 +1125,16 @@ describe("persistent simulator lifecycle", () => {
       .prepare("UPDATE managed_resources SET provider_id=NULL WHERE id=?")
       .run(child.provider_id);
     raw.exec(
-      "DELETE FROM schema_migrations WHERE version=4; PRAGMA user_version=3; COMMIT;",
+      `DROP TABLE agent_boots;
+       ALTER TABLE agents DROP COLUMN host_identity;
+       ALTER TABLE agents DROP COLUMN enrollment_hash;
+       ALTER TABLE agents DROP COLUMN enrollment_expires_at_ms;
+       ALTER TABLE agents DROP COLUMN session_epoch;
+       ALTER TABLE agents DROP COLUMN enrollment_consumed;
+       ALTER TABLE machine_snapshots DROP COLUMN heartbeat_json;
+       ALTER TABLE machine_snapshots DROP COLUMN heartbeat_hash;
+       ALTER TABLE machine_snapshots DROP COLUMN session_epoch;
+       DELETE FROM schema_migrations WHERE version>=4; PRAGMA user_version=3; COMMIT;`,
     );
     raw.close();
     const recovered = await openStorage(dir);

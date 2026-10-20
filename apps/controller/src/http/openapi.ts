@@ -1,5 +1,19 @@
 import { toPublicJsonSchema } from "@hitchlet/contracts";
 import { z } from "zod";
+import {
+  hostPairingRequestSchema,
+  hostPairingReceiptSchema,
+  hostEnrollRequestSchema,
+  hostEnrollReceiptSchema,
+  hostBootRequestSchema,
+  hostBootReceiptSchema,
+  hostHeartbeatSchema,
+  hostHeartbeatReceiptSchema,
+  hostSessionViewSchema,
+  hostAgentViewSchema,
+  hostRevokeRequestSchema,
+  hostSnapshotViewSchema,
+} from "@hitchlet/contracts/internal";
 import { AdminSchemas } from "./admin-protocol.js";
 
 export function openApiDocument() {
@@ -107,6 +121,99 @@ export function openApiDocument() {
     openapi: "3.1.0",
     info: { title: "Hitchlet API", version: "1.0.0" },
     paths: {
+      "/v1/agents/pairings": {
+        post: adminOperation(
+          "Create or replace a disabled Host single-use pairing",
+          "201",
+          hostPairingRequestSchema,
+          hostPairingReceiptSchema,
+        ),
+      },
+      "/v1/agents/enroll": {
+        post: {
+          ...adminOperation(
+            "Consume a five-minute Machine-bound pairing",
+            "201",
+            hostEnrollRequestSchema,
+            hostEnrollReceiptSchema,
+          ),
+          security: [],
+          description:
+            "Single-use pairing credential. The returned Host credential is shown once; no-store.",
+        },
+      },
+      "/v1/agents/{agentId}/session": {
+        get: {
+          ...adminOperation(
+            "Read current Host control and sender epochs",
+            "200",
+            undefined,
+            hostSessionViewSchema,
+            [pathId("agentId")],
+          ),
+          security: [{ hostCredential: [] }],
+          description:
+            "Host bearer only; consumer and Runtime credentials are rejected.",
+        },
+      },
+      "/v1/agents/{agentId}/boot": {
+        post: {
+          ...adminOperation(
+            "Fence a new Host process with session epoch CAS",
+            "200",
+            hostBootRequestSchema,
+            hostBootReceiptSchema,
+            [pathId("agentId")],
+          ),
+          security: [{ hostCredential: [] }],
+          description:
+            "Host bearer only. Historical boot IDs cannot be revived.",
+        },
+      },
+      "/v1/agents/{agentId}/heartbeat": {
+        post: {
+          ...adminOperation(
+            "Persist an authenticated physical Host observation",
+            "200",
+            hostHeartbeatSchema,
+            hostHeartbeatReceiptSchema,
+            [pathId("agentId")],
+          ),
+          security: [{ hostCredential: [] }],
+          description:
+            "Host bearer only; binds installation, Machine, boot, epoch, sequence and time. Duplicate receipt does not refresh observation age.",
+        },
+      },
+      "/v1/agents/{agentId}": {
+        get: adminOperation(
+          "Read non-secret Host registration",
+          "200",
+          undefined,
+          hostAgentViewSchema,
+          [pathId("agentId")],
+        ),
+      },
+      "/v1/agents/{agentId}/revoke": {
+        post: {
+          ...adminOperation(
+            "Revoke Host credentials with session CAS and reason audit",
+            "204",
+            hostRevokeRequestSchema,
+            z.null(),
+            [pathId("agentId")],
+          ),
+          responses: { "204": response("Host credential revoked"), ...errors },
+        },
+      },
+      "/v1/machines/{machineId}/snapshot": {
+        get: adminOperation(
+          "Read latest Host evidence; stale or revoked observations are unknown",
+          "200",
+          undefined,
+          hostSnapshotViewSchema.nullable(),
+          [pathId("machineId")],
+        ),
+      },
       "/v1/admin/installation": {
         get: adminOperation(
           "Read non-secret installation and platform network-deny metadata",
@@ -659,6 +766,11 @@ export function openApiDocument() {
     components: {
       schemas,
       securitySchemes: {
+        hostCredential: {
+          type: "http",
+          scheme: "bearer",
+          description: "Independent physical Host credential, hch_ prefix",
+        },
         bearerAuth: { type: "http", scheme: "bearer" },
         sessionCookie: {
           type: "apiKey",

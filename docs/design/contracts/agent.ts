@@ -400,7 +400,10 @@ export interface LocalExpiryAction extends ObservationMetadata {
 }
 
 /** 最新 Agent 观测；不把历史累积列表无限附在每次心跳中。 */
-export interface AgentHeartbeat {
+export type AgentHeartbeat = import('../../../packages/contracts/src/host-agent').HostHeartbeat | RuntimeAgentHeartbeat;
+
+/** 后置 Runtime/VM 心跳设计；D10b 网络协议独立保留，D20 不伪造守卫 ACK。 */
+export interface RuntimeAgentHeartbeat {
   /** 已配对 Agent 标识；null 表示尚未配对。 */
   readonly agentId: Id;
   /** 生成观测/回执的 Agent 启动标识。 */

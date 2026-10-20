@@ -360,6 +360,11 @@ CREATE TABLE agents (
   credential_hash TEXT NOT NULL,
   protocol_version INTEGER NOT NULL DEFAULT 1 CHECK (protocol_version > 0),
   current_boot_id TEXT,
+  host_identity TEXT,
+  enrollment_hash TEXT,
+  enrollment_expires_at_ms INTEGER,
+  session_epoch INTEGER NOT NULL DEFAULT 0 CHECK(session_epoch >= 0),
+  enrollment_consumed INTEGER NOT NULL DEFAULT 0 CHECK(enrollment_consumed IN(0,1)),
   last_seen_at_ms INTEGER,
   accepted_controller_epoch INTEGER NOT NULL DEFAULT 0 CHECK (accepted_controller_epoch >= 0),
   UNIQUE (id, machine_id),
@@ -370,6 +375,15 @@ CREATE TABLE agents (
 CREATE UNIQUE INDEX agents_one_host_per_machine ON agents(machine_id) WHERE kind = 'host';
 CREATE UNIQUE INDEX agents_one_runtime_per_node ON agents(node_id) WHERE kind = 'runtime';
 
+CREATE TABLE agent_boots (
+  agent_id TEXT NOT NULL REFERENCES agents(id) ON DELETE RESTRICT,
+  boot_id TEXT NOT NULL,
+  session_epoch INTEGER NOT NULL CHECK(session_epoch > 0),
+  controller_epoch INTEGER NOT NULL CHECK(controller_epoch > 0),
+  started_at_ms INTEGER NOT NULL CHECK(started_at_ms >= 0),
+  PRIMARY KEY(agent_id,boot_id), UNIQUE(agent_id,session_epoch)
+) STRICT;
+
 CREATE TABLE machine_snapshots (
   machine_id TEXT PRIMARY KEY REFERENCES machines(id) ON DELETE RESTRICT,
   agent_id TEXT NOT NULL,
@@ -377,6 +391,9 @@ CREATE TABLE machine_snapshots (
   sequence INTEGER NOT NULL CHECK (sequence >= 0),
   observed_at_ms INTEGER NOT NULL CHECK (observed_at_ms >= 0),
   received_at_ms INTEGER NOT NULL CHECK (received_at_ms >= 0),
+  heartbeat_json TEXT CHECK(heartbeat_json IS NULL OR json_valid(heartbeat_json)),
+  heartbeat_hash TEXT,
+  session_epoch INTEGER NOT NULL DEFAULT 0 CHECK(session_epoch >= 0),
   sessions_json TEXT NOT NULL CHECK (json_valid(sessions_json)),
   workloads_json TEXT NOT NULL CHECK (json_valid(workloads_json)),
   resources_json TEXT NOT NULL CHECK (json_valid(resources_json)),

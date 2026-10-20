@@ -165,11 +165,27 @@ async function open(): Promise<void> {
       )
       .get() as { version: bigint } | undefined;
   }
-  if (applied?.version !== 4n)
+  if (applied?.version === 4n) {
+    db.exec(
+      await readFile(
+        join(
+          dirname(fileURLToPath(import.meta.url)),
+          "migrations/005-host-observations.sql",
+        ),
+        "utf8",
+      ),
+    );
+    applied = db
+      .prepare(
+        "SELECT version FROM schema_migrations ORDER BY version DESC LIMIT 1",
+      )
+      .get() as { version: bigint } | undefined;
+  }
+  if (applied?.version !== 5n)
     throw new Error(
       `Unsupported schema version ${String(applied?.version ?? "none")}`,
     );
-  db.pragma("user_version = 4");
+  db.pragma("user_version = 5");
   const fk = db.pragma("foreign_keys", { simple: true });
   const sync = db.pragma("synchronous", { simple: true });
   if ((fk !== 1 && fk !== 1n) || (sync !== 2 && sync !== 2n))

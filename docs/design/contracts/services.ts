@@ -5,7 +5,7 @@
  * 可选字段省略表示使用明确默认；null 表示明确不存在/尚未取得，不互相替换。
  */
 import type { RevocationImpact } from './domain';
-import type { Consumer, ConsumerAuthorization, ConsumerQuota, MachineSnapshot } from './domain';
+import type { Consumer, ConsumerAuthorization, ConsumerQuota, HostSnapshotView } from './domain';
 import type { Role } from './common';
 
 /** 创建消费者时必须明确授权和配额；不以空JSON或隐式全权限作为默认。 */
@@ -168,7 +168,7 @@ export interface MachineService {
    * @param machineId 目标物理机器。
    * @returns 未收到host观测时为null，不解释为无人。
    */
-  getSnapshot(context: QueryContext, machineId: Id): Promise<MachineSnapshot | null>;
+  getSnapshot(context: QueryContext, machineId: Id): Promise<HostSnapshotView | null>;
   /** 返回经过当前调用者范围校验的对象；不存在或不可见统一映射 404。
    * @param context 可信应用上下文；不接受请求体自报身份。
    * @param machineId 所属物理机器的稳定标识。

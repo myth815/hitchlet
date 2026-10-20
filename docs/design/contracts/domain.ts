@@ -89,25 +89,9 @@ export interface ConsumerQuota {
   readonly maxLifetimeSeconds: number;
 }
 
-/** 物理宿主的最新持久观测。只有绑定该Machine的host Agent可以提交。 */
-export interface MachineSnapshot extends ObservationMetadata {
-  /** 被观测机器。 */
-  readonly machineId: Id;
-  /** 已认证的物理宿主代理。 */
-  readonly agentId: Id;
-  /** 本次代理启动身份，重启后序列重新开始。 */
-  readonly bootId: Id;
-  /** 同bootId内单调递增，重复幂等、倒序拒绝。 */
-  readonly sequence: number;
-  /** 会话枚举结果；不完整或失败不能判为无人。 */
-  readonly humanPresence: HumanPresenceReport;
-  /** 当前压力观测。 */
-  readonly resources: ResourcePressure;
-  /** 存在未纳管活动时阻止节能。 */
-  readonly unmanagedActivityHold: boolean;
-  /** 整份宿主观测的完整性，与单独的人类会话结果共同判断。 */
-  readonly probeStatus: 'complete' | 'partial' | 'failed';
-}
+/** D20 已实现协议以 contracts 运行时 schema 为唯一字段权威。接收时间/新鲜度在 HostSnapshotView 中。 */
+export type MachineSnapshot = import('../../../packages/contracts/src/host-observation').HostSnapshot;
+export type HostSnapshotView = import('../../../packages/contracts/src/host-agent').HostSnapshotView;
 
 /** 安装实例的稳定身份和控制权代次；初始化未完成前不得开放调度。 */
 export interface Installation {
@@ -121,21 +105,8 @@ export interface Installation {
   readonly currentNetworkDenyRevisionId: Id;
 }
 
-/** 脱敏交互会话。锁屏和断开连接仍可能代表有人使用。 */
-export interface HumanSession {
-  /** 会话标识，仅用于关联观测。 */
-  readonly sessionId: string;
-  /** 用户的脱敏引用，不要求保存明文用户名。 */
-  readonly principalRef: string; // 不要求存储明文用户名。
-  /** 会话或对象的判别类型。 */
-  readonly type: 'console' | 'rdp' | 'ssh' | 'other_interactive';
-  /** 会话连接状态；disconnected 仍可能属于人类占用。 */
-  readonly connection: 'connected' | 'disconnected' | 'unknown';
-  /** 是否锁屏；unknown 不视为无人。 */
-  readonly locked: boolean | 'unknown';
-  /** 是否已认证的交互会话，不按账号名称猜测。 */
-  readonly authenticatedInteractive: boolean;
-}
+/** D20 原生适配器枚举的脱敏交互会话；字段以运行时 schema 为准，锁屏/断开仍受保护。 */
+export type HumanSession = MachineSnapshot['sessions'][number];
 
 /** 完整会话枚举及人类活动观测；过期或枚举不完整必须判为 unknown。 */
 export interface HumanPresenceReport extends ObservationMetadata {

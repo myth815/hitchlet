@@ -26,6 +26,14 @@ import {
   RevokeRequestSchema,
   AuthenticatedPrincipalSchema,
 } from "@hitchlet/contracts";
+import { HostAgents } from "./application/host-agents.js";
+import {
+  hostPairingRequestSchema,
+  hostEnrollRequestSchema,
+  hostBootRequestSchema,
+  hostHeartbeatSchema,
+  hostRevokeRequestSchema,
+} from "@hitchlet/contracts/internal";
 import type { Storage } from "./storage/index.js";
 import { TicketService } from "./application/tickets.js";
 import { TicketQueries } from "./application/queries.js";
@@ -116,7 +124,8 @@ export async function buildApp(
             ? 422
             : error.code === "queue_limit_exceeded"
               ? 429
-              : error.code === "generation_conflict" ||
+              : error.code === "agent_epoch_conflict" ||
+                  error.code === "generation_conflict" ||
                   error.code === "lease_version_conflict" ||
                   error.code === "ticket_version_conflict"
                 ? 412
@@ -215,6 +224,73 @@ export async function buildApp(
         throw new AuthFailure("forbidden");
       return actor;
     };
+    const hosts = new HostAgents(runtime.storage);
+    app.post("/v1/agents/pairings", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      reply.header("Cache-Control", "no-store");
+      return reply
+        .code(201)
+        .send(
+          await hosts.pair(
+            parseInput(hostPairingRequestSchema, request.body),
+            actor.principalId,
+            request.id,
+          ),
+        );
+    });
+    app.post("/v1/agents/enroll", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      return reply
+        .code(201)
+        .send(
+          await hosts.enroll(parseInput(hostEnrollRequestSchema, request.body)),
+        );
+    });
+    app.get("/v1/agents/:agentId/session", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      return hosts.session(
+        uuidParam(request.params, "agentId"),
+        request.headers.authorization,
+      );
+    });
+    app.post("/v1/agents/:agentId/boot", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      return hosts.start(
+        uuidParam(request.params, "agentId"),
+        request.headers.authorization,
+        parseInput(hostBootRequestSchema, request.body),
+      );
+    });
+    app.post("/v1/agents/:agentId/heartbeat", async (request, reply) => {
+      reply.header("Cache-Control", "no-store");
+      return hosts.heartbeat(
+        uuidParam(request.params, "agentId"),
+        request.headers.authorization,
+        parseInput(hostHeartbeatSchema, request.body),
+      );
+    });
+    app.get("/v1/agents/:agentId", async (request, reply) => {
+      await requireAdmin(request);
+      reply.header("Cache-Control", "no-store");
+      return hosts.view(uuidParam(request.params, "agentId"));
+    });
+    app.post("/v1/agents/:agentId/revoke", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      const input = parseInput(hostRevokeRequestSchema, request.body);
+      await hosts.revoke(
+        uuidParam(request.params, "agentId"),
+        input.expectedSessionEpoch,
+        input.reason,
+        actor.principalId,
+        request.id,
+      );
+      return reply.code(204).send();
+    });
+    app.get("/v1/machines/:machineId/snapshot", async (request, reply) => {
+      await requireAdmin(request);
+      reply.header("Cache-Control", "no-store");
+      return hosts.snapshot(uuidParam(request.params, "machineId"));
+    });
     app.get("/v1/admin/installation", async (request, reply) => {
       await requireAdmin(request);
       const installation = await admin.getInstallation();

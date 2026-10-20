@@ -287,6 +287,7 @@ describe("HitchletClient consumer surface", () => {
     });
     const client = new HitchletClient("http://localhost", {
       fetch: fetcher,
+      now: () => Date.parse(at),
       sleep: async () => undefined,
     });
     const receipt = await client.tickets.resume(command);

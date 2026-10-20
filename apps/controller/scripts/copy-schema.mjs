@@ -21,3 +21,7 @@ await copyFile(
   resolve(source, "004-managed-resource-identities.sql"),
   resolve(target, "004-managed-resource-identities.sql"),
 );
+await copyFile(
+  resolve(source, "005-host-observations.sql"),
+  resolve(target, "005-host-observations.sql"),
+);

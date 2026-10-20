@@ -1468,6 +1468,25 @@ describe("independent D05 protocol and lease review", () => {
     await bearerReader.read();
     const closed = app.close();
     await closed;
-    expect((await bearerReader.read()).done).toBe(true);
+    let shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const ended = await Promise.race([
+        (async () => {
+          let result = await bearerReader.read();
+          while (!result.done) result = await bearerReader.read();
+          return result;
+        })(),
+        new Promise<never>((_, reject) => {
+          shutdownTimer = setTimeout(
+            () => reject(new Error("SSE did not close after server shutdown")),
+            2500,
+          );
+        }),
+      ]);
+      expect(ended.done).toBe(true);
+    } finally {
+      if (shutdownTimer) clearTimeout(shutdownTimer);
+      await bearerReader.cancel().catch(() => undefined);
+    }
   }, 10000);
 });

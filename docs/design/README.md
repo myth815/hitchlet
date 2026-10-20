@@ -460,19 +460,34 @@ Mac Host Agent以固定服务身份通过 `spawn(executable, argv, {shell:false}
 
 ### 12.1 Agent协议和服务边界
 
-Agent出站TLS长轮询，默认最多等待25秒；无命令时正常续连。管理员先生成短期单次配对码，Agent注册后得到独立可轮换凭据，控制端保存哈希。登记成功仍需能力验证才准入；GUI管理员登录与Agent身份分开。
+D20已实现字段以 `packages/contracts/src/host-agent.ts` 和 `host-observation.ts` 的运行时schema为唯一权威；[原生Host部署和恢复说明](../../apps/runtime-agent/HOST.md)列出配对、boot/session CAS、撤销重配、过期语义和逐OS边界。物理Host与D10b网络Runtime保留同一Agent概念、不同凭据和独立入口；此阶段没有VM/电源动作或离线守卫ACK。
+
+D20物理Host观测使用出站HTTPS心跳（默认10秒，完整请求总截止15秒），不运行命令长轮询；后置VM/电源命令保留出站TLS长轮询设计，默认最多等待25秒。管理员先生成短期单次配对码，Agent注册后得到独立可轮换凭据，控制端保存哈希。登记成功仍需能力验证才准入；GUI管理员登录与Agent身份分开。
+
+已实现的 D20 Host 路由如下；所有返回字段以共享运行时 schema 为准。full admin 与独立 Host bearer 分别承担管理和观测权限，不能互换。
 
 | 路由 | 输入 / 返回 | 必须检查 |
 | --- | --- | --- |
-| POST /agents/enroll | 配对码、机器身份、协议/软件版本、OS/架构；返回Agent身份 | 配对码单次、过期、绑定目标；不能靠自报MachineId接管别人 |
-| POST /agents/{id}/heartbeat | bootId、seq、观测时间、人/资源/后端摘要；返回服务器时间与期望策略版本 | 认证、倒序/重复、完整性、新鲜度；限制payload大小 |
+| POST /v1/agents/pairings | machineId、hostIdentity、reason；重配另带expectedSessionEpoch；返回agentId、machineId、installationId、controllerEpoch、pairingToken、expiresAt | full admin；重配仅允许disabled且session CAS匹配；配对五分钟有效；actor/request/reason审计 |
+| POST /v1/agents/enroll | agentId、machineId、installationId、hostIdentity、pairingToken、OS/架构、protocolVersion=1、role=physical_host；返回身份、credential、controllerEpoch、sessionEpoch | 配对单次、过期、全部绑定字段；凭据仅本响应输出一次，控制端只存哈希；不接收agentVersion |
+| GET /v1/agents/{id}/session | 独立Host bearer；返回installationId、controllerEpoch、sessionEpoch、bootId | 仅当前active且已配对的同一Host身份；供启动与控制器重启后的恢复使用 |
+| POST /v1/agents/{id}/boot | installationId、controllerEpoch、bootId、expectedSessionEpoch；返回bootId、sessionEpoch、controllerEpoch | Host bearer；当前控制代次与session CAS；历史boot不可复活；相同启动请求幂等 |
+| POST /v1/agents/{id}/heartbeat | installationId、controllerEpoch、sessionEpoch、protocolVersion、agentVersion、snapshot；返回sequence、sessionEpoch、receivedAt、duplicate、offlineLeaseEnforcement=false | Host bearer；Machine/Agent/boot绑定；序列及观测时间不倒退；完整性/新鲜度；重复不延长receivedAt；限制payload大小 |
+| GET /v1/agents/{id} | 返回不含凭据/哈希的身份、配对状态、sessionEpoch、bootId、lastSeenAt及协议/离线能力摘要 | full admin；不输出pairingToken或credential |
+| POST /v1/agents/{id}/revoke | expectedSessionEpoch、reason；成功204无响应体 | full admin；session CAS；立即失效凭据、配对和boot并递增sessionEpoch；actor/request/reason审计 |
+| GET /v1/machines/{id}/snapshot | 返回snapshot、receivedAt、fresh、humanPresence、offlineLeaseEnforcement=false；无观测为null | full admin；过期、撤销或控制代次变化为unknown；资源未知保留null，不能授权关机 |
+
+以下命令投递、结果和清单路由仅为后置 VM/电源执行设计，D20 尚未实现；不得据此宣称支持本地离线守卫、受控 VM 或电源动作：
+
+| 后置设计路由 | 输入 / 返回 | 未来必须检查 |
+| --- | --- | --- |
 | GET /agents/{id}/commands | after游标；返回带deadline/epoch的命令 | 至少一次投递；命令ID幂等；无任意shell action |
 | POST /agents/{id}/commands/{commandId}/results | phase=accepted/running/succeeded/failed/rejected；未知结果在output标记，附证据与资源ID | 参数摘要、代次、目标归属；unknown使关联Operation待查实；迟到回执不能推进已终止票到ready |
 | POST /agents/{id}/inventory | 完整受管资源与外部占用摘要 | 标明是否完整；不完整清单不能作为资源不存在证据 |
 
-命令字段至少有 `commandId/operationId/controllerEpoch/machineEpoch/allocationId?/generation?/leaseVersion?/deadline/argumentsHash`。本地持久日志保存回执、资源manifest和撤销墓碑；与控制账本职责不同，不需要独立数据库服务。执行前核对身份/代次/截止/白名单，动作后持久回执；重启先inventory再接收危险动作。
+后置命令字段至少有 `commandId/operationId/controllerEpoch/machineEpoch/allocationId?/generation?/leaseVersion?/deadline/argumentsHash`。届时本地持久日志保存回执、资源manifest和撤销墓碑；与控制账本职责不同，不需要独立数据库服务。执行前核对身份/代次/截止/白名单，动作后持久回执；重启先inventory再接收危险动作。这些执行日志与动作不属于D20只读Host服务。
 
-各平台使用systemd、Windows Service、launchd的固定安装包；二进制、脚本路径和目录ACL固定。禁止让普通消费者提供可执行程序路径、PowerShell源码、系统服务名或宿主路径。Agent升级先drain，保留身份和日志，启动后重新对账。
+D20开机监督分别使用Linux systemd、Windows任务计划程序服务的AtStartup任务、macOS LaunchDaemon；配置和安装步骤见[HOST.md](../../apps/runtime-agent/HOST.md)。Node入口不能直接注册为Windows SCM服务。二进制、脚本路径和目录ACL由管理员固定；禁止普通消费者提供可执行程序路径、PowerShell源码、启动任务/服务名或宿主路径。D20升级保留Host身份配置，启动后重新取得受栅栏保护的boot；后置执行型Agent升级仍需先drain并保留日志、重新对账。
 
 ### 12.2 Linux Docker底座
 
@@ -656,7 +671,7 @@ compute-service/
     sdk/src/                     # TS消费者客户端；waitUntilReady/claim/renew/release等
   deploy/
     compose.yaml                 # control + 本地持久卷；Portainer 为外部依赖
-    agent/                       # systemd、Windows 服务、macOS 启动配置模板
+    agent/                       # systemd、Windows 任务计划程序、macOS 启动配置模板
   docs/                          # API、运行手册、升级恢复、实机验收记录
   tests/{helpers,integration,contract,e2e,hardware}/
 ```
