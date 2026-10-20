@@ -28,6 +28,7 @@ import {
 } from "@hitchlet/contracts/internal";
 import { PowerSchemas } from "@hitchlet/contracts/admin";
 import { AdminSchemas } from "./admin-protocol.js";
+import { managementApiPaths } from "./management-openapi.js";
 
 export function openApiDocument() {
   const converted = toPublicJsonSchema() as {
@@ -134,6 +135,7 @@ export function openApiDocument() {
     openapi: "3.1.0",
     info: { title: "Hitchlet API", version: "1.0.0" },
     paths: {
+      ...managementApiPaths(),
       "/v1/machines/{machineId}/power": {
         get: adminOperation(
           "Read power configuration and real-execution blockers",

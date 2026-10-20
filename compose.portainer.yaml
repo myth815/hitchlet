@@ -1,0 +1,11 @@
+services:
+  hitchlet:
+    environment:
+      # Load the key in disabled mode first; explicitly enable after setup.
+      EXECUTION_MODE: ${HITCHLET_DOCKER_EXECUTION_MODE:-disabled}
+      HITCHLET_SECRET_KEY_FILE: /run/hitchlet/master.key
+    volumes:
+      - type: bind
+        source: ${HITCHLET_MASTER_KEY_HOST_FILE:?set the protected absolute controller master key path}
+        target: /run/hitchlet/master.key
+        read_only: true

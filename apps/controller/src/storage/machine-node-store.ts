@@ -500,10 +500,9 @@ export class SQLiteMachineNodeStore {
       "SELECT n.machine_id,n.runtime_identity_id,n.backend_kind,n.config_json,n.version,r.native_id FROM nodes n JOIN runtime_identities r ON r.id=n.runtime_identity_id WHERE n.id=? AND n.backend_kind='portainer' AND n.admission='disabled'",
       [input.nodeId],
     );
-    if (!node || Number(node.version) !== input.expectedVersion)
-      throw new Error(
-        "Node version changed or is not a disabled Portainer Node",
-      );
+    if (!node) throw new ApplicationError("not_found");
+    if (Number(node.version) !== input.expectedVersion)
+      throw new StorageError("STORAGE_CAS_FAILED", "Node version conflict");
     const oldConfig = parseJson(String(node.config_json)) as Record<
       string,
       unknown

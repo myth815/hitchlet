@@ -10,7 +10,7 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 
 ## 当前状态
 
-**M1 Docker 实验/试用闭环已通过审核，M2 正式交付尚未完成。** 仓库已实现 Portainer 接入、镜像验证后发布、独立容器与 SSH 凭据、Ticket 申请/接用/续租/归还、控制器重启恢复和漂移回收，并提供 TypeScript SDK 与中文 GUI。384项实现测试通过，双实例租用、网络/限额、缓存及管理 GUI 完成独立真实环境验收。当前仅开放人工取证、静态预算且保持在线的实验节点；Host 观测与人机共用已有独立批次验收；D23 的授权持久存储、备份恢复、控制凭据轮换及运维保护已完成独立真实Docker/NFS与恢复演练；完整GUI/接入交付和最终验收仍待D24/D25。实际自动电源与完整正式交付仍在后续计划。具体证据和限制见[实施记录](docs/IMPLEMENTATION.md)。
+**M1 Docker 闭环及 D24 运维交付已通过审核，M2 正式交付尚待 D25 最终验收。** 仓库已实现 Portainer 接入、镜像验证后发布、独立容器与 SSH 凭据、Ticket 申请/接用/续租/归还、控制器重启恢复和漂移回收，并提供完整管理 API、TypeScript SDK 与中文 GUI。414项实现测试通过；干净源码安装、正式 Dockerfile、实际浏览器和真实 Docker/NFS 租用回收已独立验证。Host 观测、人机共用、备份恢复、控制凭据轮换及运维保护已有批次验收；实际租用节点当前仍使用限时人工能力取证，D25须完成正式 Host 观测准入与逐节点发布证据。实际自动电源后置。具体证据和限制见[实施记录](docs/IMPLEMENTATION.md)。
 
 首个交付目标是 **Docker，通过 Portainer 接入**。Hyper-V 与 Tart 只保留扩展设计，按实际需求后置，不作为 Docker 版本发布的前提。
 
@@ -35,6 +35,8 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 ## 从这里开始
 
 - [完整设计与分阶段开发计划](docs/design/README.md)
+- [从空目录安装、Docker 接入与运维手册](docs/runbook.md)
+- [实际管理 API、SDK 与错误恢复](docs/api-sdk.md)
 - [TypeScript 接口说明](docs/design/contracts/README.md)
 - [消费者公开接口](docs/design/contracts/public.ts)
 - [SDK 调用示例](docs/design/contracts/usage.examples.ts)
@@ -51,7 +53,7 @@ node docs/design/verify-schema.cjs
 
 ## 本地运行
 
-需要 Node.js 24 LTS 与 pnpm 10。按 [运行手册](docs/runbook.md)安装依赖、显式初始化 Simulator 并领取测试凭据，再启动 API 与 GUI。开发 GUI 使用 `http://localhost:5173`；构建后可由控制器同源发布。Compose 当前默认禁用执行器，不能据此接入真实 Docker 计算节点。
+需要 Node.js 24 LTS 与 pnpm 10；不依赖 OpenClaw 或其他宿主项目。按 [运行手册](docs/runbook.md)从空目录安装依赖、显式初始化 Simulator 并领取测试凭据，再启动 API 与 GUI。开发 GUI 使用 `http://localhost:5173`；构建后可由控制器同源发布。Compose 默认禁用执行器并要求 HTTPS 代理以使用安全会话；真实 Docker 使用已配置密钥的 `compose.portainer.yaml` 覆盖，详细顺序见手册。管理工作台提供总览、授权 Ticket/操作、后端/Node、profiles、消费者/配额、镜像登记/缓存和既有维护入口。D24 独立安装与浏览器验收已通过，逐节点正式准入仍须满足 D25。
 
 ## 参与开发
 

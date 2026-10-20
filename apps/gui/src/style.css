@@ -882,3 +882,63 @@ footer {
     padding: 0.85rem;
   }
 }
+
+.management-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.management-tabs [aria-pressed="true"] {
+  outline: 2px solid currentColor;
+}
+.admin-section fieldset {
+  min-width: 0;
+  border: 1px solid #dbe3ec;
+  border-radius: 0.6rem;
+  margin: 0.7rem 0;
+  padding: 0.8rem;
+}
+.admin-section textarea {
+  width: 100%;
+  min-height: 5rem;
+  font: inherit;
+}
+.admin-section :focus-visible,
+.acquire-section :focus-visible {
+  outline: 3px solid #3778c2;
+  outline-offset: 2px;
+}
+.admin-section input[type="checkbox"] {
+  width: auto;
+}
+.admin-section .check-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.admin-section .ticket-row {
+  display: grid;
+  gap: 0.4rem;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.admin-section .ticket-row span {
+  display: block;
+}
+.admin-section pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.admin-section p,
+.admin-section small,
+.admin-section label {
+  overflow-wrap: anywhere;
+}
+@media (max-width: 600px) {
+  .admin-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .management-tabs button {
+    flex: 1 1 40%;
+  }
+}

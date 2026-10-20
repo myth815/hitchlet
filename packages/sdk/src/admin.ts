@@ -14,12 +14,40 @@ import {
   AdminSchemas,
   PowerSchemas,
   type AdminImageValidationRequest,
+  PreparedManagementRequestSchema,
+  managementRequestContract,
+  type PreparedManagementRequest,
 } from "@hitchlet/contracts/admin";
 import type { HttpTransport } from "./transport.js";
+import { InventoryCommands } from "./inventory.js";
+import { ManagementCommands } from "./management.js";
 
 /** Narrow management API backed by the controller's shared runtime schemas. */
 export class AdminCommands {
-  constructor(private readonly http: HttpTransport) {}
+  readonly inventory: InventoryCommands;
+  readonly management: ManagementCommands;
+  constructor(private readonly http: HttpTransport) {
+    this.inventory = new InventoryCommands(http);
+    this.management = new ManagementCommands(http);
+  }
+  /** Explicit original-body/key replay. One-time credential/access endpoints are rejected by the shared whitelist. */
+  resumeManagement(command: PreparedManagementRequest) {
+    const parsed = PreparedManagementRequestSchema.parse(command),
+      contract = managementRequestContract(parsed.method, parsed.path)!;
+    return this.http.request(
+      parsed.path,
+      parsed.method,
+      parsed.body,
+      (v) => contract.response.parse(v),
+      {
+        key: parsed.idempotencyKey,
+        retry: false,
+        ...(parsed.expectedVersion === undefined
+          ? {}
+          : { expectedVersion: parsed.expectedVersion }),
+      },
+    );
+  }
   /** Lists only administrative credential metadata; bearer values and hashes never appear. */
   credentials(consumerId?: string) {
     return this.http.request(

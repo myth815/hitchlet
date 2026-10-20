@@ -135,7 +135,7 @@ function harness(
     authPrincipal?: AuthenticatedPrincipal;
   } = {},
 ) {
-  const authPrincipal = options.authPrincipal ?? principal;
+  let authPrincipal = options.authPrincipal ?? principal;
   let authenticated = false;
   let force401 = false;
   let currentTicket = options.initialTicket ? ticket("ready", null) : ticket();
@@ -146,6 +146,12 @@ function harness(
     headers: Headers;
     body: string | null;
     preparedAtSend?: string | null;
+  }[] = [];
+  const streams: {
+    consumerId: string;
+    signal: AbortSignal;
+    closed: boolean;
+    controller: ReadableStreamDefaultController<Uint8Array>;
   }[] = [];
   if (options.prepared)
     sessionStorage.setItem(
@@ -228,6 +234,109 @@ function harness(
         },
         401,
       );
+    if (url.pathname === "/v1/events/stream") {
+      const signal = init!.signal!,
+        consumerId = authPrincipal.consumerId;
+      let stream: (typeof streams)[number];
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            stream = { consumerId, signal, closed: false, controller };
+            streams.push(stream);
+            signal.addEventListener(
+              "abort",
+              () => {
+                if (!stream.closed) {
+                  stream.closed = true;
+                  controller.close();
+                }
+              },
+              { once: true },
+            );
+          },
+          cancel() {
+            stream.closed = true;
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    }
+    if (url.pathname === "/v1/admin/overview")
+      return response({
+        observedAtMs: Date.now(),
+        phases: { queued: calls.length },
+        cleanupBlocked: 0,
+        unknownOperations: 0,
+        machines: [],
+        initialization: {
+          connections: 0,
+          machines: 0,
+          nodes: 0,
+          publishedVersions: 1,
+        },
+      });
+    if (
+      url.pathname === "/v1/admin/commands" ||
+      url.pathname === "/v1/admin/operations"
+    )
+      return response([]);
+    if (url.pathname === "/v1/admin/tickets")
+      return response({
+        observedAtMs: Date.now(),
+        items: [],
+        nextCursor: null,
+      });
+    if (url.pathname === "/v1/catalog")
+      return response({
+        observedAtMs: Date.now(),
+        quota: {
+          maxQueuedTickets: 10,
+          maxActiveTickets: 2,
+          maxLeaseTtlSeconds: 1800,
+          maxLifetimeSeconds: 86400,
+          maxResources: { cpuMillis: 3000, memoryMiB: 4096, scratchMiB: 8192 },
+          defaultExpiryPolicyId: ids.image,
+        },
+        versions: [
+          {
+            id: ids.image,
+            imageId: ids.image,
+            imageName: "开发镜像",
+            version: "v1",
+            kind: "container",
+            architectures: ["amd64"],
+            platforms: [
+              {
+                architecture: "amd64",
+                artifactId: ids.artifact,
+                digest: "sha256:" + "a".repeat(64),
+                minimumResources: {
+                  cpuMillis: 1000,
+                  memoryMiB: 2048,
+                  scratchMiB: 2048,
+                },
+              },
+            ],
+          },
+        ],
+        networks: [
+          {
+            id: ids.network,
+            name: "授权测试网络",
+            revisionId: ids.network,
+            revision: 1,
+          },
+        ],
+        nodes: [],
+        storage: [],
+      });
+    if (url.pathname === "/v1/catalog/preview")
+      return response({
+        observedAtMs: Date.now(),
+        capacityGuaranteed: false,
+        eligibleNodeIds: [],
+        reasons: ["preview only"],
+      });
     if (url.pathname === "/v1/images")
       return response({
         items: [
@@ -361,6 +470,10 @@ function harness(
     }),
     calls,
     fetcher,
+    streams,
+    nextPrincipal: (value: AuthenticatedPrincipal) => {
+      authPrincipal = value;
+    },
     expire: () => {
       force401 = true;
     },
@@ -427,6 +540,76 @@ afterEach(async () => {
 });
 
 describe("consumer console", () => {
+  it("keeps one App event subscription through admin polling, events and tab changes, then aborts it before a consumer session", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const h = harness({
+        authPrincipal: {
+          ...principal,
+          role: "admin",
+          scopes: [
+            "tickets:read",
+            "tickets:write",
+            "tickets:revoke",
+            "images:read",
+            "events:read",
+          ],
+        },
+      }),
+      element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "admin-session");
+    await submit(element, ".login-card form");
+    const singleSubscription = () => {
+      const hints = [...element.querySelectorAll("p[role=status]")].filter(
+        (p) => p.textContent?.includes("最后事件/连接"),
+      );
+      expect(hints).toHaveLength(1);
+      expect(h.streams.filter((s) => !s.closed)).toHaveLength(1);
+      expect(h.streams).toHaveLength(1);
+    };
+    singleSubscription();
+    const original = h.streams[0]!;
+    for (let i = 1; i <= 4; i++) {
+      await act(async () => {
+        original.controller.enqueue(
+          new TextEncoder().encode(
+            `data: ${JSON.stringify({ id: String(i), aggregateType: "ticket", aggregateId: ids.ticket, aggregateVersion: i, eventType: "ticket.queued", occurredAt: at, payload: { phase: "queued" } })}\n\n`,
+          ),
+        );
+        await vi.advanceTimersByTimeAsync(15000);
+      });
+      await click(element, i % 2 ? "Ticket 与操作" : "总览");
+      await click(element, "刷新列表");
+      singleSubscription();
+    }
+    expect(
+      h.calls.filter((c) => c.url === "/healthz").length,
+    ).toBeGreaterThanOrEqual(5);
+    expect(
+      h.calls.filter((c) => c.url === "/v1/admin/overview").length,
+    ).toBeGreaterThanOrEqual(5);
+    await click(element, "退出");
+    expect(original.signal.aborted).toBe(true);
+    expect(original.closed).toBe(true);
+    expect(h.streams.filter((s) => !s.closed)).toHaveLength(0);
+    h.nextPrincipal({
+      ...principal,
+      consumerId: ids.node,
+      scopes: ["tickets:read", "tickets:write", "images:read", "events:read"],
+    });
+    await enter(element, "粘贴一次性显示的 token", "consumer-session");
+    await submit(element, ".login-card form");
+    expect(element.textContent).toContain("consumer ·");
+    expect(element.querySelector("nav[aria-label='管理页面']")).toBeNull();
+    expect(h.streams).toHaveLength(2);
+    expect(h.streams.filter((s) => !s.closed).map((s) => s.consumerId)).toEqual(
+      [ids.node],
+    );
+    expect(
+      [...element.querySelectorAll("p[role=status]")].filter((p) =>
+        p.textContent?.includes("最后事件/连接"),
+      ),
+    ).toHaveLength(1);
+  });
   it("labels Portainer mode and keeps the offline-lease limitation visible", async () => {
     const element = document.createElement("div");
     const root = createRoot(element);
@@ -485,6 +668,7 @@ describe("consumer console", () => {
     const adminElement = await mount(admin.client);
     await enter(adminElement, "粘贴一次性显示的 token", "token");
     await submit(adminElement, ".login-card form");
+    await click(adminElement, "可行性预检");
     const adminAcquire = adminElement.querySelector(
       ".acquire-form .primary-button",
     ) as HTMLButtonElement;
@@ -501,7 +685,7 @@ describe("consumer console", () => {
       ".acquire-form .primary-button",
     ) as HTMLButtonElement;
     expect(viewerAcquire.disabled).toBe(true);
-    expect(viewerElement.textContent).toContain("没有 Ticket 写入权限");
+    expect(viewerElement.textContent).toContain("没有 Ticket 写权限");
   });
 
   it("restores the cookie session, clears the entered token and redirects after a 401", async () => {
@@ -546,7 +730,7 @@ describe("consumer console", () => {
     const element = await mount(h.client);
     await enter(element, "粘贴一次性显示的 token", "token");
     await submit(element, ".login-card form");
-    await enter(element, "由管理员提供的网络配置 ID", ids.network);
+    await click(element, "可行性预检");
     await submit(element, ".acquire-form");
     const call = h.calls.find(
       (item) => item.url === "/v1/tickets" && item.method === "POST",
@@ -554,7 +738,7 @@ describe("consumer console", () => {
     expect(call?.preparedAtSend).toBeTruthy();
     expect(JSON.parse(call!.preparedAtSend!)[0].command.kind).toBe("acquire");
     expect(JSON.parse(call!.body!)).toMatchObject({
-      image: { imageId: ids.image, alias: "latest" },
+      image: { versionId: ids.image },
       networkProfileId: ids.network,
       resources: { cpuMillis: 1000, memoryMiB: 2048, scratchMiB: 2048 },
     });
@@ -585,7 +769,7 @@ describe("consumer console", () => {
     const element = await mount(h.client);
     await enter(element, "粘贴一次性显示的 token", "token");
     await submit(element, ".login-card form");
-    await enter(element, "由管理员提供的网络配置 ID", ids.network);
+    await click(element, "可行性预检");
     await submit(element, ".acquire-form");
     expect(
       h.calls.some(

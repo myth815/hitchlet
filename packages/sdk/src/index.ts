@@ -21,9 +21,29 @@ import {
 import { TicketCommands } from "./tickets.js";
 import { SessionCommands } from "./session.js";
 import { AdminCommands } from "./admin.js";
+import { ManagementSchemas } from "@hitchlet/contracts/admin";
+import { AcquireRequestSchema, type AcquireRequest } from "@hitchlet/contracts";
 
 export { ComputeClientError } from "./transport.js";
 export { AdminCommands } from "./admin.js";
+export { PreparedManagementRevokeSchema } from "@hitchlet/contracts/admin";
+export { PreparedManagementRequestSchema } from "@hitchlet/contracts/admin";
+export type { PreparedManagementRequest } from "@hitchlet/contracts/admin";
+export type {
+  AuthorizedCatalog,
+  ConsumerInput,
+  ConsumerUpdate,
+  ConsumerView,
+  ManagementTicketQuery,
+  AdmissionUpdate,
+  OperationRetry,
+  MachineInput,
+  NodeRuntimeConfigInput,
+  PortainerConnectionInput,
+  ImageDraftInput,
+  DraftArtifactInput,
+  PreparedManagementRevoke,
+} from "@hitchlet/contracts/admin";
 export type {
   SystemHealth,
   BackupView,
@@ -71,6 +91,7 @@ export class HitchletClient implements ComputeClient {
     getVersion(versionId: Id): Promise<ImageVersionView>;
   };
   private readonly http: HttpTransport;
+  private readonly options: SdkOptions;
 
   /**
    * Construct against an API base URL. Passing a fetch function in the second position
@@ -85,6 +106,7 @@ export class HitchletClient implements ComputeClient {
       typeof optionsOrFetch === "function"
         ? { ...legacyOptions, fetch: optionsOrFetch }
         : optionsOrFetch;
+    this.options = options;
     this.http = new HttpTransport(baseUrl, options);
     this.admin = new AdminCommands(this.http);
     this.session = new SessionCommands(this.http);
@@ -119,5 +141,41 @@ export class HitchletClient implements ComputeClient {
     return this.http.request("/healthz", "GET", undefined, (value) =>
       HealthResponseSchema.parse(value),
     );
+  }
+  /** Creates an independent client using the same transport/auth configuration and a per-workflow persistence hook. */
+  withManagementPreparation(
+    onManagementPrepared: NonNullable<SdkOptions["onManagementPrepared"]>,
+    onManagementSettled?: NonNullable<SdkOptions["onManagementSettled"]>,
+  ) {
+    return new HitchletClient(this.http.baseUrl.toString(), {
+      ...this.options,
+      onManagementPrepared,
+      ...(onManagementSettled ? { onManagementSettled } : {}),
+    });
+  }
+  /** Safe authorized choices; no host source, secret version or backend address reaches the consumer. */
+  catalog() {
+    return this.http.request("/v1/catalog", "GET", undefined, (v) =>
+      ManagementSchemas.AuthorizedCatalogSchema.parse(v),
+    );
+  }
+  /** Read-only feasibility. It does not reserve capacity or change a Ticket. */
+  preview(request: AcquireRequest) {
+    return this.http.request(
+      "/v1/catalog/preview",
+      "POST",
+      AcquireRequestSchema.parse(request),
+      (v) => ManagementSchemas.FeasibilitySchema.parse(v),
+      { key: crypto.randomUUID(), retry: false },
+    );
+  }
+  /** Resumable event notifications; a disconnect never changes server resource state. */
+  watchEvents(
+    after: string,
+    signal: AbortSignal,
+    onEvent: (event: import("@hitchlet/contracts").ResourceEvent) => void,
+    onConnected: () => void = () => {},
+  ) {
+    return this.http.watchEvents(after, signal, onEvent, onConnected);
   }
 }

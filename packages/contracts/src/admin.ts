@@ -1,5 +1,11 @@
 import { z } from "zod";
-import { StorageRequestSchema, ResourceContractSchema } from "./schemas.js";
+import {
+  StorageRequestSchema,
+  ResourceContractSchema,
+  RevokeRequestSchema,
+  TicketViewSchema,
+} from "./schemas.js";
+import { ManagementSchemas as M } from "./management.js";
 
 const id = z.string().uuid();
 const admissionState = z.enum(["enabled", "draining", "disabled"]);
@@ -299,6 +305,14 @@ const runtimeDenyRule = z.union([
     })
     .strict(),
 ]);
+export const ManagementDenyUpdateSchema = z
+  .object({
+    expectedRevisionId: id,
+    rules: z.array(runtimeDenyRule).min(1).max(200),
+    reason: z.string().trim().min(1).max(1000),
+  })
+  .strict();
+export type ManagementDenyUpdate = z.infer<typeof ManagementDenyUpdateSchema>;
 export const NodeRuntimeConfigSchema = z
   .object({
     accessHost: z.string().min(1).max(253),
@@ -388,7 +402,8 @@ export const NodeCapabilityAttestationReceiptSchema = z
     nodeId: id,
     admission: z.literal("enabled"),
     observedHealth: z.literal("healthy"),
-    capabilityFingerprint: sha,
+    /** Existing canonical capability-document SHA-256 is bare hex, not an OCI content digest. */
+    capabilityFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
     offline: z.literal(false),
     powerEnabled: z.literal(false),
     version: z.number().int().positive(),
@@ -887,3 +902,239 @@ export const AdminSchemas = {
 export * from "./power.js";
 
 export * from "./maintenance.js";
+export * from "./management.js";
+export type PortainerConnectionInput = z.input<
+  typeof PortainerConnectionInputSchema
+>;
+export type MachineInput = z.input<typeof MachineInputSchema>;
+export type NodeInput = z.input<typeof NodeInputSchema>;
+export type NodeRuntimeConfigInput = z.input<typeof NodeRuntimeConfigSchema>;
+export type NodeCapabilityAttestationInput = z.input<
+  typeof NodeCapabilityAttestationSchema
+>;
+export type NetworkProfileInput = z.input<typeof NetworkProfileInputSchema>;
+export type NetworkProfileRevisionInput = z.input<
+  typeof NetworkProfileRevisionSchema
+>;
+export type StorageProfileInput = z.input<typeof StorageProfileInputSchema>;
+export type StorageProfileRevisionInput = z.input<
+  typeof StorageProfileRevisionSchema
+>;
+export type ImageDraftInput = z.input<typeof ImageDraftSchema>;
+export type ImageVersionDraftInput = z.input<typeof ImageVersionDraftSchema>;
+export type DraftArtifactInput = z.input<typeof DraftArtifactSchema>;
+
+/** Exact replay whitelist. One-time credentials, access, pairing, system recovery and arbitrary URLs are deliberately absent. */
+export function managementRequestContract(
+  method: string,
+  path: string,
+): { request: z.ZodType; response: z.ZodType; cas: boolean } | null {
+  const uuid =
+    "[a-fA-F0-9]{8}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}";
+  const route = (pattern: string) =>
+    new RegExp(`^${pattern.replaceAll(":id", uuid)}$`).test(path);
+  if (method === "POST") {
+    if (route("/v1/tickets/:id/revoke"))
+      return {
+        request: RevokeRequestSchema,
+        response: TicketViewSchema,
+        cas: false,
+      };
+    if (path === "/v1/admin/consumers")
+      return {
+        request: M.ConsumerInputSchema,
+        response: M.ConsumerViewSchema,
+        cas: false,
+      };
+    if (path === "/v1/admin/policies")
+      return {
+        request: M.LifecyclePolicyInputSchema,
+        response: M.LifecyclePolicyViewSchema,
+        cas: false,
+      };
+    if (route("/v1/admin/image-versions/:id/retire"))
+      return {
+        request: M.ImageRetireSchema,
+        response: M.VersionReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/admin/operations/:id/retry"))
+      return {
+        request: M.OperationRetrySchema,
+        response: M.ManagementOperationSchema,
+        cas: false,
+      };
+    if (
+      path === "/v1/provider-connections" ||
+      route("/v1/provider-connections/:id/revisions")
+    )
+      return {
+        request: PortainerConnectionInputSchema,
+        response: ProviderOperationReceiptSchema,
+        cas: false,
+      };
+    if (
+      route("/v1/provider-discovery/:id/retry") ||
+      route("/v1/provider-connection-proposals/:id/retry")
+    )
+      return {
+        request: z.object({}).strict(),
+        response: ProviderOperationReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/provider-connections/:id/activate-revision"))
+      return {
+        request: ConnectionActivationSchema,
+        response: ConnectionActivationReceiptSchema,
+        cas: true,
+      };
+    if (path === "/v1/machines")
+      return {
+        request: MachineInputSchema,
+        response: MachineReceiptSchema,
+        cas: false,
+      };
+    if (path === "/v1/nodes")
+      return {
+        request: NodeInputSchema,
+        response: NodeReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/nodes/:id/capability-attestations"))
+      return {
+        request: NodeCapabilityAttestationSchema,
+        response: NodeCapabilityAttestationReceiptSchema,
+        cas: true,
+      };
+    if (path === "/v1/network-profiles")
+      return {
+        request: NetworkProfileInputSchema,
+        response: ProfileWriteReceiptSchema,
+        cas: false,
+      };
+    if (path === "/v1/storage-profiles")
+      return {
+        request: StorageProfileInputSchema,
+        response: ProfileWriteReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/network-profiles/:id/revisions"))
+      return {
+        request: NetworkProfileRevisionSchema,
+        response: ProfileWriteReceiptSchema,
+        cas: true,
+      };
+    if (route("/v1/storage-profiles/:id/revisions"))
+      return {
+        request: StorageProfileRevisionSchema,
+        response: ProfileWriteReceiptSchema,
+        cas: true,
+      };
+    if (path === "/v1/images")
+      return {
+        request: ImageDraftSchema,
+        response: DraftCreationReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/images/:id/versions"))
+      return {
+        request: ImageVersionDraftSchema,
+        response: DraftCreationReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/image-versions/:id/artifacts"))
+      return {
+        request: DraftArtifactSchema,
+        response: ArtifactReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/image-versions/:id/validate"))
+      return {
+        request: ImageValidationRequestSchema,
+        response: ValidationScheduleReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/image-versions/:id/publish"))
+      return {
+        request: ImagePublishRequestSchema,
+        response: ImagePublishReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/image-validations/:id/cancel"))
+      return {
+        request: z.object({}).strict(),
+        response: AdminValidationViewSchema,
+        cas: false,
+      };
+    if (route("/v1/nodes/:id/image-cache/(?:prewarm|gc)"))
+      return {
+        request: CacheArtifactSchema,
+        response: CachePlanReceiptSchema,
+        cas: false,
+      };
+  }
+  if (method === "PUT") {
+    if (path === "/v1/admin/network-deny")
+      return {
+        request: ManagementDenyUpdateSchema,
+        response: AdminInstallationViewSchema,
+        cas: false,
+      };
+    if (route("/v1/(?:nodes|machines)/:id/admission"))
+      return {
+        request: M.AdmissionUpdateSchema,
+        response: M.VersionReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/admin/consumers/:id"))
+      return {
+        request: M.ConsumerUpdateSchema,
+        response: M.ConsumerViewSchema,
+        cas: false,
+      };
+    if (route("/v1/admin/policies/:id"))
+      return {
+        request: M.LifecyclePolicyUpdateSchema,
+        response: M.LifecyclePolicyViewSchema,
+        cas: false,
+      };
+    if (route("/v1/nodes/:id/runtime-config"))
+      return {
+        request: NodeRuntimeConfigSchema,
+        response: NodeRuntimeConfigReceiptSchema,
+        cas: true,
+      };
+    if (route("/v1/images/:id/aliases/[a-zA-Z0-9][a-zA-Z0-9._-]{0,119}"))
+      return {
+        request: ImageAliasRequestSchema,
+        response: ImageAliasReceiptSchema,
+        cas: false,
+      };
+  }
+  return null;
+}
+export const PreparedManagementRequestSchema = z
+  .object({
+    kind: z.literal("management"),
+    idempotencyKey: z.string().min(1).max(200),
+    method: z.enum(["POST", "PUT"]),
+    path: z.string().max(1000),
+    body: z.unknown(),
+    expectedVersion: z.number().int().positive().safe().optional(),
+  })
+  .strict()
+  .superRefine((command, ctx) => {
+    const contract = managementRequestContract(command.method, command.path);
+    if (
+      !contract ||
+      !contract.request.safeParse(command.body).success ||
+      (contract.cas && command.expectedVersion === undefined)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Unsupported or invalid prepared management request",
+      });
+  });
+export type PreparedManagementRequest = z.infer<
+  typeof PreparedManagementRequestSchema
+>;

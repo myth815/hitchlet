@@ -17,8 +17,10 @@ export class SQLiteProviderConnectionStore {
     private readonly now = Date.now,
   ) {}
   async listConnections() {
+    // The M0 seed is a synthetic execution binding, not Portainer identity evidence.
+    // Exclude only that exact marker; malformed real connections still fail the strict public schema.
     const rows = await this.db.all<Row>(
-      "SELECT c.id,c.backend_kind,c.runtime_identity_id,c.current_revision_id,c.enabled,c.version,r.revision,r.endpoint_ref,r.provider_endpoint_id,r.verified_at_ms,r.evidence_json FROM provider_connections c LEFT JOIN provider_connection_revisions r ON r.id=c.current_revision_id ORDER BY c.created_at_ms",
+      "SELECT c.id,c.backend_kind,c.runtime_identity_id,c.current_revision_id,c.enabled,c.version,r.revision,r.endpoint_ref,r.provider_endpoint_id,r.verified_at_ms,r.evidence_json FROM provider_connections c LEFT JOIN provider_connection_revisions r ON r.id=c.current_revision_id WHERE NOT COALESCE(r.endpoint_ref='simulator://local' AND r.provider_endpoint_id='simulator' AND json_extract(r.evidence_json,'$.executionMode')='simulator',0) ORDER BY c.created_at_ms",
     );
     return rows.map((r) => ({
       id: String(r.id),

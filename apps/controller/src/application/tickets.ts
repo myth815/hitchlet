@@ -67,6 +67,64 @@ export class TicketService {
     const existing = await this.store.idempotency(consumerId, key);
     if (existing) return this.replay(existing, hash);
 
+    const {
+      consumer,
+      consumerVersion,
+      maxQueued,
+      versionId,
+      network,
+      deny,
+      contract,
+      frozen,
+      storageRows,
+      now,
+    } = await this.prepareAcquire(consumerId, request);
+    const ticketId = this.id();
+    try {
+      await this.store.createQueuedTicket({
+        ticketId,
+        consumerId,
+        versionId,
+        networkRevisionId: String(network.id),
+        networkProfileId: request.networkProfileId,
+        denyRevisionId: String(deny.id),
+        acceptedJson: stable(contract),
+        requestHash: hash,
+        frozenJson: stable(frozen),
+        cpuMillis: contract.resources.request.cpuMillis,
+        memoryMiB: contract.resources.request.memoryMiB,
+        scratchMiB: contract.resources.request.scratchMiB,
+        clientRef: contract.clientRef ?? null,
+        now,
+        queueDeadline: now + contract.lease.queueTimeoutSeconds * 1000,
+        quotaJson: String(consumer.quota_json),
+        consumerVersion,
+        maxQueued,
+        storageRows,
+        storageGrantIds: storageRows.map((s) => s.grantId),
+        key,
+      });
+      return { ticketId, phase: "queued", replayed: false };
+    } catch (error) {
+      const won = await this.store.idempotency(consumerId, key);
+      if (won) return this.replay(won, hash);
+      if (
+        error instanceof StorageError &&
+        error.code === "STORAGE_CAS_FAILED"
+      ) {
+        const currentConsumer = await this.store.consumer(consumerId);
+        if (!currentConsumer || currentConsumer.status !== "active")
+          throw notFound();
+      }
+      const queued = await this.store.queuedCount(consumerId);
+      if (queued && Number(queued.count) >= maxQueued)
+        throw queueLimitExceeded();
+      throw error;
+    }
+  }
+
+  /** Same normalization and frozen-profile authorization as acquisition, without any durable Ticket or Claim. */
+  private async prepareAcquire(consumerId: string, request: AcquireRequest) {
     const consumer = await this.store.consumer(consumerId);
     if (!consumer || consumer.status !== "active") throw notFound();
     const auth = object(
@@ -275,50 +333,62 @@ export class TicketService {
         verificationRequired: true,
       },
     };
-    const ticketId = this.id();
-    try {
-      await this.store.createQueuedTicket({
-        ticketId,
-        consumerId,
-        versionId,
-        networkRevisionId: String(network.id),
-        networkProfileId: request.networkProfileId,
-        denyRevisionId: String(deny.id),
-        acceptedJson: stable(contract),
-        requestHash: hash,
-        frozenJson: stable(frozen),
-        cpuMillis: contract.resources.request.cpuMillis,
-        memoryMiB: contract.resources.request.memoryMiB,
-        scratchMiB: contract.resources.request.scratchMiB,
-        clientRef: contract.clientRef ?? null,
-        now,
-        queueDeadline: now + contract.lease.queueTimeoutSeconds * 1000,
-        quotaJson: String(consumer.quota_json),
-        consumerVersion,
-        maxQueued,
-        storageRows,
-        storageGrantIds: storageRows.map((s) => s.grantId),
-        key,
-      });
-      return { ticketId, phase: "queued", replayed: false };
-    } catch (error) {
-      const won = await this.store.idempotency(consumerId, key);
-      if (won) return this.replay(won, hash);
-      if (
-        error instanceof StorageError &&
-        error.code === "STORAGE_CAS_FAILED"
-      ) {
-        const currentConsumer = await this.store.consumer(consumerId);
-        if (!currentConsumer || currentConsumer.status !== "active")
-          throw notFound();
-      }
-      const queued = await this.store.queuedCount(consumerId);
-      if (queued && Number(queued.count) >= maxQueued)
-        throw queueLimitExceeded();
-      throw error;
-    }
+    return {
+      consumer,
+      consumerVersion,
+      maxQueued,
+      versionId,
+      network,
+      deny,
+      contract,
+      frozen,
+      storageRows,
+      now,
+    };
   }
-
+  /** Read-only eligibility preview; reservation still rechecks live quota, physical/pool capacity and fencing atomically. */
+  async preview(consumerId: string, input: unknown) {
+    const request = AcquireRequestSchema.parse(
+      input,
+    ) as unknown as AcquireRequest;
+    if ((request.resources.accelerators?.length ?? 0) > 0)
+      throw new RangeError("Accelerator requests are not supported");
+    const { contract, frozen, versionId, network, now } =
+      await this.prepareAcquire(consumerId, request);
+    const candidates = await this.store.eligibleCandidates({
+      imageVersion: versionId,
+      now,
+      providers: contract.allowedProviders,
+      siteIds: contract.siteIds,
+      nodeIds: contract.allowedNodeIds ?? [],
+      machineIds: contract.allowedMachineIds ?? [],
+      kind: contract.kind,
+      architectures: contract.allowedArchitectures,
+    });
+    const eligibleNodeIds: string[] = [];
+    for (const candidate of candidates)
+      if (
+        await this.candidateEligible(
+          candidate,
+          contract,
+          String(network.id),
+          frozen,
+          now,
+        )
+      )
+        eligibleNodeIds.push(String(candidate.node_id));
+    return {
+      observedAtMs: now,
+      capacityGuaranteed: false as const,
+      eligibleNodeIds: [...new Set(eligibleNodeIds)],
+      reasons: [
+        ...(eligibleNodeIds.length
+          ? []
+          : ["capacity_or_eligibility_unavailable"]),
+        "Eligibility snapshot only; live aggregate quota and capacity are checked atomically when reserving. No capacity is reserved.",
+      ],
+    };
+  }
   async reserveNext(): Promise<{
     ticketId: string;
     allocationId: string;
@@ -350,121 +420,16 @@ export class TicketService {
         architectures: allowedArchitectures,
       });
       for (const candidate of candidates) {
-        const caps = object(
-          parseJson(candidate.capabilities_json, "node capabilities"),
-        );
-        const labels = object(
-          parseJson(candidate.machine_labels, "machine labels"),
-        );
         if (
-          !contract.requiredLabels ||
-          Object.entries(contract.requiredLabels).some(
-            ([k, v]) => labels[k] !== v,
-          )
-        )
-          continue;
-        if (
-          !stringList(caps.resourceKinds).includes(contract.kind) ||
-          !stringList(caps.architectures).includes(
-            String(candidate.architecture),
-          ) ||
-          !stringList(caps.guestOs).includes(String(candidate.guest_os))
-        )
-          continue;
-        const capabilityExpiry =
-          typeof caps.expiresAt === "string"
-            ? Date.parse(caps.expiresAt)
-            : Number.NaN;
-        if (!Number.isFinite(capabilityExpiry) || capabilityExpiry <= now)
-          continue;
-        if (
-          caps.cpuHardLimit !== "verified" ||
-          caps.memoryHardLimit !== "verified" ||
-          caps.networkPolicyEnforcement !== "verified"
-        )
-          continue;
-        if (
-          contract.resources.scratchEnforcement === "required" &&
-          caps.scratchHardLimit !== "verified"
-        )
-          continue;
-        if (
-          Number(candidate.minimum_cpu_millis) >
-            contract.resources.request.cpuMillis ||
-          Number(candidate.minimum_memory_mib) >
-            contract.resources.request.memoryMiB ||
-          Number(candidate.minimum_scratch_mib) >
-            contract.resources.request.scratchMiB
-        )
-          continue;
-        const artifactRequirements = object(
-          parseJson(candidate.requirements_json, "artifact requirements"),
-        );
-        if (
-          stringListOptional(
-            artifactRequirements.requiredCapabilities,
-            "artifact required capabilities",
-          ).some((name) => caps[name] !== "verified")
-        )
-          continue;
-        const accessRecipe = object(
-          parseJson(candidate.access_recipe_json, "artifact access recipe"),
-        );
-        if (
-          !stringListRequired(
-            accessRecipe.accessProtocols,
-            "artifact protocols",
-          ).includes(contract.access.protocol)
-        )
-          continue;
-        if (
-          !stringListRequired(
-            caps.supportedAccess,
-            "node access protocols",
-          ).includes(contract.access.protocol)
-        )
-          continue;
-        if (
-          contract.requiredCapabilities.some((cap) => caps[cap] !== "verified")
-        )
-          continue;
-        if (
-          !stringList(caps.verifiedNetworkProfileRevisionIds).includes(
+          !(await this.candidateEligible(
+            candidate,
+            contract,
             String(ticket.network_profile_revision_id),
-          )
-        )
-          continue;
-        if (candidate.observed_power !== "on" && !canSafelyWake(candidate, now))
-          continue;
-        if (
-          !(await admissionOpen(
-            this.options.storage,
-            String(candidate.node_id),
+            frozen,
             now,
           ))
         )
           continue;
-        const frozenStorage = Array.isArray(frozen.storage)
-          ? frozen.storage.map((item) => object(item))
-          : [];
-        if (
-          executionMode(candidate.config_json) === "portainer" &&
-          !supportsNodeSshRecipe(
-            { bootstrap: artifactRequirements.bootstrap },
-            accessRecipe,
-          )
-        )
-          continue;
-        if (
-          frozenStorage.some(
-            (item) =>
-              !stringList(caps.verifiedStorageProfileRevisionIds).includes(
-                String(item.storageProfileRevisionId),
-              ),
-          )
-        )
-          continue;
-        if (Number(candidate.observed_at_ms ?? 0) + 120_000 < now) continue;
         const poolId = String(candidate.pool_id);
         const poolVersion = candidate.pool_version;
         const allocId = this.id();
@@ -698,6 +663,126 @@ export class TicketService {
     }
   }
 
+  private async candidateEligible(
+    candidate: Row,
+    contract: ReturnType<typeof AcceptedAcquireRequestSchema.parse>,
+    networkRevisionId: string,
+    frozen: Record<string, unknown>,
+    now: number,
+  ): Promise<boolean> {
+    const caps = object(
+      parseJson(candidate.capabilities_json, "node capabilities"),
+    );
+    const labels = object(
+      parseJson(candidate.machine_labels, "machine labels"),
+    );
+    if (
+      !contract.requiredLabels ||
+      Object.entries(contract.requiredLabels).some(([k, v]) => labels[k] !== v)
+    )
+      return false;
+    if (
+      !stringList(caps.resourceKinds).includes(contract.kind) ||
+      !stringList(caps.architectures).includes(
+        String(candidate.architecture),
+      ) ||
+      !stringList(caps.guestOs).includes(String(candidate.guest_os))
+    )
+      return false;
+    const capabilityExpiry =
+      typeof caps.expiresAt === "string"
+        ? Date.parse(caps.expiresAt)
+        : Number.NaN;
+    if (!Number.isFinite(capabilityExpiry) || capabilityExpiry <= now)
+      return false;
+    if (
+      caps.cpuHardLimit !== "verified" ||
+      caps.memoryHardLimit !== "verified" ||
+      caps.networkPolicyEnforcement !== "verified"
+    )
+      return false;
+    if (
+      contract.resources.scratchEnforcement === "required" &&
+      caps.scratchHardLimit !== "verified"
+    )
+      return false;
+    if (
+      Number(candidate.minimum_cpu_millis) >
+        contract.resources.request.cpuMillis ||
+      Number(candidate.minimum_memory_mib) >
+        contract.resources.request.memoryMiB ||
+      Number(candidate.minimum_scratch_mib) >
+        contract.resources.request.scratchMiB
+    )
+      return false;
+    const artifactRequirements = object(
+      parseJson(candidate.requirements_json, "artifact requirements"),
+    );
+    if (
+      stringListOptional(
+        artifactRequirements.requiredCapabilities,
+        "artifact required capabilities",
+      ).some((name) => caps[name] !== "verified")
+    )
+      return false;
+    const accessRecipe = object(
+      parseJson(candidate.access_recipe_json, "artifact access recipe"),
+    );
+    if (
+      !stringListRequired(
+        accessRecipe.accessProtocols,
+        "artifact protocols",
+      ).includes(contract.access.protocol)
+    )
+      return false;
+    if (
+      !stringListRequired(
+        caps.supportedAccess,
+        "node access protocols",
+      ).includes(contract.access.protocol)
+    )
+      return false;
+    if (contract.requiredCapabilities.some((cap) => caps[cap] !== "verified"))
+      return false;
+    if (
+      !stringList(caps.verifiedNetworkProfileRevisionIds).includes(
+        networkRevisionId,
+      )
+    )
+      return false;
+    if (candidate.observed_power !== "on" && !canSafelyWake(candidate, now))
+      return false;
+    if (
+      !(await admissionOpen(
+        this.options.storage,
+        String(candidate.node_id),
+        now,
+      ))
+    )
+      return false;
+    const frozenStorage = Array.isArray(frozen.storage)
+      ? frozen.storage.map((item) => object(item))
+      : [];
+    if (
+      executionMode(candidate.config_json) === "portainer" &&
+      !supportsNodeSshRecipe(
+        { bootstrap: artifactRequirements.bootstrap },
+        accessRecipe,
+      )
+    )
+      return false;
+    if (
+      frozenStorage.some(
+        (item) =>
+          !stringList(caps.verifiedStorageProfileRevisionIds).includes(
+            String(item.storageProfileRevisionId),
+          ),
+      )
+    )
+      return false;
+    if (Number(candidate.observed_at_ms ?? 0) + 120_000 < now) return false;
+    return true;
+  }
   private replay(row: Row, hash: string): AcquireResult {
     if (row.request_hash !== hash) throw conflict("idempotency_key_reused");
     if (typeof row.ticket_id !== "string")

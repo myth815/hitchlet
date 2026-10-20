@@ -1,3 +1,4 @@
+import { roleScopes } from "./domain/role-scopes.js";
 import {
   MaintenanceService,
   admissionOpen,
@@ -64,6 +65,9 @@ import { LeaseService } from "./application/leases.js";
 import { AccessService } from "./application/access.js";
 import { ApplicationError } from "./application/errors.js";
 import { AdminService } from "./application/admin.js";
+import { ManagementService } from "./application/management.js";
+import { AdminCommandJournal } from "./application/admin-command-journal.js";
+import { registerManagementRoutes } from "./http/management-routes.js";
 import {
   ImageAliasNameSchema,
   ImagePublishRequestSchema,
@@ -79,6 +83,7 @@ import {
   NodeAdmissionModeReceiptSchema,
   NodeRuntimeConfigSchema,
   NodeCapabilityAttestationSchema,
+  NodeCapabilityAttestationReceiptSchema,
   NetworkProfileInputSchema,
   NetworkProfileRevisionSchema,
   StorageProfileInputSchema,
@@ -275,6 +280,128 @@ export async function buildApp(
         throw new AuthFailure("forbidden");
       return actor;
     };
+    const managementJournal = new AdminCommandJournal(runtime.storage);
+    const managementAuthorization = new ManagementService(runtime.storage);
+    const journalRequests = new Map<
+      string,
+      { consumerId: string; key: string; path: string }
+    >();
+    // Exact route templates deliberately exclude all auth, access, credential, Host pairing and system/power secret responses.
+    const journalAdminRoutes = new Set([
+      "PUT /v1/admin/network-deny",
+      "POST /v1/provider-connections",
+      "POST /v1/provider-discovery/:operationId/retry",
+      "POST /v1/provider-connections/:connectionId/revisions",
+      "POST /v1/provider-connection-proposals/:operationId/retry",
+      "POST /v1/provider-connections/:connectionId/activate-revision",
+      "POST /v1/machines",
+      "POST /v1/nodes",
+      "PUT /v1/nodes/:nodeId/runtime-config",
+      "POST /v1/nodes/:nodeId/capability-attestations",
+      "POST /v1/network-profiles",
+      "POST /v1/storage-profiles",
+      "POST /v1/network-profiles/:profileId/revisions",
+      "POST /v1/storage-profiles/:profileId/revisions",
+      "POST /v1/images",
+      "POST /v1/images/:imageId/versions",
+      "POST /v1/image-versions/:versionId/artifacts",
+      "POST /v1/image-versions/:versionId/publish",
+      "PUT /v1/images/:imageId/aliases/:alias",
+      "POST /v1/image-validations/:validationId/cancel",
+      "POST /v1/image-versions/:versionId/validate",
+      "POST /v1/admin/consumers",
+      "PUT /v1/admin/consumers/:id",
+      "POST /v1/admin/policies",
+      "PUT /v1/admin/policies/:id",
+      "POST /v1/admin/image-versions/:id/retire",
+    ]);
+    const journalOperatorRoutes = new Set([
+      "POST /v1/nodes/:nodeId/image-cache/prewarm",
+      "POST /v1/nodes/:nodeId/image-cache/gc",
+      "POST /v1/admin/operations/:operationId/retry",
+      "PUT /v1/nodes/:id/admission",
+      "PUT /v1/machines/:id/admission",
+    ]);
+    app.addHook("preHandler", async (request, reply) => {
+      const template = `${request.method} ${request.routeOptions.url}`;
+      if (
+        !journalAdminRoutes.has(template) &&
+        !journalOperatorRoutes.has(template)
+      )
+        return;
+      const key = request.headers["idempotency-key"];
+      if (typeof key !== "string") return; // Existing HTTP clients may omit it; SDK management writes always provide it.
+      const actor = journalAdminRoutes.has(template)
+        ? await requireAdmin(request, true)
+        : await identify(request, true);
+      if (journalOperatorRoutes.has(template)) {
+        if (
+          !["admin", "operator"].includes(actor.role) ||
+          !actor.scopes.includes("tickets:revoke")
+        )
+          throw new AuthFailure("forbidden");
+        if (template.includes(":ticketId"))
+          await commands.authorizeRevoke(
+            uuidParam(request.params, "ticketId"),
+            actor.consumerId,
+            actor.role === "admin",
+          );
+        else if (template.includes(":operationId")) {
+          await managementAuthorization.operationById(
+            actor,
+            uuidParam(request.params, "operationId"),
+          );
+        } else if (template.includes("/image-cache/"))
+          await managementAuthorization.authorizeCache(
+            actor,
+            uuidParam(request.params, "nodeId"),
+            parseInput(CacheArtifactSchema, request.body).artifactId,
+          );
+        else
+          await managementAuthorization.authorizeAdmission(
+            actor,
+            template.includes("/nodes/") ? "nodes" : "machines",
+            uuidParam(request.params, "id"),
+          );
+      }
+      const commandPath = `${request.method} ${request.url.split("?")[0]!}`;
+      const prepared = await managementJournal.prepare(
+        actor.consumerId,
+        key,
+        commandPath,
+        { body: request.body, ifMatch: request.headers["if-match"] ?? null },
+      );
+      if (!prepared.fresh)
+        return reply
+          .code(prepared.status)
+          .header("Cache-Control", "no-store")
+          .send(prepared.body);
+      journalRequests.set(request.id, {
+        consumerId: actor.consumerId,
+        key,
+        path: commandPath,
+      });
+    });
+    app.addHook("onSend", async (request, reply, payload) => {
+      const command = journalRequests.get(request.id);
+      if (!command) return payload;
+      journalRequests.delete(request.id);
+      if (typeof payload === "string")
+        await managementJournal.complete(
+          command.consumerId,
+          command.key,
+          command.path,
+          reply.statusCode,
+          JSON.parse(payload) as unknown,
+        );
+      return payload;
+    });
+    registerManagementRoutes(
+      app,
+      runtime.storage,
+      (r, write) => identify(r, write),
+      requireAdmin,
+    );
     app.get("/v1/system/diagnostics", async (request, reply) => {
       await requireAdmin(request);
       reply.header("Cache-Control", "no-store");
@@ -749,16 +876,18 @@ export async function buildApp(
       async (request, reply) => {
         const actor = await requireAdmin(request, true);
         const body = parseInput(NodeCapabilityAttestationSchema, request.body);
-        const result = await admin.attestNodeCapabilities({
-          nodeId: uuidParam(request.params, "nodeId"),
-          expectedVersion: ifMatchVersion(request.headers["if-match"]),
-          ...body,
-          engineId: body.expectedEngineId,
-          dockerVersion: body.expectedDockerVersion,
-          portainerVersion: body.expectedPortainerVersion,
-          operatorId: actor.consumerId,
-          requestId: request.id,
-        });
+        const result = NodeCapabilityAttestationReceiptSchema.parse(
+          await admin.attestNodeCapabilities({
+            nodeId: uuidParam(request.params, "nodeId"),
+            expectedVersion: ifMatchVersion(request.headers["if-match"]),
+            ...body,
+            engineId: body.expectedEngineId,
+            dockerVersion: body.expectedDockerVersion,
+            portainerVersion: body.expectedPortainerVersion,
+            operatorId: actor.consumerId,
+            requestId: request.id,
+          }),
+        );
         return reply
           .code(200)
           .header("ETag", `"${result.version}"`)
@@ -960,8 +1089,23 @@ export async function buildApp(
     app.post<{ Params: { nodeId: string } }>(
       "/v1/nodes/:nodeId/image-cache/prewarm",
       async (request, reply) => {
-        await requireAdmin(request, true);
+        const actor = await identify(request, true);
+        if (
+          !["admin", "operator"].includes(actor.role) ||
+          !actor.scopes.includes("tickets:revoke")
+        )
+          throw new AuthFailure("forbidden");
+        await managementAuthorization.authorizeAdmission(
+          actor,
+          "nodes",
+          uuidParam(request.params, "nodeId"),
+        );
         const body = parseInput(CacheArtifactSchema, request.body);
+        await managementAuthorization.authorizeCache(
+          actor,
+          uuidParam(request.params, "nodeId"),
+          body.artifactId,
+        );
         const plan = await admin.prewarmImageCache({
           nodeId: request.params.nodeId,
           artifactId: body.artifactId,
@@ -973,8 +1117,23 @@ export async function buildApp(
     app.post<{ Params: { nodeId: string } }>(
       "/v1/nodes/:nodeId/image-cache/gc",
       async (request, reply) => {
-        await requireAdmin(request, true);
+        const actor = await identify(request, true);
+        if (
+          !["admin", "operator"].includes(actor.role) ||
+          !actor.scopes.includes("tickets:revoke")
+        )
+          throw new AuthFailure("forbidden");
+        await managementAuthorization.authorizeAdmission(
+          actor,
+          "nodes",
+          uuidParam(request.params, "nodeId"),
+        );
         const body = parseInput(CacheArtifactSchema, request.body);
+        await managementAuthorization.authorizeCache(
+          actor,
+          uuidParam(request.params, "nodeId"),
+          body.artifactId,
+        );
         const plan = await admin.planCacheEviction({
           nodeId: request.params.nodeId,
           artifactId: body.artifactId,
@@ -1385,12 +1544,28 @@ export async function buildApp(
     app.get<{ Params: { nodeId: string; operationId: string } }>(
       "/v1/nodes/:nodeId/image-cache/operations/:operationId",
       async (request, reply) => {
-        await requireAdmin(request);
+        const actor = await identify(request);
+        if (
+          !["admin", "operator", "viewer"].includes(actor.role) ||
+          !actor.scopes.includes("tickets:read") ||
+          !actor.scopes.includes("images:read")
+        )
+          throw new AuthFailure("forbidden");
+        await managementAuthorization.authorizeAdmission(
+          actor,
+          "nodes",
+          uuidParam(request.params, "nodeId"),
+        );
         const receipt = await admin.cacheOperationReceipt(
           uuidParam(request.params, "nodeId"),
           uuidParam(request.params, "operationId"),
         );
         if (!receipt) throw new ApplicationError("not_found");
+        await managementAuthorization.authorizeCache(
+          actor,
+          uuidParam(request.params, "nodeId"),
+          receipt.artifactId,
+        );
         reply.header("Cache-Control", "no-store");
         return AdminCacheOperationReceiptSchema.parse(receipt);
       },
@@ -1704,20 +1879,6 @@ function safeJson(value: unknown): unknown {
   } catch {
     return {};
   }
-}
-function roleScopes(
-  role: "viewer" | "consumer" | "operator" | "admin",
-): string[] {
-  if (role === "viewer") return ["tickets:read", "images:read", "events:read"];
-  if (role === "operator" || role === "admin")
-    return [
-      "tickets:read",
-      "tickets:write",
-      "tickets:revoke",
-      "images:read",
-      "events:read",
-    ];
-  return ["tickets:read", "tickets:write", "images:read", "events:read"];
 }
 function normalizeLimitQuery(value: unknown): unknown {
   if (

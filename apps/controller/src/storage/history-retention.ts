@@ -278,6 +278,11 @@ export async function pruneHistory(
   await db.run("DELETE FROM audit_entries WHERE occurred_at_ms<?", [
     now - 180 * DAY,
   ]);
+  // Completed management receipts follow the same 180-day key horizon. Unknown effects remain recoverable indefinitely.
+  await db.run(
+    "DELETE FROM idempotency_keys WHERE route_scope LIKE 'admin:%' AND safe_response_json IS NOT NULL AND retain_until_ms<?",
+    [now],
+  );
   const result = await db.run(
     `DELETE FROM events WHERE occurred_at_ms<? AND aggregate_id NOT IN(SELECT id FROM tickets WHERE phase<>'released' UNION SELECT id FROM allocations WHERE cleanup_status<>'complete' UNION SELECT id FROM operations WHERE state NOT IN ${terminal} UNION SELECT id FROM machines WHERE power_cycle_id IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.state NOT IN ${terminal} AND (instr(events.payload_json,o.id)>0 OR instr(o.intent_json,events.aggregate_id)>0 OR EXISTS(SELECT 1 FROM json_tree(COALESCE(o.result_json,'{}')) j WHERE j.key IN('eventId','eventCursor','acceptedEventId','restoreEventId') AND CAST(j.value AS TEXT)=CAST(events.id AS TEXT)))) AND NOT EXISTS(SELECT 1 FROM image_versions v WHERE EXISTS(SELECT 1 FROM json_tree(v.manifest_json) j WHERE j.key IN('eventId','eventCursor','acceptedEventId','restoreEventId') AND CAST(j.value AS TEXT)=CAST(events.id AS TEXT)))`,
     [now - 30 * DAY],

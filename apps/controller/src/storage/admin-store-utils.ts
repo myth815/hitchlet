@@ -7,6 +7,16 @@ export type Row = Record<string, string | number | bigint | null>;
 export function hash(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
+/** Stable JSON object-key ordering for idempotency and immutable configuration comparisons. Array order remains intentional. */
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(value, (_key, item: unknown) =>
+    item && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.entries(item).sort(([a], [b]) => a.localeCompare(b)),
+        )
+      : item,
+  );
+}
 export function parseJson(value: string): Record<string, unknown> {
   const parsed: unknown = JSON.parse(value);
   if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed))

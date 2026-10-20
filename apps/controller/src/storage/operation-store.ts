@@ -543,6 +543,8 @@ export class SQLiteOperationStore {
     operationId: string,
     reason: string,
     now: number,
+    expectedVersion?: number,
+    audit?: { actorId: string; requestId: string },
   ): Promise<void> {
     if (!reason.trim() || reason.length > 500)
       throw new RangeError("Retry reason must contain 1-500 characters");
@@ -552,6 +554,14 @@ export class SQLiteOperationStore {
     );
     if (!operation)
       throw new Error("Failed allocation operation was not found");
+    if (
+      expectedVersion !== undefined &&
+      Number(operation.version) !== expectedVersion
+    )
+      throw new StorageError(
+        "STORAGE_CAS_FAILED",
+        "Operation version conflict",
+      );
     await this.db.batchTransaction([
       {
         kind: "run",
@@ -586,6 +596,24 @@ export class SQLiteOperationStore {
           }),
         ],
       },
+      ...(audit
+        ? [
+            {
+              kind: "run" as const,
+              sql: "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) VALUES('consumer',?,'operation.retry','operation',?,?,?,?)",
+              params: [
+                audit.actorId,
+                operationId,
+                audit.requestId,
+                now,
+                JSON.stringify({
+                  reason: reason.trim(),
+                  expectedVersion: Number(operation.version),
+                }),
+              ],
+            },
+          ]
+        : []),
     ]);
   }
 

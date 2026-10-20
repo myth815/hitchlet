@@ -2,22 +2,22 @@
 
 实现基线：[设计 v1.3](design/README.md)。当前目标保持 M2（Docker 正式交付）；Hyper-V、Tart 和云扩容不在本轮实现范围。模拟器通过不代表真实 Docker 或宿主通过。
 
-本轮状态：批次1–6 已通过主审与独立复验，M0 和 M1 Docker 实验/试用闭环完成，D22a公共电源预演已放行。批次5的共享 tenant/validation 持久执行、验证回收及发布，以及 D20、D21、D22a、D23 分别按用户单独限定使用 GPT-6.1 Sol，其余实现遵循 Luna 策略。正式交付 M2 尚未完成，整体估算约85%；D23已在单模块Sol授权下完成实现、独立全量检查和真实Docker/NFS/隔离恢复演练并放行，D24在Luna/low与high均报告无法完整交付后已停止，待用户决定；D25仍待完成。真实电源逐机启用和VM保持后置。
+本轮状态：批次1–6 已通过主审与独立复验，M0 和 M1 Docker 实验/试用闭环完成，D22a公共电源预演已放行。批次5的共享 tenant/validation 持久执行、验证回收及发布，以及 D20、D21、D22a、D23 分别按用户单独限定使用 GPT-6.1 Sol，其余实现遵循 Luna 策略。正式交付 M2 尚未完成，整体估算约95%；D23和D24均已实现并通过独立检查与真实环境验收，D25正式Host准入与逐节点发布验收仍待完成。真实电源逐机启用和VM保持后置。
 
 ## 工作方式与固定批次
 
-开发由 GPT-6 Luna 子智能体承担，初始思考预算 low，使用正常速度。主智能体检查差异、接口一致性和测试结果，再允许进入依赖它的下一批。必要时可提高 Luna 的思考预算；如果仍不能胜任，停止并向用户报告。子智能体不继续委派，不增加无限细分的任务树。
+开发按用户2026-10-20更新规则：后续固定模块先由 GPT-6 Luna/high、正常速度承担；明确不能胜任后可切换 GPT-6.1 Sol，无需再次逐模块请求授权。主智能体检查差异、接口一致性并实际验证，再允许进入依赖批次；不缩减范围，不继续委派，不增加无限细分的任务树。此前low/high与逐模块授权过程作为历史记录保留。
 
-| 批次              | 设计任务             | 确定产物                                                            | 审核门槛                                                                  | 当前状态                   |
-| ----------------- | -------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------- | -------------------------- |
-| 1 基础工程        | D00                  | pnpm 工程、API/GUI 启动、配置、日志、构建测试、Docker 部署骨架      | 安装、类型检查、测试和构建实际通过；缺失配置有明确错误                    | 已审核通过                 |
-| 2 领域与账本      | D01–D03              | 运行时合同、SQLite 迁移/worker、状态机、配额与原子资源预留          | 合同一致；并发末份容量不超售；冻结请求、事务与版本约束通过                | 已审核通过                 |
-| 3 模拟闭环        | D04–D05              | 持久操作与恢复、Simulator、租约 API/SDK、基础 GUI                   | 重启恢复、创建回执丢失、删除失败、续租竞态、归属鉴权与浏览器闭环；完成 M0 | 已审核通过（M0）           |
-| 4 Docker 接入准备 | D10、D11a            | Portainer 身份与修订、节点能力、草稿镜像目录和验证调度              | 错误 Engine 拒绝；草稿不能被消费者租用；固定制品和授权修订                | 已审核通过                 |
-| 5 Docker 租用闭环 | D10b、D12、D11b、D13 | 最小 Runtime Agent 网络执行、独立容器生命周期、验证后发布、恢复回收 | 实际 Docker 网络/限额/存储隔离与失败清理通过；完成 M1                     | 已审核通过（M1）           |
-| 6 宿主与节能策略  | D20–D22a             | Host 观测、人机共用、依赖与保留量、电源 dry-run                     | 未知或有人登录阻止关机；竞态处理；未实测能力不启用                        | 已审核通过                 |
-| 7 运维与交付界面  | D23–D24              | 备份恢复、升级、凭据轮换、完整 GUI/SDK 与接入手册                   | 真实恢复演练、权限/存储回归、浏览器 E2E 与干净环境安装                    | D23已放行；D24能力门槛停止 |
-| 8 正式验收        | D25；D22b 逐机可选   | 实际节点能力矩阵与发布证据                                          | 对照设计 Docker DoD 逐项取证；未验证机器保持试用/禁用或手动电源           | 未开始                     |
+| 批次              | 设计任务             | 确定产物                                                            | 审核门槛                                                                  | 当前状态           |
+| ----------------- | -------------------- | ------------------------------------------------------------------- | ------------------------------------------------------------------------- | ------------------ |
+| 1 基础工程        | D00                  | pnpm 工程、API/GUI 启动、配置、日志、构建测试、Docker 部署骨架      | 安装、类型检查、测试和构建实际通过；缺失配置有明确错误                    | 已审核通过         |
+| 2 领域与账本      | D01–D03              | 运行时合同、SQLite 迁移/worker、状态机、配额与原子资源预留          | 合同一致；并发末份容量不超售；冻结请求、事务与版本约束通过                | 已审核通过         |
+| 3 模拟闭环        | D04–D05              | 持久操作与恢复、Simulator、租约 API/SDK、基础 GUI                   | 重启恢复、创建回执丢失、删除失败、续租竞态、归属鉴权与浏览器闭环；完成 M0 | 已审核通过（M0）   |
+| 4 Docker 接入准备 | D10、D11a            | Portainer 身份与修订、节点能力、草稿镜像目录和验证调度              | 错误 Engine 拒绝；草稿不能被消费者租用；固定制品和授权修订                | 已审核通过         |
+| 5 Docker 租用闭环 | D10b、D12、D11b、D13 | 最小 Runtime Agent 网络执行、独立容器生命周期、验证后发布、恢复回收 | 实际 Docker 网络/限额/存储隔离与失败清理通过；完成 M1                     | 已审核通过（M1）   |
+| 6 宿主与节能策略  | D20–D22a             | Host 观测、人机共用、依赖与保留量、电源 dry-run                     | 未知或有人登录阻止关机；竞态处理；未实测能力不启用                        | 已审核通过         |
+| 7 运维与交付界面  | D23–D24              | 备份恢复、升级、凭据轮换、完整 GUI/SDK 与接入手册                   | 真实恢复演练、权限/存储回归、浏览器 E2E 与干净环境安装                    | D23、D24已审核通过 |
+| 8 正式验收        | D25；D22b 逐机可选   | 实际节点能力矩阵与发布证据                                          | 对照设计 Docker DoD 逐项取证；未验证机器保持试用/禁用或手动电源           | 未开始             |
 
 每批可分配少量具有明确文件边界的工作，例如领域与存储、HTTP 与 SDK、GUI；不把这些实现分工演变成新的层级计划。依赖未通过审核不跨批开发。故障修复在原批次内完成。
 
@@ -431,3 +431,66 @@ high同样明确无法胜任并停止。实际缺口包括Docker管理总览、�
 两次尝试均只做能力/范围审读，无源码、迁移、依赖或dist改动；没有测试结果可以新增，不以此前D23的384项通过代替D24验收；没有读取私有fixtures/凭据或操作真实Docker/NAS/服务。主审确认工作树在a708857后保持干净，SDK确实未覆盖这些管理写入口，现有GUI仍明确标注Node仅观测和空storage验证，未放行D24。
 
 按用户“Luna不能胜任就停下来汇报”的要求，主智能体停止D24实现，不接管、不自行换Sol；既有“仅D23”授权不覆盖D24。M2整体估算保持约85%，D24/D25未完成，Docker优先、VM与实际电源后置；等待用户决定是否另行授权模型或调整完整交付范围。此检查点不改变D23已通过的放行结论。
+
+### 后续模型规则更新与 D24 接续（2026-10-20）
+
+用户明确“先high，不行再切换sol，不需要再授权”，取代此前Luna失败后必须逐模块等待授权的规则。后续固定模块先Luna/high，明确不能胜任可切Sol接续，仍由主智能体独立审核与实测，不改变模块范围。D24已具备Luna/high明确停止记录，现在交GPT-6.1 Sol实现同一完整D24；不重跑相同能力评估，不删除此前停止记录。该授权仅改变本轮M2的执行模型，不提前VM、云或真实电源。M2仍约85%，D24未放行。
+
+### D24 实现冻结待独立验收（2026-10-20）
+
+Sol 接续完整 D24，交付 Docker 管理工作台、必要管理 API/SDK、授权申请向导和独立安装/故障文档。GUI 按 Ticket、后端/Node、profile、防护基线、消费者、镜像和维护职责分组件；不把配置堆入原 AdminPanel，也不增加通用表单框架。公开运行时协议和 DTO 统一在 contracts，SDK 复用 schema，HTTP 调用具体应用用例和 SQLite adapter。复用既有授权 JSON、Operation、audit 和 idempotency 表，没有新迁移；001–007 及设计 schema.sql 原字节未改。
+
+- 管理总览按当前 actor 范围统计完整 Ticket 集合，显示容量账本、观测新鲜度、Host/电源事实及问题跳转。Ticket 筛选、分页安全导出、原操作/事件和授权撤销/清理重试保留删除查实与 Claim 不变量。时间线只投影安全字段并显示操作者/理由，不返回原始 intent/result 或访问材料。
+- 连接登记、真实探测、原操作恢复、同 runtime 修订激活，Machine 保守预算、Node/runtime 固定 secret refs、network/storage 创建与修订，以及平台管理网段防护基线均有结构化管理入口。CLI 秘密导入、Agent 部署、真实身份与能力报告仍是可信前置；GUI 不能勾选或手填伪造 verified。保护规则放宽需先完成实际清理。
+- 消费者/授权/配额和 destroy 政策按事务 CAS 保存；旧凭据 scope 保留或取角色交集，不因普通编辑扩权，最后可用 full-admin 凭据有保护。旧 Ticket 保留冻结合同。凭据一次性输出只在内存，丢失响应查安全元数据并显式撤销/轮换。
+- 镜像草稿/制品、真实验证/取消/清理/报告、发布/alias/退役及已有缓存能力贯通 SDK/GUI。消费者从已发布版本和授权 profile 目录选择，按具体架构资源下限展示，挂载仅有允许 subpath/mode/目标，不披露宿主 source 或 secret refs；可行性预检复用真实申请准备与候选约束，明确不预留容量。
+- 服务端再次检查 role、scope、授权范围及 cookie CSRF。安全管理请求在发出前保存原 body/key/CAS，结果未知不自动新建；刷新后可按原请求恢复。服务端崩溃窗口保留 unknown，可查原对象/Operation 并记录人工调查依据，不伪造成功，不锁死无关清理和维护。秘密响应不进入通用回执。事件 SDK 保留十进制游标；断线保留历史标记并禁写，有界轮询不重叠，StrictMode 清理后恢复正确。
+- README、runbook、api-sdk 和 Compose 对齐干净 M0、生产非 root/本地 SQLite、TLS/cookie、主密钥与 disabled 配置接入再显式启用 Portainer、试租、D23 备份恢复/轮换及常见故障。手工常开底座、shared_kernel、best_effort scratch、offline unsupported 和真实电源 disabled 明示；未提前 VM、云或真实电源。
+
+验证环境为 Node24.19.0 / pnpm10.28.2，使用临时 SQLite/目录、注入 Fastify/Provider，不读取私有实机 fixtures。新增21项回归（contracts3、SDK4、controller10、GUI4）覆盖协议白名单、scope/CAS/CSRF、凭据不扩权、安全目录/多架构、完整计数、未知命令与当前权限重放、保护规则/原清理重试、慢请求/断线/StrictMode。controller 回归直接提取 docs/api-sdk.md 的实际 JS 代码，在正式 init-simulator 临时库及真实应用/worker 上执行 acquire → ready → claim → renew → release，确认 Claim 清零；fetch 仅注入 Fastify，不称为真实 TCP 或 Docker 验收。
+
+最终不排除测试的 `pnpm -r --no-bail test` 共405项：contracts22、SDK29、GUI30全通过；Runtime48通过、2因 host-client loopback EPERM 跳过且套件报错；controller261通过、3因 loopback SSE/备份 HTTP EPERM 失败、10因 runtime-storage-client loopback EPERM 跳过且套件报错。合计390通过、3失败、12跳过，命令 exit1，不能记为全绿。曾发现受限凭据缓存读取缺 images:read 前置检查而返回500，已修正且全量复跑通过该项；其余未通过均为沙箱 listen EPERM。日志 `/private/tmp/hitchlet-d24-full-tests-final.log`。
+
+全仓 typecheck、build、format:check、git diff --check，以及设计 strict TypeScript 和 SQLite86项/43表完整性检查完成后交主审复核；具体日志为 `/private/tmp/hitchlet-d24-{typecheck,build,format}-final.log` 和 `/private/tmp/hitchlet-d24-design-{type,sql}.log`。干净源码安装、正式 Dockerfile 镜像、真实浏览器权限/恢复与真实 Docker/NFS/备份恢复由主审独立执行，当前尚未放行 D24，不能用上述注入回归代替。冻结后停止源码/dist 写入和 build，等待主审同模块反馈修复。
+
+### D24 主审反馈修订：旧记录恢复与范围统计（2026-10-20，待复审）
+
+主审在独立 Node24.22 环境完成未排除405/405、类型/构建/格式/设计86项及001–007字节检查；干净源码锁定安装、CLI M0与真实 HTTP/SDK acquire/claim/release通过。该证据不提前代表真实浏览器或 Docker/NFS 放行。
+
+本轮仅修三个确定问题：Operation 重试及 journal 当前授权按显式 ID 定点读、校验原 CAS、重试并定点返回，不再依赖最近200条列表；旧命令调查按同 consumer/path/key 返回安全元数据，不再从最近100条回执反查，也不将 unknown 改成成功；总览在 SQLite 内按授权聚合 phase/blocked/unknown 数量和初始化计数，不读取完整 Ticket/Operation 文档或逐 Ticket 查询。点授权与聚合共用 SQL 可见性条件，scope每次总览读取一次；保留未放置请求必须显式限定全部授权 Node 的原规则。原 roleScopes 移至纯 domain helper，HTTP、管理和凭据降权/最后管理员守卫共同引用，不再另写5个 scope 常量。无 GUI/安装链、协议或迁移变更。
+
+新增3项真实临时 SQLite/API 回归：201条较新操作之后的原失败 provision 重试、原版本冲突及 Claim 保留；101条较新回执之后的原 unknown 调查且原键仍拒绝重复执行；有限 Node/image 范围与点授权一致，Ticket从2到107条时总览 SQLite调用次数不变，并覆盖授权缓存和私有安装级 unknown计数。管理聚焦13/13通过。Node24.19/pnpm10完整408项中393通过；原loopback EPERM仍导致 controller3失败/10跳过、Runtime2跳过和对应套件报错，命令exit1，不排除或记为全绿。日志 `/private/tmp/hitchlet-d24-review-fix-{management,all-tests}.log`。完成同前门禁后重新冻结，由主审复跑并继续独立验收。
+
+### D24 主审浏览器反馈：App 订阅身份与旧调查入口（2026-10-20，待真实浏览器复验）
+
+主审真实浏览器发现 App 同层 EventUpdates 与 ManagementConsole 使用相同 consumer key，管理员状态更新时可能累积事件组件/SSE并耗尽浏览器连接。本轮只将组件 key 分为 events/management 命名空间；新增 App 级管理员登录回归，使用真实 SDK 与持续 ReadableStream SSE，经四轮15秒健康/管理轮询、事件、管理 tab与列表状态变化，断言始终一个事件提示、一个有效订阅；退出后旧 signal终止，再登录另一consumer只有新订阅。修前回归出现重复key警告及持续重渲染超时，修后通过；不以jsdom代替主审浏览器复验。
+
+同时修复管理 action 的准备回调：已有 pending key 也合并原 method/path。历史缺 path 的记录直接从经过 contracts 校验的已保存原请求派生，调查按钮不依赖最近100回执；调查成功仅结束本地等待并清除其安全准备记录，服务端 unknown语义不变。新增刷新存量缺path、100条新回执不含原key的 GUI 回归，确认可发出正确调查请求、没有重发创建，原有 body/key恢复回归同步检查准备时已保存path。保留前轮三个修订，无后端协议/SQL/安装链变更。
+
+Node24.19/pnpm10下GUI32/32通过，全仓 typecheck/build/format/diff门禁执行。未排除完整410项中395通过；仍仅原loopback EPERM造成controller3失败/10跳过、Runtime2跳过和套件错误，命令exit1。日志 `/private/tmp/hitchlet-d24-app-sse-{gui,all-tests,type,build,format-check}.log`；001–007及设计SQL未改。重新冻结源码/dist并停止build，交主审真实浏览器复验。
+
+### D24 M0 合成连接目录修订（2026-10-20，待主审复验）
+
+主审浏览器确认同层key/SSE修订后管理员Ticket与时间线正常、持续轮询只有一个事件提示；后端登记页暴露官方init-simulator的合成连接不符合真实Portainer证据投影。此轮只在真实连接目录排除同时具有 simulator://local endpoint、simulator environment和executionMode=simulator的完整种子标记；保留数据库中的模拟执行绑定、无revision的真实连接和真实Portainer schema严格校验，不把种子当成已验证Engine，也不要求改SQL。GUI明确合成连接不列入真实Portainer；同步更正已有验证挂载文案和destroy政策名称/关联注释，无新功能。
+
+新增两项回归：实际官方init CLI→临时SQLite→HTTP连接GET200空目录→SDK inventory.connections空目录，并经SDK正常登记disabled/unknown且power disabled的Machine；InventorySetup经实际SDK读取空真实连接目录仍可填写和提交结构化禁用Machine。前者验证真实应用/API，后者使用协议响应fixture，不声称真实浏览器已复验。管理14/14、GUI管理6/6及全部GUI33/33通过。Node24.19/pnpm10未排除全仓412项中397通过，其余仍仅原loopback EPERM：controller3失败/10跳过、Runtime2跳过及对应套件报错，命令exit1。全仓typecheck/build/format/diff通过，001–007与设计schema.sql未改。日志 `/private/tmp/hitchlet-d24-m0-connection-{management,gui,all-tests,type,build,format-check}.log`。源码/dist重新冻结，等待主审同模块复验。
+
+### D24 Node 能力取证回执 hash 合同修订（2026-10-20，待主审真实 HTTP 复验）
+
+主审已独立通过412全仓、最终干净安装/Dockerfile与M0浏览器禁用Machine登记。真实Portainer接入发现新SDK取证回执误将既有64位裸hex capabilityFingerprint约束为OCI digest，服务端已受理启用但SDK报INVALID_RESPONSE。本轮只把该receipt约束对齐原裸hex，并让HTTP取证route以同一权威receipt schema校验输出；不改历史fingerprint、hash(JSON)算法、Node能力或冻结运行合同。审查本轮其他新receipt，其他digest均来自image_artifacts.content_digest或输入OCI digest，仍保留sha256:前缀，无同类hash误用。
+
+新增两种传输的同一真实SQLite/SDK链回归：临时独立主密钥与加密secret refs、持久连接证据、Machine/Node登记、runtime配置、能力取证及原键重放。注入Fastify JSON parser分支通过，回执与数据库及原算法逐字相同，OCI前缀反例拒绝，原键重放只产生一次取证审计；外部探测为fixture，不是硬件证明。另加默认fetch真实loopback HTTP分支，留给主审可监听环境实跑，未拿手写fake receipt替代。
+
+Node24.19/pnpm10未排除完整414项中398通过；新真实HTTP分支同样因listen EPERM未完成，与原3项HTTP/SSE失败及12跳过合计4失败/12跳过、对应套件报错，命令exit1。全仓typecheck/build/format/diff、设计strict和SQLite86项/43表通过；001–007及schema.sql原字节未改。日志 `/private/tmp/hitchlet-d24-capability-receipt-{inject,all-tests,type,build,format-check,design-type,design-sql}.log`。源码/dist重新冻结，交主审复跑HTTP与真实接入；未接触主审已暂停安装，未重试其未知写或创建Ticket。
+
+### D24 独立验收放行（2026-10-20）
+
+主审在最终冻结源码独立执行 Node24.22.0 / pnpm10.28.2 全量检查：contracts22、Runtime50、SDK29、controller280、GUI33，共414/414通过，无失败或跳过。严格类型、完整构建、格式、diff、设计接口和SQLite86项/43表通过；001–007迁移与设计schema.sql未改。真实loopback回归确认裸hex取证回执通过SDK解析及同键恢复。已知真实凭据/Host身份扫描零匹配。
+
+从没有原node_modules/dist/.git的临时源码副本执行frozen-lockfile安装、构建、初始化并用安装后的SDK在真实HTTP完成M0申请/接用/归还。正式Dockerfile也从最终源码构建，在独立持久卷以UID1000运行，GUI与SQLite以及安装后SDK闭环通过；容器安装的M0不当作租客Docker证据。实际浏览器完成消费者目录/预览/申请/claim/renew、管理总览与各页、禁用Machine登记、断线只读及恢复；独立SDK负责实际归还。浏览器暴露的重复SSE key耗尽连接及Simulator合成后端目录422均已修复并复验。
+
+真实Linux arm64隔离Engine上的最终SDK完成授权目录、后端/存储目录、固定制品预热、资格预览、四个local/NFS profiles申请、ready/claim/access/renew、带host-key校验的SSH读取原持久输出，以及release到原生资源查实删除；Ticket详情/操作时间线均通过。安装最终暂停、没有托管容器/网络/卷占用。当前Node仍为constant_online_manual_inventory，不据此宣称正式Host升级。
+
+另独立实测当前精确制品的512MiB/0.5CPU/PID限制、每容器SSH身份与bootstrap撤除、local/NFS只读源和独立输出、容器销毁后输出保留。网络INPUT/FORWARD、未授权进出、IPv6禁用、Agent/Docker重启和陈旧控制代次拒绝完整通过。此前128MiB网络探针提前退出已定位为临时测试TCP服务未处理ECONNRESET，OOMKilled=false；修复私有探针错误处理后保持原资源配置与全部断言通过，没有据此改生产限额。
+
+D24按完整范围放行，M2估算约95%。D25仍需当前恢复账本的可信物理Host观测、人机共用/整机容量、正式准入及逐项验收矩阵；不以限时人工报告、M0或历史批次替代。实际电源、VM及未验证架构/存储协议后置。独立日志仅保存在私有临时目录，不提交本地身份、凭据、NAS路径或数据库。

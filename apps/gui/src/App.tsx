@@ -28,7 +28,8 @@ import {
   RecoveryPanel,
   TicketListPanel,
 } from "./Panels.js";
-import { AdminPanel } from "./AdminPanel.js";
+import { ManagementConsole } from "./ManagementConsole.js";
+import { EventUpdates } from "./EventUpdates.js";
 
 const makeClient = () =>
   new HitchletClient(window.location.origin, {
@@ -471,7 +472,9 @@ export function App({ client: injected }: { client?: HitchletClient }) {
   const canOperate =
     !!principal &&
     principal.role !== "viewer" &&
-    principal.scopes.includes("tickets:write");
+    principal.scopes.includes("tickets:write") &&
+    !healthError &&
+    health?.recoveryState === "ready";
   const canClaim =
     canOperate &&
     ticket?.phase === "ready" &&
@@ -554,8 +557,20 @@ export function App({ client: injected }: { client?: HitchletClient }) {
           </section>
         ) : null}
         <HealthPanel health={health} error={healthError} />
-        {principal?.role === "admin" ? (
-          <AdminPanel
+        {principal?.scopes.includes("events:read") ? (
+          <EventUpdates
+            key={`events:${principal.consumerId}`}
+            client={client}
+            onRefresh={() => {
+              void refreshList();
+              if (selectedId) void refreshDetail(selectedId);
+            }}
+          />
+        ) : null}
+        {principal &&
+        ["admin", "operator", "viewer"].includes(principal.role) ? (
+          <ManagementConsole
+            key={`management:${principal.consumerId}`}
             client={client}
             principal={principal}
             onCredentialIssued={setIssuedCredential}
@@ -1047,8 +1062,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
                       <p>{image.description}</p>
                       <small>{image.id}</small>
                       <small>
-                        摘要接口不提供版本清单；精确版本需输入管理员提供的
-                        versionId 并单独查询。
+                        申请向导提供当前授权的不可变版本、网络和存储选择。
                       </small>
                     </article>
                   ))}

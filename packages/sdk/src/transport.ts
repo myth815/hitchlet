@@ -1,8 +1,15 @@
 import {
   ApiErrorResponseSchema,
+  ResourceEventSchema,
+  type ResourceEvent,
   type ApiErrorResponse,
 } from "@hitchlet/contracts";
 import type { PreparedTicketCommand } from "@hitchlet/contracts/public";
+import {
+  managementRequestContract,
+  PreparedManagementRequestSchema,
+  type PreparedManagementRequest,
+} from "@hitchlet/contracts/admin";
 
 export type SdkAuth =
   | { readonly kind: "bearer"; readonly token: string }
@@ -20,6 +27,18 @@ export interface SdkRuntime {
 
 export interface SdkOptions extends SdkRuntime {
   readonly auth?: SdkAuth;
+  /** Called before a whitelisted non-secret management write is sent. Persist the original body/key for explicit recovery. */
+  readonly onManagementPrepared?: (
+    request: PreparedManagementRequest,
+  ) => void | Promise<void>;
+  readonly onManagementSettled?: (key: string) => void | Promise<void>;
+}
+function freezePrepared<T>(value: T): T {
+  if (value && typeof value === "object" && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const nested of Object.values(value)) freezePrepared(nested);
+  }
+  return value;
 }
 
 export interface RecoveryReference {
@@ -61,6 +80,8 @@ export class ComputeClientError extends Error {
 }
 
 export interface RequestContext {
+  /** Quoted numeric version required by the controller for immutable-revision activation. */
+  readonly expectedVersion?: number;
   readonly command?: PreparedTicketCommand;
   readonly ticketId?: string;
   readonly renewalId?: string;
@@ -144,6 +165,17 @@ export class HttpTransport {
       idempotencyKey: context.key ?? null,
     };
     const headers = new Headers({ Accept: "application/json" });
+    if (context.expectedVersion !== undefined) {
+      if (
+        !Number.isSafeInteger(context.expectedVersion) ||
+        context.expectedVersion < 1
+      )
+        throw new ComputeClientError({
+          code: "INVALID_REQUEST",
+          message: "Expected version must be a positive safe integer.",
+        });
+      headers.set("If-Match", `"${context.expectedVersion}"`);
+    }
     const auth = this.options.auth;
     if (context.authExchangeToken !== undefined) {
       if (!context.authExchangeToken.trim())
@@ -220,6 +252,37 @@ export class HttpTransport {
           ? "include"
           : "omit",
     };
+    let managementPrepared: PreparedManagementRequest | undefined;
+    if (
+      this.options.onManagementPrepared &&
+      (method === "POST" || method === "PUT") &&
+      context.key &&
+      managementRequestContract(method, path)
+    ) {
+      const prepared = freezePrepared(
+        PreparedManagementRequestSchema.parse({
+          kind: "management",
+          method,
+          path,
+          body: JSON.parse(JSON.stringify(body)) as unknown,
+          idempotencyKey: context.key,
+          ...(context.expectedVersion === undefined
+            ? {}
+            : { expectedVersion: context.expectedVersion }),
+        }),
+      );
+      try {
+        await this.options.onManagementPrepared(prepared);
+      } catch {
+        throw new ComputeClientError({
+          code: "PREPARED_MANAGEMENT_SAVE_FAILED",
+          message:
+            "The management request was not sent because its original command could not be saved.",
+          recovery,
+        });
+      }
+      managementPrepared = prepared;
+    }
     let response: Response | undefined;
     let networkError: unknown;
     let json: unknown;
@@ -361,7 +424,12 @@ export class HttpTransport {
       }
     }
     try {
-      return parse(json, response);
+      const value = parse(json, response);
+      if (managementPrepared)
+        await this.options.onManagementSettled?.(
+          managementPrepared.idempotencyKey,
+        );
+      return value;
     } catch (error) {
       if (error instanceof ComputeClientError) throw error;
       throw new ComputeClientError({
@@ -372,6 +440,83 @@ export class HttpTransport {
         recovery,
         cause: error,
       });
+    }
+  }
+
+  /** One authenticated SSE connection. The caller owns bounded reconnect/backoff and persists only the decimal event cursor. */
+  async watchEvents(
+    after: string,
+    signal: AbortSignal,
+    onEvent: (event: ResourceEvent) => void,
+    onConnected: () => void,
+  ): Promise<void> {
+    if (!/^(0|[1-9][0-9]{0,18})$/.test(after))
+      throw new ComputeClientError({
+        code: "INVALID_REQUEST",
+        message: "Invalid event cursor",
+      });
+    const headers = new Headers({
+      Accept: "text/event-stream",
+      "Last-Event-ID": after,
+    });
+    if (this.options.auth?.kind === "bearer")
+      setCredentialHeader(
+        headers,
+        "Authorization",
+        `Bearer ${this.options.auth.token}`,
+        {
+          command: null,
+          ticketId: null,
+          renewalId: null,
+          idempotencyKey: null,
+        },
+      );
+    const response = await this.fetcher(
+      new URL("v1/events/stream", this.baseUrl),
+      {
+        headers,
+        signal,
+        credentials: this.options.auth?.kind === "cookie" ? "include" : "omit",
+      },
+    );
+    if (
+      !response.ok ||
+      !response.body ||
+      !response.headers.get("content-type")?.includes("text/event-stream")
+    )
+      throw new ComputeClientError({
+        code: "EVENT_STREAM_DISCONNECTED",
+        message: "Event stream unavailable",
+        statusCode: response.status,
+      });
+    onConnected();
+    const reader = response.body.getReader(),
+      decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (!signal.aborted) {
+        const chunk = await reader.read();
+        if (chunk.done) break;
+        buffer += decoder
+          .decode(chunk.value, { stream: true })
+          .replace(/\r\n/g, "\n");
+        if (buffer.length > 1048576) throw new Error("SSE frame too large");
+        let boundary;
+        while ((boundary = buffer.indexOf("\n\n")) !== -1) {
+          const frame = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          const data = frame
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (data)
+            onEvent(ResourceEventSchema.parse(JSON.parse(data) as unknown));
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+      reader.releaseLock();
     }
   }
 }

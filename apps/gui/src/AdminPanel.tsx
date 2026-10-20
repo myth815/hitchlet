@@ -1,4 +1,5 @@
 import { SystemPanel } from "./SystemPanel.js";
+import { ValidationStorage, ValidationEvidence } from "./ValidationEvidence.js";
 import React from "react";
 import { MachinePanel } from "./MachinePanel.js";
 import {
@@ -8,6 +9,7 @@ import {
   type AdminImageAliasView,
   type AdminImageVersionSummary,
   type AdminValidationHistoryItem,
+  type StorageRequest,
 } from "@hitchlet/sdk";
 
 type AdminClient = HitchletClient["admin"];
@@ -37,10 +39,12 @@ export function AdminPanel({
   client,
   principal,
   onCredentialIssued,
+  connected = true,
 }: {
   client: HitchletClient;
   principal: AuthenticatedPrincipal;
   onCredentialIssued?: (token: string) => void;
+  connected?: boolean;
 }) {
   const canRead =
     principal.role === "admin" &&
@@ -49,6 +53,7 @@ export function AdminPanel({
     );
   const canWrite =
     canRead &&
+    connected &&
     ["tickets:write", "tickets:revoke"].every((scope) =>
       principal.scopes.includes(scope),
     );
@@ -76,6 +81,9 @@ export function AdminPanel({
     scratchMiB: "2048",
   });
   const [deadline, setDeadline] = React.useState("900");
+  const [validationStorage, setValidationStorage] = React.useState<
+    StorageRequest[]
+  >([]);
   const [aliases, setAliases] = React.useState<AdminImageAliasView[]>([]);
   const [aliasesLoaded, setAliasesLoaded] = React.useState(false);
   const [aliasName, setAliasName] = React.useState("latest");
@@ -371,7 +379,7 @@ export function AdminPanel({
             imageArtifactId: selectedArtifactId,
             nodeId: selectedNodeId,
             networkProfileId: profileId,
-            storage: [],
+            storage: validationStorage,
             resources: {
               request: {
                 cpuMillis: Number(resources.cpuMillis),
@@ -708,8 +716,8 @@ export function AdminPanel({
           />
         </label>
         <p className="muted">
-          storage为空，scratch按best_effort，shared
-          kernel。当前批次不提供任意JSON编辑或节点/秘密创建。
+          默认无挂载，可从下方授权目录添加；scratch best_effort /
+          shared_kernel。
         </p>
         <button
           className="primary-button"
@@ -719,6 +727,12 @@ export function AdminPanel({
           安排验证
         </button>
       </div>
+      <ValidationStorage
+        client={client}
+        value={validationStorage}
+        onChange={setValidationStorage}
+        disabled={!canWrite || busy}
+      />
       <SystemPanel
         key={principal.consumerId}
         client={client}
@@ -745,12 +759,19 @@ export function AdminPanel({
               </select>
             </label>
             {selectedRun ? (
-              <p>
-                Run {selectedRun.id} · test {selectedRun.testOutcome} · cleanup{" "}
-                {selectedRun.cleanupStatus} · report{" "}
-                {selectedRun.reportId ?? "未生成"} · version{" "}
-                {selectedRun.version}
-              </p>
+              <>
+                <p>
+                  Run {selectedRun.id} · test {selectedRun.testOutcome} ·
+                  cleanup {selectedRun.cleanupStatus} · report{" "}
+                  {selectedRun.reportId ?? "未生成"} · version{" "}
+                  {selectedRun.version}
+                </p>
+                <ValidationEvidence
+                  key={selectedRun.id}
+                  client={client}
+                  id={selectedRun.id}
+                />
+              </>
             ) : null}
           </>
         ) : (

@@ -1123,7 +1123,7 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
     const premature = await app.inject({
       method: "POST",
       url: `/v1/image-versions/${versionId}/publish`,
-      headers,
+      headers: { ...headers, "idempotency-key": randomUUID() },
       payload: { expectedEntityVersion: await f.version() },
     });
     expect(premature.statusCode).toBe(409);
@@ -1141,7 +1141,7 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
     const stale = await app.inject({
       method: "POST",
       url: `/v1/image-versions/${versionId}/publish`,
-      headers,
+      headers: { ...headers, "idempotency-key": randomUUID() },
       payload: { expectedEntityVersion: 1 },
     });
     expect(stale.statusCode).toBe(412);
@@ -1149,7 +1149,7 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
     const published = await app.inject({
       method: "POST",
       url: `/v1/image-versions/${versionId}/publish`,
-      headers,
+      headers: { ...headers, "idempotency-key": randomUUID() },
       payload: { expectedEntityVersion: await f.version() },
     });
     expect(published.statusCode).toBe(200);

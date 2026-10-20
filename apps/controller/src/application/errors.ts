@@ -1,4 +1,5 @@
 export type ApplicationErrorCode =
+  | "management_result_unknown"
   | "agent_epoch_conflict"
   | "invalid_request"
   | "not_found"
