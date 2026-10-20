@@ -189,17 +189,64 @@ describe("D10 Portainer identity and D11a catalog", () => {
       portainerVersion: live.portainerVersion,
       architecture: "amd64",
       checkedAt: new Date(clock).toISOString(),
+      validForSeconds: 86_400,
       report,
       networkProfileRevisionIds: [network.revisionId],
       operatorId: adminId,
       requestId: randomUUID(),
     });
-    const before = await db.get<{
+    let before = await db.get<{
       capabilities_json: string;
       observed_at_ms: bigint;
-    }>("SELECT capabilities_json,observed_at_ms FROM nodes WHERE id=?", [
-      node.id,
-    ]);
+      version: bigint;
+    }>(
+      "SELECT capabilities_json,observed_at_ms,version FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(JSON.parse(before!.capabilities_json).expiresAt).toBe(
+      new Date(clock + 86_400_000).toISOString(),
+    );
+    await db.run(
+      "UPDATE nodes SET admission='disabled',capabilities_json=json_set(capabilities_json,'$.admissionMode','observed_host'),version=version+1 WHERE id=?",
+      [node.id],
+    );
+    const reattestVersion = await db.get<{ version: bigint }>(
+      "SELECT version FROM nodes WHERE id=?",
+      [node.id],
+    );
+    await service.attestNodeCapabilities({
+      nodeId: node.id,
+      expectedVersion: Number(reattestVersion!.version),
+      engineId: discovery.result.engineId,
+      dockerVersion: live.dockerVersion,
+      portainerVersion: live.portainerVersion,
+      architecture: "amd64",
+      checkedAt: new Date(clock).toISOString(),
+      validForSeconds: 86_400,
+      report,
+      networkProfileRevisionIds: [network.revisionId],
+      operatorId: adminId,
+      requestId: randomUUID(),
+    });
+    before = await db.get<{
+      capabilities_json: string;
+      observed_at_ms: bigint;
+      version: bigint;
+    }>(
+      "SELECT capabilities_json,observed_at_ms,version FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(JSON.parse(before!.capabilities_json).admissionMode).toBe(
+      "observed_host",
+    );
+    expect(
+      (
+        await new SQLiteMachineNodeStore(
+          db,
+          () => clock,
+        ).listMachineDependencies()
+      )[0]!.canAdmitTenants,
+    ).toBe(false);
     expect(before).toBeDefined();
 
     clock += 121_000;

@@ -10,11 +10,11 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 
 ## 当前状态
 
-**M1 Docker 闭环及 D24 运维交付已通过审核，M2 正式交付尚待 D25 最终验收。** 仓库已实现 Portainer 接入、镜像验证后发布、独立容器与 SSH 凭据、Ticket 申请/接用/续租/归还、控制器重启恢复和漂移回收，并提供完整管理 API、TypeScript SDK 与中文 GUI。414项实现测试通过；干净源码安装、正式 Dockerfile、实际浏览器和真实 Docker/NFS 租用回收已独立验证。Host 观测、人机共用、备份恢复、控制凭据轮换及运维保护已有批次验收；实际租用节点当前仍使用限时人工能力取证，D25须完成正式 Host 观测准入与逐节点发布证据。实际自动电源后置。具体证据和限制见[实施记录](docs/IMPLEMENTATION.md)。
+**M2 Docker 正式交付已通过独立验收，承诺限于已验证的部署组合。** 已实现 Portainer 接入、镜像验证后发布、独立容器与 SSH 凭据、Ticket 全生命周期、恢复回收、授权持久存储、备份恢复、完整管理 API、TypeScript SDK 与中文 GUI。418项实现测试通过；干净安装、正式 Dockerfile、实际浏览器及真实 Docker/NFS 闭环均已验证。实际 Mac Host 已通过可信观测进入正式准入，部分观测仅在显式批准的有人预算内接单，未知、压力和过期证据会阻止新增。逐节点证据与限制见[交付验收](docs/DOCKER-ACCEPTANCE.md)和[实施记录](docs/IMPLEMENTATION.md)。
 
 首个交付目标是 **Docker，通过 Portainer 接入**。Hyper-V 与 Tart 只保留扩展设计，按实际需求后置，不作为 Docker 版本发布的前提。
 
-## 计划能力
+## 能力
 
 - **凭票使用**：申请、排队、资源预留、准备、接用、续租和归还，异常状态可恢复。
 - **独立环境**：每次申请隔离的容器，未来扩展到虚拟机；回收完成才释放资源额度。
@@ -53,7 +53,7 @@ node docs/design/verify-schema.cjs
 
 ## 本地运行
 
-需要 Node.js 24 LTS 与 pnpm 10；不依赖 OpenClaw 或其他宿主项目。按 [运行手册](docs/runbook.md)从空目录安装依赖、显式初始化 Simulator 并领取测试凭据，再启动 API 与 GUI。开发 GUI 使用 `http://localhost:5173`；构建后可由控制器同源发布。Compose 默认禁用执行器并要求 HTTPS 代理以使用安全会话；真实 Docker 使用已配置密钥的 `compose.portainer.yaml` 覆盖，详细顺序见手册。管理工作台提供总览、授权 Ticket/操作、后端/Node、profiles、消费者/配额、镜像登记/缓存和既有维护入口。D24 独立安装与浏览器验收已通过，逐节点正式准入仍须满足 D25。
+需要 Node.js 24 LTS 与 pnpm 10；不依赖 OpenClaw 或其他宿主项目。按 [运行手册](docs/runbook.md)从空目录安装依赖、显式初始化 Simulator 并领取测试凭据，再启动 API 与 GUI。开发 GUI 使用 `http://localhost:5173`；构建后可由控制器同源发布。Compose 默认禁用执行器并要求 HTTPS 代理以使用安全会话；真实 Docker 使用已配置密钥的 `compose.portainer.yaml` 覆盖，详细顺序见手册。管理工作台提供总览、授权 Ticket/操作、后端/Node、profiles、消费者/配额、镜像登记/缓存和既有维护入口。每台新机器仍需按 D25 逐节点取证；本轮未给人的电脑安装开机服务或开启实际电源自动化。
 
 ## 参与开发
 

@@ -59,13 +59,12 @@ async function fixture() {
     policy: initial.humanUsePolicy!,
     ...actor,
   });
-  await inventory.updateNodeAdmissionMode({
-    nodeId,
-    expectedVersion: 1,
-    mode: "observed_host",
-    reason: "complete synthetic Host for power rule test",
-    ...actor,
-  });
+  // Power rule tests need an observed-host projection; they do not exercise
+  // formal release promotion, which has its own authenticated evidence path.
+  await db.run(
+    "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.admissionMode','observed_host') WHERE id=?",
+    [nodeId],
+  );
   const host = new HostAgents(db, clock),
     hostIdentity = randomUUID(),
     bootId = randomUUID();

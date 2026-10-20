@@ -734,7 +734,7 @@ export function openApiDocument() {
       },
       "/v1/nodes/{nodeId}/admission-mode": {
         put: adminOperation(
-          "CAS-select observed Host admission or explicitly approved frozen static trial; never attests capabilities",
+          "CAS-select observed Host admission only when current authenticated Host/policy, live Node, unexpired capability evidence and current Engine revision all pass a SQLite-fenced check; otherwise select the explicitly approved static trial; never attests capabilities",
           "200",
           AdminSchemas.NodeAdmissionModeSchema,
           AdminSchemas.NodeAdmissionModeReceiptSchema,
@@ -766,7 +766,7 @@ export function openApiDocument() {
       },
       "/v1/nodes/{nodeId}/capability-attestations": {
         post: adminOperation(
-          "Import a recent independent manual capability test report and enable constant-online admission",
+          "Import or refresh an independent Node capability report, bind it to the current Engine/connection/architecture, and enable a new Node only for constant-online manual admission; refreshing a Node already in observed-host mode preserves that mode, while formal promotion remains a separate fenced mode update",
           "200",
           AdminSchemas.NodeCapabilityAttestationSchema,
           AdminSchemas.NodeCapabilityAttestationReceiptSchema,

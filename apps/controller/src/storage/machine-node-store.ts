@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { StorageError, type Storage } from "./index.js";
 import { ApplicationError } from "../application/errors.js";
+import { validAttestedCapability } from "../domain/attested-capability.js";
+import { isNodeObservationFresh } from "../domain/human-use.js";
 import {
   evaluateMachineAdmission,
   resourceKeys,
@@ -55,6 +57,7 @@ export class SQLiteMachineNodeStore {
     const rows = await this.db.all<Row>(
       "SELECT id,machine_id,name,backend_kind,provider_connection_id,runtime_identity_id,pool_id,admission,observed_health,capabilities_json,observed_at_ms,version FROM nodes ORDER BY created_at_ms",
     );
+    const now = this.now();
     return rows.map((r) => ({
       id: String(r.id),
       machineId: String(r.machine_id),
@@ -64,8 +67,13 @@ export class SQLiteMachineNodeStore {
       runtimeIdentityId: String(r.runtime_identity_id),
       poolId: String(r.pool_id),
       admission: String(r.admission),
-      observedHealth: String(r.observed_health),
-      capabilities: projectCapabilities(String(r.capabilities_json)),
+      observedHealth: isNodeObservationFresh(
+        r.observed_at_ms === null ? null : integer(r.observed_at_ms),
+        now,
+      )
+        ? String(r.observed_health)
+        : "unknown",
+      capabilities: projectCapabilities(String(r.capabilities_json), now),
       observedAtMs:
         r.observed_at_ms === null ? null : integer(r.observed_at_ms),
       version: integer(r.version),
@@ -80,7 +88,7 @@ export class SQLiteMachineNodeStore {
     requestId: string;
   }) {
     const row = await this.db.get<Row>(
-      "SELECT capabilities_json,version FROM nodes WHERE id=? AND admission<>'retired'",
+      "SELECT capabilities_json,version,machine_id,admission,observed_health,observed_at_ms,backend_kind FROM nodes WHERE id=? AND admission<>'retired'",
       [input.nodeId],
     );
     if (!row) throw new ApplicationError("not_found");
@@ -88,34 +96,108 @@ export class SQLiteMachineNodeStore {
       throw new ApplicationError("conflict");
     const capabilities = parseJson(String(row.capabilities_json)),
       time = this.now();
+    const statements = [];
+    if (input.mode === "observed_host") {
+      const snapshot = await loadMachineAdmission(
+        this.db,
+        String(row.machine_id),
+        time,
+      );
+      const promotionContext = {
+        ...snapshot.context,
+        nodes: snapshot.context.nodes.map((node) =>
+          node.id === input.nodeId ? { ...node, manualInventory: false } : node,
+        ),
+      };
+      const admission = evaluateMachineAdmission(
+        promotionContext,
+        time,
+        input.nodeId,
+      );
+      const liveNode = snapshot.context.nodes.find(
+        (node) => node.id === input.nodeId,
+      );
+      const capability = capabilities as Record<string, unknown>;
+      const currentConnection = await this.db.get<Row>(
+        "SELECT ri.native_id,pc.current_revision_id,m.architecture FROM nodes n JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id JOIN runtime_identities ri ON ri.id=n.runtime_identity_id JOIN machines m ON m.id=n.machine_id WHERE n.id=? AND pc.enabled=1 AND pc.current_revision_id IS NOT NULL",
+        [input.nodeId],
+      );
+      const identityMatches =
+        currentConnection !== undefined &&
+        capability.engineId === String(currentConnection.native_id) &&
+        capability.connectionRevisionId ===
+          String(currentConnection.current_revision_id) &&
+        capability.architecture === String(currentConnection.architecture) &&
+        Array.isArray(capability.architectures) &&
+        capability.architectures.includes(
+          String(currentConnection.architecture),
+        );
+      if (
+        row.admission !== "enabled" ||
+        row.observed_health !== "healthy" ||
+        !isNodeObservationFresh(
+          row.observed_at_ms === null ? null : integer(row.observed_at_ms),
+          time,
+        ) ||
+        String(row.backend_kind) !== "portainer" ||
+        !liveNode ||
+        !validAttestedCapability(capability, time) ||
+        !identityMatches ||
+        !admission.allowed ||
+        !(
+          admission.admissionAssurance === "complete_host" ||
+          admission.admissionAssurance === "bounded_partial_host"
+        )
+      )
+        throw new ApplicationError("conflict");
+      statements.push(machineAdmissionFence(snapshot));
+      statements.push({
+        kind: "run" as const,
+        sql: "UPDATE nodes SET version=version WHERE id=? AND EXISTS(SELECT 1 FROM nodes n JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id JOIN runtime_identities ri ON ri.id=pc.runtime_identity_id JOIN provider_connection_revisions pcr ON pcr.id=pc.current_revision_id AND pcr.verified_runtime_identity_id=ri.id JOIN machines m ON m.id=n.machine_id WHERE n.id=? AND pc.enabled=1 AND pc.current_revision_id=? AND ri.native_id=? AND m.architecture=?)",
+        params: [
+          input.nodeId,
+          input.nodeId,
+          String(currentConnection!.current_revision_id),
+          String(currentConnection!.native_id),
+          String(currentConnection!.architecture),
+        ],
+        expectChanges: 1,
+      });
+    }
+    statements.push({
+      kind: "run" as const,
+      sql: "UPDATE nodes SET capabilities_json=?,version=version+1,updated_at_ms=? WHERE id=? AND version=? AND capabilities_json=? AND admission<>'retired'",
+      params: [
+        JSON.stringify({
+          ...(capabilities as Record<string, unknown>),
+          admissionMode: input.mode,
+        }),
+        time,
+        input.nodeId,
+        input.expectedVersion,
+        String(row.capabilities_json),
+      ],
+      expectChanges: 1,
+    });
+    statements.push({
+      kind: "run" as const,
+      sql: "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) VALUES('consumer',?,'node.admission_mode_updated','node',?,?,?,?)",
+      params: [
+        input.operatorId,
+        input.nodeId,
+        input.requestId,
+        time,
+        JSON.stringify({ mode: input.mode, reason: input.reason }),
+      ],
+    });
     try {
-      await this.db.batchTransaction([
-        {
-          kind: "run",
-          sql: "UPDATE nodes SET capabilities_json=?,version=version+1,updated_at_ms=? WHERE id=? AND version=? AND capabilities_json=? AND admission<>'retired'",
-          params: [
-            JSON.stringify({ ...capabilities, admissionMode: input.mode }),
-            time,
-            input.nodeId,
-            input.expectedVersion,
-            String(row.capabilities_json),
-          ],
-          expectChanges: 1,
-        },
-        {
-          kind: "run",
-          sql: "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) VALUES('consumer',?,'node.admission_mode_updated','node',?,?,?,?)",
-          params: [
-            input.operatorId,
-            input.nodeId,
-            input.requestId,
-            time,
-            JSON.stringify({ mode: input.mode, reason: input.reason }),
-          ],
-        },
-      ]);
+      await this.db.batchTransaction(statements);
     } catch (error) {
-      if (error instanceof StorageError && error.code === "STORAGE_CAS_FAILED")
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "STORAGE_CAS_FAILED"
+      )
         throw new ApplicationError("conflict");
       throw error;
     }
@@ -560,6 +642,7 @@ export class SQLiteMachineNodeStore {
     portainerVersion: string;
     architecture: "amd64" | "arm64";
     checkedAt: string;
+    validForSeconds?: number;
     report: Readonly<{
       runId: string;
       sha256: string;
@@ -577,11 +660,12 @@ export class SQLiteMachineNodeStore {
     requestId: string;
   }) {
     const node = await this.db.get<Row>(
-      "SELECT n.machine_id,n.runtime_identity_id,n.pool_id,n.config_json,n.version,m.architecture,m.admission AS machine_admission,pc.current_revision_id,ri.native_id,r.evidence_json FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id JOIN runtime_identities ri ON ri.id=n.runtime_identity_id JOIN provider_connection_revisions r ON r.id=pc.current_revision_id AND r.verified_runtime_identity_id=n.runtime_identity_id WHERE n.id=? AND n.backend_kind='portainer' AND n.admission='disabled'",
+      "SELECT n.machine_id,n.runtime_identity_id,n.pool_id,n.config_json,n.capabilities_json,n.version,m.architecture,m.admission AS machine_admission,pc.current_revision_id,ri.native_id,r.evidence_json FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id JOIN runtime_identities ri ON ri.id=n.runtime_identity_id JOIN provider_connection_revisions r ON r.id=pc.current_revision_id AND r.verified_runtime_identity_id=n.runtime_identity_id WHERE n.id=? AND n.backend_kind='portainer' AND n.admission='disabled'",
       [input.nodeId],
     );
     const checkedAt = Date.parse(input.checkedAt),
-      now = this.now();
+      now = this.now(),
+      validForSeconds = input.validForSeconds ?? 3600;
     if (
       !node ||
       Number(node.version) !== input.expectedVersion ||
@@ -603,6 +687,9 @@ export class SQLiteMachineNodeStore {
       !Number.isFinite(checkedAt) ||
       checkedAt > now + 30_000 ||
       checkedAt < now - 30 * 60_000 ||
+      !Number.isSafeInteger(validForSeconds) ||
+      validForSeconds < 3600 ||
+      validForSeconds > 30 * 24 * 3600 ||
       Object.keys(input.report.scopes).length !== 6
     )
       throw new RangeError(
@@ -658,6 +745,13 @@ export class SQLiteMachineNodeStore {
         report: input.report,
       }),
     );
+    const previousCapabilities = parseJson(String(node.capabilities_json)) as
+      | Record<string, unknown>
+      | undefined;
+    const admissionMode =
+      previousCapabilities?.admissionMode === "observed_host"
+        ? "observed_host"
+        : "constant_online_manual_inventory";
     const capability = {
       cpuHardLimit: "verified",
       memoryHardLimit: "verified",
@@ -678,11 +772,16 @@ export class SQLiteMachineNodeStore {
       verifiedNetworkProfileRevisionIds: [...input.networkProfileRevisionIds],
       verifiedStorageProfileRevisionIds: [...storageRevisions],
       providerVersion: `Portainer/${input.portainerVersion}; Docker/${input.dockerVersion}`,
-      expiresAt: new Date(checkedAt + 60 * 60_000).toISOString(),
+      expiresAt: new Date(checkedAt + validForSeconds * 1000).toISOString(),
       observedAt: new Date(checkedAt).toISOString(),
+      evidenceValidForSeconds: validForSeconds,
       capabilityFingerprint,
-      admissionMode: "constant_online_manual_inventory",
+      admissionMode,
       connectionRevisionId: String(node.current_revision_id),
+      engineId: input.engineId,
+      dockerVersion: input.dockerVersion,
+      portainerVersion: input.portainerVersion,
+      architecture: input.architecture,
       offline: false,
       powerEnabled: false,
       manualReport: input.report,
@@ -721,7 +820,7 @@ export class SQLiteMachineNodeStore {
             capabilityFingerprint,
             reportRunId: input.report.runId,
             reportSha256: input.report.sha256,
-            admissionMode: "constant_online_manual_inventory",
+            admissionMode,
           }),
         ],
       },
@@ -778,7 +877,9 @@ function projectMachine(snapshot: MachineAdmissionSnapshot, now: number) {
       name: n.name,
       version: data.nodes.find((row) => row.id === n.id)!.version,
       admission: n.admission,
-      observedHealth: n.observedHealth,
+      observedHealth: isNodeObservationFresh(n.observedAtMs, now)
+        ? n.observedHealth
+        : "unknown",
       poolId: n.poolId,
       parentAllocationId: pool?.parentAllocationId ?? null,
       dependencies: [`machine:${machine.id}`, `pool:${n.poolId}`],

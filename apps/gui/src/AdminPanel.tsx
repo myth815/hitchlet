@@ -562,9 +562,26 @@ export function AdminPanel({
                   {node.admission} · {node.observedHealth}
                 </span>
                 <small>
-                  能力 {node.capabilities.verified ? "已验证" : "未验证"} · 架构{" "}
-                  {node.capabilities.architectures.join(", ") || "无"} · 访问{" "}
-                  {node.capabilities.supportedAccess.join(", ") || "无"}
+                  能力{" "}
+                  {node.capabilities.expiresAt &&
+                  (!Number.isFinite(Date.parse(node.capabilities.expiresAt)) ||
+                    Date.parse(node.capabilities.expiresAt) <= Date.now())
+                    ? "取证已过期"
+                    : node.capabilities.verified
+                      ? "取证有效"
+                      : "未取证"}{" "}
+                  · 架构 {node.capabilities.architectures.join(", ") || "无"} ·
+                  访问 {node.capabilities.supportedAccess.join(", ") || "无"}
+                </small>
+                <small>
+                  能力取证有效期至{" "}
+                  {node.capabilities.expiresAt
+                    ? new Date(node.capabilities.expiresAt).toLocaleString()
+                    : "未记录"}
+                  {node.capabilities.expiresAt &&
+                  Date.parse(node.capabilities.expiresAt) <= Date.now()
+                    ? " · 已过期，需重新实测取证"
+                    : " · 到期不会由心跳续期"}
                 </small>
                 <small>
                   此页面不配置Runtime Agent或能力attestation；仅显示观测投影。

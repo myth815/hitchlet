@@ -19,6 +19,7 @@ import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import type { HostHeartbeat } from "@hitchlet/contracts/internal";
 import { MachineDependencyViewSchema } from "@hitchlet/contracts/admin";
+import { isNodeObservationFresh } from "../src/domain/human-use.js";
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
   for (const close of cleanup.splice(0).reverse()) await close();
@@ -67,6 +68,7 @@ async function fixture() {
     scratchMiB: 4096,
   };
   policy.humanReserved = { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 };
+  policy.admissionDuringInteraction = "within_reserved_budget";
   await db.run("UPDATE machines SET usage_mode='shared' WHERE id=?", [
     machine!.id,
   ]);
@@ -74,14 +76,6 @@ async function fixture() {
     machineId: machine!.id,
     expectedVersion: 1,
     policy,
-    operatorId: admin!.id,
-    requestId: randomUUID(),
-  });
-  const mode = await inventory.updateNodeAdmissionMode({
-    nodeId: node!.id,
-    expectedVersion: 1,
-    mode: "observed_host",
-    reason: "Test fixture: enable authenticated observations",
     operatorId: admin!.id,
     requestId: randomUUID(),
   });
@@ -143,6 +137,70 @@ async function fixture() {
     };
   }
   await host.heartbeat(pair.agentId, authorization, heartbeat(0));
+  const connection = await db.get<{
+    native_id: string;
+    current_revision_id: string;
+    architecture: string;
+  }>(
+    "SELECT ri.native_id,pc.current_revision_id,m.architecture FROM nodes n JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN runtime_identities ri ON ri.id=n.runtime_identity_id JOIN machines m ON m.id=n.machine_id WHERE n.id=?",
+    [node!.id],
+  );
+  const currentCapabilities = JSON.parse(
+    String(
+      (await db.get<{ capabilities_json: string }>(
+        "SELECT capabilities_json FROM nodes WHERE id=?",
+        [node!.id],
+      ))!.capabilities_json,
+    ),
+  ) as Record<string, unknown>;
+  const scopes = Object.fromEntries(
+    [
+      "resourceLimits",
+      "firewallInput",
+      "firewallForward",
+      "ipv6",
+      "sshBootstrap",
+      "cleanupRecovery",
+    ].map((name) => [
+      name,
+      {
+        status: "passed",
+        summary: `fixture ${name}`,
+        evidenceRef: `fixture:${name}`,
+      },
+    ]),
+  );
+  Object.assign(currentCapabilities, {
+    admissionMode: "constant_online_manual_inventory",
+    expiresAt: new Date(now + 60 * 60_000).toISOString(),
+    engineId: connection!.native_id,
+    connectionRevisionId: connection!.current_revision_id,
+    architecture: connection!.architecture,
+    cpuHardLimit: "verified",
+    memoryHardLimit: "verified",
+    networkPolicyEnforcement: "verified",
+    capabilityFingerprint: "a".repeat(64),
+    providerVersion: "Portainer/fixture; Docker/fixture",
+    offline: false,
+    powerEnabled: false,
+    manualReport: { sha256: "b".repeat(64), scopes },
+  });
+  await db.run(
+    "UPDATE nodes SET capabilities_json=?,observed_at_ms=?,observed_health='healthy',admission='enabled',version=version+1 WHERE id=?",
+    [JSON.stringify(currentCapabilities), now, node!.id],
+  );
+  const beforePromotion = await db.get<{ version: bigint }>(
+    "SELECT version FROM nodes WHERE id=?",
+    [node!.id],
+  );
+  const mode = await inventory.updateNodeAdmissionMode({
+    nodeId: node!.id,
+    expectedVersion: Number(beforePromotion!.version),
+    mode: "observed_host",
+    reason: "Test fixture: promote with live partial Host evidence",
+    operatorId: admin!.id,
+    requestId: randomUUID(),
+  });
   return {
     dir,
     db,
@@ -164,6 +222,183 @@ async function fixture() {
   };
 }
 describe("Machine policies and the shared SQLite admission fence", () => {
+  it("uses a strict two-minute Node freshness boundary without future or missing timestamps", () => {
+    const now = 1_800_000_000_000;
+    expect(isNodeObservationFresh(now - 45_000, now)).toBe(true);
+    expect(isNodeObservationFresh(now - 119_999, now)).toBe(true);
+    expect(isNodeObservationFresh(now - 120_000, now)).toBe(false);
+    expect(isNodeObservationFresh(now + 1, now)).toBe(false);
+    expect(isNodeObservationFresh(null, now)).toBe(false);
+  });
+  it("projects one two-minute Node freshness rule through SQLite, API and SDK admission views", async () => {
+    const f = await fixture();
+    const app = await buildApp(
+      loadConfig({ DATA_DIR: f.dir, GUI_DIR: "/no-gui", LOG_LEVEL: "silent" }),
+      { storage: f.db },
+    );
+    cleanup.push(() => app.close());
+    const client = (token: string) =>
+      new HitchletClient("https://controller.test", {
+        auth: { kind: "bearer", token },
+        fetch: async (input, init) => {
+          const response = await app.inject({
+            url: new URL(String(input)).pathname,
+            method: init?.method as "GET" | "PUT" | "POST",
+            headers: Object.fromEntries(new Headers(init?.headers)),
+            ...(init?.body ? { payload: String(init.body) } : {}),
+          });
+          return new Response(response.body, {
+            status: response.statusCode,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+    const admin = client(f.adminToken),
+      consumer = client(f.token);
+    const setObservedAtAndRead = async (observedAtMs: number) => {
+      await f.db.run("UPDATE nodes SET observed_at_ms=? WHERE id=?", [
+        observedAtMs,
+        f.nodeId,
+      ]);
+      const [nodes, catalog, overview, machine] = await Promise.all([
+        admin.admin.nodes(),
+        consumer.catalog(),
+        admin.admin.management.overview(),
+        admin.admin.machineDryRun(f.machineId),
+      ]);
+      const catalogNode = catalog.nodes.find((node) => node.id === f.nodeId)!;
+      const overviewNode = overview.machines
+        .flatMap((item) => item.nodes)
+        .find((node) => node.id === f.nodeId)!;
+      const machineNode = machine.nodes.find((node) => node.id === f.nodeId)!;
+      return {
+        node: nodes.find((item) => item.id === f.nodeId)!,
+        catalogNode,
+        overviewNode,
+        machine,
+        machineNode,
+      };
+    };
+    let view = await setObservedAtAndRead(Date.now() - 45_000);
+    expect(view.node.observedHealth).toBe("healthy");
+    expect(view.catalogNode.health).toBe("healthy");
+    expect(view.overviewNode.health).toBe("healthy");
+    expect(view.machineNode.observedHealth).toBe("healthy");
+    expect(view.machineNode.canAdmit).toBe(true);
+    expect(view.machineNode.disabledReasons).not.toContain(
+      "Node observation is stale or unknown",
+    );
+
+    for (const observedAtMs of [Date.now() - 120_000, Date.now() + 10_000]) {
+      view = await setObservedAtAndRead(observedAtMs);
+      expect(view.node.observedHealth).toBe("unknown");
+      expect(view.catalogNode.health).toBe("unknown");
+      expect(view.overviewNode.health).toBe("unknown");
+      expect(view.machineNode.observedHealth).toBe("unknown");
+      expect(view.machineNode.canAdmit).toBe(false);
+      expect(view.machineNode.disabledReasons).toContain(
+        "Node observation is stale or unknown",
+      );
+      await expect(
+        prepareMachineAdmission(
+          f.db,
+          f.machineId,
+          f.nodeId,
+          { cpuMillis: 1, memoryMiB: 1, scratchMiB: 0 },
+          Date.now(),
+        ),
+      ).rejects.toMatchObject({ code: "STORAGE_CAS_FAILED" });
+    }
+  });
+  it("requires live authenticated Host evidence to promote a Node and fences connection revision changes", async () => {
+    const f = await fixture();
+    const node = await f.db.get<{ version: bigint; capabilities_json: string }>(
+      "SELECT version,capabilities_json FROM nodes WHERE id=?",
+      [f.nodeId],
+    );
+    const capabilities = JSON.parse(node!.capabilities_json) as Record<
+      string,
+      unknown
+    >;
+    capabilities.admissionMode = "constant_online_manual_inventory";
+    await f.db.run(
+      "UPDATE nodes SET capabilities_json=?,version=version+1 WHERE id=?",
+      [JSON.stringify(capabilities), f.nodeId],
+    );
+    await f.db.run("UPDATE agents SET status='disabled' WHERE id=?", [
+      f.pair.agentId,
+    ]);
+    const afterDisable = await f.db.get<{ version: bigint }>(
+      "SELECT version FROM nodes WHERE id=?",
+      [f.nodeId],
+    );
+    await expect(
+      f.inventory.updateNodeAdmissionMode({
+        nodeId: f.nodeId,
+        expectedVersion: Number(afterDisable!.version),
+        mode: "observed_host",
+        reason: "Must reject revoked Host",
+        operatorId: f.adminId,
+        requestId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+    const unchanged = await f.db.get<{ capabilities_json: string }>(
+      "SELECT capabilities_json FROM nodes WHERE id=?",
+      [f.nodeId],
+    );
+    expect(JSON.parse(unchanged!.capabilities_json).admissionMode).toBe(
+      "constant_online_manual_inventory",
+    );
+
+    await f.db.run("UPDATE agents SET status='active' WHERE id=?", [
+      f.pair.agentId,
+    ]);
+    const current = await f.db.get<{ version: bigint }>(
+      "SELECT version FROM nodes WHERE id=?",
+      [f.nodeId],
+    );
+    const batch = f.db.batchTransaction.bind(f.db);
+    f.db.batchTransaction = async (statements) => {
+      await f.db.run(
+        "UPDATE provider_connections SET current_revision_id=NULL WHERE id=(SELECT provider_connection_id FROM nodes WHERE id=?)",
+        [f.nodeId],
+      );
+      return batch(statements);
+    };
+    await expect(
+      f.inventory.updateNodeAdmissionMode({
+        nodeId: f.nodeId,
+        expectedVersion: Number(current!.version),
+        mode: "observed_host",
+        reason: "Connection revision changes after read",
+        operatorId: f.adminId,
+        requestId: randomUUID(),
+      }),
+    ).rejects.toMatchObject({ code: "conflict" });
+  });
+  it("projects elapsed capability evidence as expired without changing its attested expiry", async () => {
+    const f = await fixture();
+    const before = await f.db.get<{ capabilities_json: string }>(
+      "SELECT capabilities_json FROM nodes WHERE id=?",
+      [f.nodeId],
+    );
+    const expiry = JSON.parse(before!.capabilities_json).expiresAt as string;
+    const later = new SQLiteMachineNodeStore(
+      f.db,
+      () => Date.parse(expiry) + 1,
+    );
+    const node = (await later.listNodes())[0]!;
+    expect(node.capabilities.verified).toBe(false);
+    expect(node.capabilities.expiresAt).toBe(expiry);
+    expect(
+      JSON.parse(
+        (await f.db.get<{ capabilities_json: string }>(
+          "SELECT capabilities_json FROM nodes WHERE id=?",
+          [f.nodeId],
+        ))!.capabilities_json,
+      ).expiresAt,
+    ).toBe(expiry);
+  });
   it("keeps partial Host evidence truthful, projects actual ownership tree, and does not expose private sessions or credentials", async () => {
     const f = await fixture();
     await f.db.run(

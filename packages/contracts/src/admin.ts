@@ -339,6 +339,13 @@ export const NodeCapabilityAttestationSchema = z
     expectedPortainerVersion: z.string().min(1).max(100),
     architecture: z.enum(["amd64", "arm64"]),
     checkedAt: z.string().datetime({ offset: true }),
+    /** Evidence lifetime is an explicit bounded re-attestation interval; observations never extend it. */
+    validForSeconds: z
+      .number()
+      .int()
+      .min(3600)
+      .max(30 * 24 * 3600)
+      .default(3600),
     report: z
       .object({
         runId: id,

@@ -51,14 +51,23 @@ export function projectEvidence(value: string) {
     unmanagedContainerCount: integer(e.unmanagedContainerCount),
   };
 }
-export function projectCapabilities(value: string) {
+export function projectCapabilities(value: string, now = Date.now()) {
   const c = parseJson(value);
+  const expiresAt = typeof c.expiresAt === "string" ? c.expiresAt : null;
+  const expiry = expiresAt ? Date.parse(expiresAt) : NaN;
+  const evidenceState =
+    expiresAt === null
+      ? "missing"
+      : Number.isFinite(expiry) && expiry > now
+        ? "valid"
+        : "expired";
   return {
     verified:
+      evidenceState === "valid" &&
       c.cpuHardLimit === "verified" &&
       c.memoryHardLimit === "verified" &&
       c.networkPolicyEnforcement === "verified",
-    expiresAt: typeof c.expiresAt === "string" ? c.expiresAt : null,
+    expiresAt,
     architectures: Array.isArray(c.architectures)
       ? c.architectures.filter((x) => x === "amd64" || x === "arm64")
       : [],

@@ -536,8 +536,11 @@ function NodeModeEditor({
     <details>
       <summary>{node.name} 准入模式设置</summary>
       <p>
-        可信 Host
-        模式按新鲜人员与资源观测准入；切换模式不会验证资源隔离能力。不完整观测仅在明确有人/无人、低压力和有人预算下有限接单。常开手工模式仅为人工冻结预算试用。
+        正式观测准入要求当前 Node
+        能力报告仍有效、Engine/连接修订/架构匹配，且已认证 Host
+        与当前策略允许接单。partial 仅在
+        within_reserved_budget、人员可判定且资源压力低于阈值时使用 attended
+        上限；不会获得无人或电源能力。能力报告到期后需重新实测取证，心跳不会延长有效期。常开手工模式仅为人工冻结预算试用。
       </p>
       <fieldset disabled={!canWrite || busy}>
         <label>

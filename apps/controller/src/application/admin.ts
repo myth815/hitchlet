@@ -13,6 +13,7 @@ import { SQLiteValidationStore } from "../storage/validation-store.js";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { SQLiteAdminReadStore } from "../storage/admin-read-store.js";
 import { SQLiteImageCacheStore } from "../storage/image-cache-store.js";
+import { validAttestedCapability } from "../domain/attested-capability.js";
 
 export type Probe = PortainerProbe;
 type ObservationSnapshot = Awaited<
@@ -320,49 +321,6 @@ function capabilityExpired(capability: Record<string, unknown>, now: number) {
   if (typeof capability.expiresAt !== "string") return true;
   const expiry = Date.parse(capability.expiresAt);
   return !Number.isFinite(expiry) || expiry <= now;
-}
-
-function validAttestedCapability(
-  capability: Record<string, unknown>,
-  now: number,
-) {
-  if (
-    capabilityExpired(capability, now) ||
-    !["constant_online_manual_inventory", "observed_host"].includes(
-      String(capability.admissionMode),
-    ) ||
-    capability.offline !== false ||
-    capability.powerEnabled !== false ||
-    typeof capability.connectionRevisionId !== "string" ||
-    capability.cpuHardLimit !== "verified" ||
-    capability.memoryHardLimit !== "verified" ||
-    capability.networkPolicyEnforcement !== "verified" ||
-    typeof capability.capabilityFingerprint !== "string" ||
-    !/^[a-f0-9]{64}$/.test(capability.capabilityFingerprint) ||
-    typeof capability.providerVersion !== "string" ||
-    !Array.isArray(capability.architectures) ||
-    !Array.isArray(capability.guestOs) ||
-    !capability.guestOs.includes("linux")
-  )
-    return false;
-  const report = capability.manualReport;
-  if (!isRecord(report) || typeof report.sha256 !== "string") return false;
-  const scopes = report.scopes;
-  const names = [
-    "resourceLimits",
-    "firewallInput",
-    "firewallForward",
-    "ipv6",
-    "sshBootstrap",
-    "cleanupRecovery",
-  ];
-  return (
-    isRecord(scopes) &&
-    Object.keys(scopes).length === names.length &&
-    names.every(
-      (name) => isRecord(scopes[name]) && scopes[name].status === "passed",
-    )
-  );
 }
 
 function assertObservationMatches(

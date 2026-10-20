@@ -150,6 +150,8 @@ if (profile)
 
 除表中明确写 `admin.inventory` / `admin` 外，方法归表内同一分组。准确签名见 SDK 声明与 OpenAPI。Runtime/物理 Host 的部署、配对与秘密 CLI 是可信管理前置；不从 GUI 认证未实测能力。
 
+`attestCapabilities` 可在报告中传 `validForSeconds`，范围为 3600–2592000 秒，省略时为 3600 秒。有效期从 `checkedAt` 固定计算，Node/Host 心跳不会续期；报告到期后须重新实测并提交。更新报告不会把已处于 `observed_host` 的 Node 降回人工试用模式。该字段属于新增请求 schema，Controller 与 SDK contracts 应成套升级。
+
 ## 管理写入恢复和秘密边界
 
 `client.withManagementPreparation(onPrepared, onSettled)` 创建独立客户端，保留原 transport/auth 配置。回调发生在白名单管理请求发送之前，内容为 contracts 校验后的 `PreparedManagementRequest`：固定方法、路径、body、CAS 与 key。先安全持久化；保存失败时 SDK 不发送。用 `client.admin.resumeManagement(original)` 显式恢复。白名单拒绝任意 URL、shell、SQL、访问材料、配对和凭据签发/轮换。SDK 不自动重试管理创建。

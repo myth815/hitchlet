@@ -46,6 +46,19 @@ export type DependencyClaim = {
 };
 export type AdmissionState = "enabled" | "draining" | "disabled";
 export type NodeHealth = "healthy" | "degraded" | "unknown" | "lost";
+/** Node runtime health uses a two-minute lease; physical Host freshness is a separate 30-second protocol. */
+export function isNodeObservationFresh(
+  observedAtMs: number | null,
+  now: number,
+): boolean {
+  return (
+    observedAtMs !== null &&
+    Number.isSafeInteger(observedAtMs) &&
+    Number.isSafeInteger(now) &&
+    observedAtMs <= now &&
+    now - observedAtMs < 120_000
+  );
+}
 export type DependencyNode = {
   id: string;
   name: string;
@@ -203,12 +216,7 @@ export function evaluateMachineAdmission(
     reasons.push(`Node admission is ${node.admission}`);
   if (node && node.observedHealth !== "healthy")
     reasons.push(`Node health is ${node.observedHealth}`);
-  if (
-    node &&
-    (node.observedAtMs === null ||
-      node.observedAtMs > now ||
-      now - node.observedAtMs >= 120_000)
-  )
+  if (node && !isNodeObservationFresh(node.observedAtMs, now))
     reasons.push("Node observation is stale or unknown");
   if (
     node &&

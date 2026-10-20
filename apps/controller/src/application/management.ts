@@ -15,6 +15,7 @@ import { TicketQueries } from "./queries.js";
 import { TicketService } from "./tickets.js";
 import { ApplicationError } from "./errors.js";
 import { roleScopes } from "../domain/role-scopes.js";
+import { isNodeObservationFresh } from "../domain/human-use.js";
 
 export type ManagementActor = {
   consumerId: string;
@@ -108,8 +109,9 @@ export class ManagementService {
           ],
         });
     }
+    const observedAtMs = this.now();
     return AuthorizedCatalogSchema.parse({
-      observedAtMs: this.now(),
+      observedAtMs,
       quota,
       versions: [...grouped.values()],
       networks: networks
@@ -146,11 +148,12 @@ export class ManagementService {
           architecture: r.architecture,
           admission: r.admission,
           version: integer(r.version),
-          health:
-            r.observed_at_ms === null ||
-            this.now() - integer(r.observed_at_ms) > 30000
-              ? "unknown"
-              : r.observed_health,
+          health: isNodeObservationFresh(
+            r.observed_at_ms === null ? null : integer(r.observed_at_ms),
+            observedAtMs,
+          )
+            ? r.observed_health
+            : "unknown",
         })),
     });
   }
@@ -401,13 +404,16 @@ export class ManagementService {
         publishedVersions: integer(facts.publishedVersions),
       },
       nodeScope = scope?.nodeIds ?? "all";
+    const observedAtMs = this.now();
     const observations = new Map(
       (await this.configuration.nodes()).map((n) => [
         String(n.id),
-        n.observed_at_ms === null ||
-        this.now() - integer(n.observed_at_ms) > 30000
-          ? "unknown"
-          : String(n.observed_health),
+        isNodeObservationFresh(
+          n.observed_at_ms === null ? null : integer(n.observed_at_ms),
+          observedAtMs,
+        )
+          ? String(n.observed_health)
+          : "unknown",
       ]),
     );
     const power = new Map(

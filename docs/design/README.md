@@ -792,6 +792,7 @@ M2 前置最小 Host Agent 观测；共享宿主必须经过人的使用、余�
 | D23 / D13,D20-D21 | Docker 稳定性：数据库磁盘低水位/满、事件保留、日志轮转、备份恢复、schema 升级失败路径、控制凭据轮换、权限和授权存储隔离 | 恢复先对账再准入；旧控制凭据失效；备份可真实恢复；只读挂载不能写；NAS 数据在销毁及挂载失败下仍保留；无秘密泄露 |
 | D24 / D21,D22a,D23 | Docker 完整 GUI 和 API/SDK 文档、管理员初始化与权限验收、真实浏览器 E2E、Docker Node/镜像接入和故障手册 | 新开发者按文档跑 M0；管理员按手册完成真实试租和备份恢复；页面明确手工底座、offline 和电源能力限制；常见故障无需直接改数据库 |
 | D25 / D24 | Docker 正式发布验收、现有宿主容量/人机共用验证、列明逐节点承诺；将通过验收的实验 Node 升级正式准入 | 完成本节 Docker DoD；未满足观测或隔离要求的 Node 保持试用/禁用；未通过电源验收的机器保持常开/手动；完成 M2 |
+
 | D22b / D22a＋目标机器前置条件 | 逐机“正常关机→WOL→Docker ready”；独立验证小米插座3绑定、断电600秒、通电自启与恢复；原生 Ubuntu 服务自启；VM 底座需先完成 D32/D42 | WOL与插座分别取证；无人/无写入条件、人工确认、恢复供电续接、故障不重复切电均通过才启用对应自动能力；可延后且不阻碍 D25；不以空载插座测试替代整机验收 |
 | D30 / D25＋出现相关需求 | Hyper-V 能力 PoC：服务账户、无人交互登录启动、Windows/Linux 模板克隆、专用路径、网络/入口、正常销毁 | 在实际 Windows 版本上完成所需 guest 类型验证；模板无凭据残留；许可/TPM/安全启动等需求记录为镜像能力；失败项不能标 supported |
 | D31 / D30 | Hyper-V provider 契约实现；实例唯一标识、VM/磁盘/网络所有权、spec 映射、技术 readiness；接 Ticket/GUI | Windows 和 Linux VM 分别完整租用；回执丢失通过托管 VM ID 找回；关机状态不足以释放磁盘/容量，必须核实删除；generation 防迟到指令 |
@@ -801,6 +802,22 @@ M2 前置最小 Host Agent 观测；共享宿主必须经过人的使用、余�
 | D42 / D41,D21,D22a＋底座管理需求 | Mac Linux 基础 VM；Portainer Node 自动关联；底座复用/停止；Mac 会话、睡眠/唤醒能力矩阵 | 与 D32 同组依赖账本用例通过；明确 sleep wake 与断电冷启动不同；不支持的冷启动不进入自动路径；随后该机器可开展 D22b，D42不依赖D22b |
 | D50 / 当次完成的D31或D41；涉及底座再含D32或D42 | 新 VM 后端发布回归：契约、故障恢复、权限/凭据/临时盘隔离、SQLite迁移与Docker不回归；测试已部署的后端组合 | 只需对本次实际新增能力验收，不要求另一个未开发VM后端；Docker旧客户端/数据/备份流程继续可用；新后端未知状态不阻塞健康Docker Node |
 | D51 / 当次D50 | 新后端的 GUI 能力展示、接入/模板制作/升级与故障手册、实际硬件发布证据 | 按选定范围完成 M3 或 M4；若未实现底座管理，明确仅租客VM可用，不把整阶段标为所有能力齐备；不作为Docker正式交付门槛 |
+
+#### D25：正式 Docker 发布验收记录与节点承诺
+
+D25 的正式准入是两份互不替代的证据：Node 的隔离/能力实测报告，以及 Machine 上当前已认证 Host 的新鲜观测和人机共用策略。新 Node 的 `POST /v1/nodes/{nodeId}/capability-attestations` 只录入当前 Portainer Engine、Docker/Portainer 版本、架构、连接修订及报告范围，并启用 `constant_online_manual_inventory` 试用模式；已有 observed_host Node 禁用后重新取证时保留原准入模式，当前 Host 不可信时D21仍阻止新增。报告中的摘要/引用由管理员从实际测试取得，API 不会验证外部链接内容。报告有效期以 `checkedAt + validForSeconds` 固定，允许 3600–2592000 秒，缺省仍为3600秒。Node 心跳不会延长它。到期后不能排新 Ticket/validation、不能发布依赖该 Node 能力的新镜像；须重新执行相关实测并提交新报告。
+
+只有 `PUT /v1/nodes/{nodeId}/admission-mode` 将准入切到 `observed_host` 才代表申请正式共享宿主路径。该CAS要求 Node 仍启用且健康、Node观测新鲜、报告未过期并经同一纯领域校验、Engine身份/current connection revision/架构完全匹配；同时读取当前 Host 的认证、Machine/boot/session/controller epoch、时间、策略、依赖、Hold、各层Claim及保留量，并以完整快照 fence 与 Node/Engine identity fence 在同一SQLite写事务内比较。任一项读后变化则409且不写入。它不回收或重新计算既有Ticket合同，也不因当前已用满预算而只改变mode失败；已有Claim继续完整计入预算。
+
+`complete_host` 可按策略允许 attended/unattended 上限。`bounded_partial_host` 仅在新鲜可信人员证据可判定为 present 或完整确认 absent、资源压力已测且低于阈值、策略显式为 `within_reserved_budget` 时成立；始终使用 attended 上限。partial 下的 `unmanagedActivityHold=null` 保持 unknown 并必须在API/GUI和节点承诺中披露。完整准入不表示可自动关机；无人登录策略也不替代电源验证。未知/过期/撤销Host、压力、能力或Runtime身份使正式准入失败/停排；恢复控制账本或重新配对Host后须等待新的boot/session/controller epoch心跳，再重新判定。
+
+Host `memoryPercent` 是根据操作系统报告的 total/free 内存计算出的使用占比，可能将缓存计入使用量；它不是 macOS 专有的 `memory_pressure` 信号。内存指标缺失、无效或达到策略阈值时仍 fail closed，不据此推断操作系统压力低。
+
+逐节点发布矩阵至少记录：安装/代码版本、Machine/Node与RuntimeIdentity、OS/架构及Portainer/Engine版本、连接/网络/存储修订、报告ID与SHA256及范围/检查时间/到期时间、Host probe与人员/资源/未管理活动完整性、HumanUsePolicy与保留/attended预算、底座依赖/Hold、镜像manifest digest与实际架构、验证/清理报告、消费者真实连接/续租/归还、重启/恢复结果、当前准入模式、承诺范围和限制。证据必须能指向原始控制台、日志、容器读回或独立NAS验证；字段/ID/hash本身、模拟器、历史节点或另一节点的报告不构成实测。存储协议、架构、镜像分别按矩阵逐项承诺；未知能力保持unsupported。
+
+| Node 身份/架构 | 正式准入 | 能力证据/到期 | Host 完整性/使用策略 | 已发布制品与数据协议 | 真实 Ticket + 恢复证据 | 已承诺用途/限制 | 复核人/时间 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 当前arm64 Docker验收组合，详见[逐节点证据](../DOCKER-ACCEPTANCE.md) | observed_host；当前条件不满足则停排 | 同Engine六项报告及授权local/NFS范围，有界到期 | bounded_partial；人员present、活动unknown、显式有人预算 | Node SSH v1固定digest；local/NFS4.2 | 真实SDK/SSH、Host失效、重启及查实归还；其它场景区分故障注入 | 人工常开、shared_kernel、scratch best_effort、offline/power unsupported | 主审2026-10-20 |
 
 当前排期只包含 D00–D25；D22b 仅对已有合格机器按需实施。D30–D51保留为后续工作包，不提前开发。D22a 是公共电源协议和 dry-run，D22b 才是逐机启用证据；这样不存在“底座开发等待电源闭环、电源闭环又等待底座”的循环。M2 可交付常开 Docker 资源池，只有 D22b 实测通过的机器承诺自动启停。M3/M4 的租客 VM 与 Linux 底座管理也可分别立项。
 
@@ -942,10 +959,10 @@ SDK不自动把任意业务回调包装在“finally无条件销毁数据”中�
 | WOL/睡眠恢复/冷启动与应用阻止关机 | 分机器的D22b验收记录 | 只启用实际验证过的模式；不支持则保持常开/手动 |
 | Hyper-V Windows/Linux模板 | 按需D30–D32；两类guest创建/连接/删除及所有磁盘清理 | VM能力保持未启用，不阻塞Docker |
 | Tart与Apple Silicon/Keychain/FileVault | 按需D40–D42；实际服务上下文及网络/身份验证 | online-only或不启用该VM制品；不擅改安全设置 |
-| 备份恢复及旧控制端隔离 | D23–D25；恢复后先对账、旧端被拒绝 | 正式交付验收未完成；不能仅以备份文件存在通过 |
+| 备份恢复及旧控制端隔离 | D23–D25；恢复后先对账、旧端被拒绝 | 未验证恢复流程则不能正式交付；不能仅以备份文件存在通过 |
 
 每个任务的证据至少记录版本/架构、测试前提、执行方法、预期与实际结果、日志引用、日期和限制。模拟结果标simulated，实机结果标hardware；能力报告可追溯到证据ID。硬件更换、OS/Provider重大升级或网络模式改变后，对关联能力重新验证。
 
 对外API采用/v1；增加可选字段可兼容，删除字段/修改状态语义需新版本或显式迁移。文档、运行时Schema、SQLite migration、SDK及GUI在同一变更中更新。新增后端须实现统一Provider与契约测试；新增业务消费者只实现客户端接入，不向调度器添加业务特判。
 
-当前首个开发包是D00–D05：可运行的模拟闭环和GUI；随后沿Docker路线完成真实租用和正式化。Hyper-V/Tart保持本文设计与类型扩展点，出现需求再启动对应任务。
+D00–D25已完成当前已验证部署组合的Docker交付，具体结果及未承诺能力见[验收记录](../DOCKER-ACCEPTANCE.md)。Hyper-V/Tart保持本文设计与类型扩展点，出现需求再启动对应任务。
