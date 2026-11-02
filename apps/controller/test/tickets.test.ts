@@ -3,13 +3,31 @@ import { TicketQueries } from "../dist/application/queries.js";
 import { SQLiteMachineNodeStore } from "../src/storage/machine-node-store.js";
 import { SQLiteOperationStore } from "../dist/storage/operation-store.js";
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtemp, rm, readdir } from "node:fs/promises";
+import { mkdtemp, rm, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openStorage } from "../dist/storage/index.js";
 import { TicketService } from "../dist/application/tickets.js";
 import { OperationWorker } from "../dist/application/operations.js";
 import { PersistentSimulator } from "../dist/providers/simulator.js";
+import { LeaseService } from "../src/application/leases.js";
+import { AccessService } from "../src/application/access.js";
+import { LocalSecretStore } from "../src/storage/secret-store.js";
+import { SQLiteAccessMaterialStore } from "../src/storage/access-material-store.js";
+import type { ProvisionPlan } from "../src/providers/port.js";
+import { createHash } from "node:crypto";
+import ssh2 from "ssh2";
+import type {
+  TartAllocationIdentity,
+  TartGuestBootstrapReceipt,
+  TartGuestBootstrapRequest,
+  TartInspection,
+  TartReconcileRequest,
+} from "@hitchlet/contracts/internal";
+import { TartExecutionProvider } from "../src/providers/tart-provider.js";
+import { TicketService as SourceTicketService } from "../src/application/tickets.js";
+import { OperationWorker as SourceOperationWorker } from "../src/application/operations.js";
+import type { ProvisionPlan } from "../src/providers/port.js";
 
 const dirs: string[] = [];
 const opened: Awaited<ReturnType<typeof openStorage>>[] = [];
@@ -176,18 +194,20 @@ async function fixture() {
       sql: "UPDATE nodes SET config_json=json_object('executionMode','simulator') WHERE id='40000000-0000-4000-8000-000000000001'",
     },
   ]);
+  const serviceOptions = {
+    storage,
+    now: () => now,
+    id: (() => {
+      let i = 0;
+      return () => `60000000-0000-4000-8000-${String(++i).padStart(12, "0")}`;
+    })(),
+  };
   return {
     dir,
     now,
     storage,
-    service: new TicketService({
-      storage,
-      now: () => now,
-      id: (() => {
-        let i = 0;
-        return () => `60000000-0000-4000-8000-${String(++i).padStart(12, "0")}`;
-      })(),
-    }),
+    service: new TicketService(serviceOptions),
+    sourceService: new SourceTicketService(serviceOptions),
   };
 }
 
@@ -2631,5 +2651,404 @@ describe("persistent simulator lifecycle", () => {
         [secondAllocation?.allocationId],
       ),
     ).toMatchObject({ state: "committed" });
+  });
+});
+
+describe("Tart VM ticket ledger integration", () => {
+  it("reserves, survives an unknown create response, claims and renews by SSH, and releases only after complete absence", async () => {
+    const { sourceService: service, storage, dir, now } = await fixture();
+    const consumerId = "10000000-0000-4000-8000-000000000001";
+    const installId = "tart-test-installation";
+    const nodeId = "40000000-0000-4000-8000-000000000002";
+    const runtimeId = "80000000-0000-4000-8000-000000000009";
+    const connectionId = "80000000-0000-4000-8000-00000000000a";
+    const revisionId = "80000000-0000-4000-8000-00000000000b";
+    const networkRevisionId = "30000000-0000-4000-8000-000000000002";
+    await storage.batchTransaction([
+      {
+        kind: "run",
+        sql: "INSERT INTO installations(singleton,installation_id,controller_epoch,created_at_ms) VALUES(1,?,1,?)",
+        params: [installId, now],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO machines(id,name,usage_mode,host_os,architecture,admission,observed_power,labels_json,created_at_ms,updated_at_ms) VALUES('50000000-0000-4000-8000-000000000002','synthetic Tart host','dedicated','macos','arm64','enabled','on','{}',?,?)",
+        params: [now, now],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO capacity_pools(id,machine_id,total_cpu_millis,total_memory_mib,total_scratch_mib,system_cpu_millis,system_memory_mib,system_scratch_mib,created_at_ms,updated_at_ms) VALUES('90000000-0000-4000-8000-000000000002','50000000-0000-4000-8000-000000000002',8000,16384,10000,1000,1024,1000,?,?)",
+        params: [now, now],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO runtime_identities(id,backend_kind,native_kind,native_id,created_at_ms) VALUES(?,'tart','tart_host','synthetic-test-host',?)",
+        params: [runtimeId, now],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO provider_connections(id,backend_kind,runtime_identity_id,created_at_ms,updated_at_ms) VALUES(?,'tart',?,?,?)",
+        params: [connectionId, runtimeId, now, now],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO provider_connection_revisions(id,connection_id,revision,endpoint_ref,provider_endpoint_id,verified_runtime_identity_id,verified_at_ms,evidence_json,created_at_ms) VALUES(?,?,1,'synthetic://test','test-host',?,?,?,?)",
+        params: [
+          revisionId,
+          connectionId,
+          runtimeId,
+          now,
+          JSON.stringify({ testFixture: true }),
+          now,
+        ],
+      },
+      {
+        kind: "run",
+        sql: "UPDATE provider_connections SET current_revision_id=? WHERE id=?",
+        params: [revisionId, connectionId],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO nodes(id,machine_id,name,backend_kind,provider_connection_id,runtime_identity_id,pool_id,admission,observed_health,capabilities_json,config_json,observed_at_ms,created_at_ms,updated_at_ms) VALUES(?,'50000000-0000-4000-8000-000000000002','synthetic Tart node','tart',?,?,'90000000-0000-4000-8000-000000000002','enabled','healthy',?,?, ?,?,?)",
+        params: [
+          nodeId,
+          connectionId,
+          runtimeId,
+          JSON.stringify({
+            observedAt: new Date(now).toISOString(),
+            expiresAt: new Date(now + 600_000).toISOString(),
+            providerVersion: "synthetic fixture only",
+            admissionMode: "constant_online_manual_inventory",
+            resourceKinds: ["vm"],
+            guestOs: ["macos"],
+            architectures: ["arm64"],
+            cpuHardLimit: "verified",
+            memoryHardLimit: "verified",
+            scratchHardLimit: "verified",
+            offlineLeaseEnforcement: "unsupported",
+            networkPolicyEnforcement: "verified",
+            supportedAccess: ["ssh"],
+            verifiedNetworkProfileRevisionIds: [networkRevisionId],
+            verifiedStorageProfileRevisionIds: [],
+            accelerators: [],
+            reportId: "synthetic-test-only",
+          }),
+          JSON.stringify({ executionMode: "tart", testFixture: true }),
+          now,
+          now,
+          now,
+        ],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms) VALUES('a0000000-0000-4000-8000-000000000011','20000000-0000-4000-8000-000000000003','tart','vm','arm64','macos','synthetic-vm-template','sha256:synthetic-vm',1000,1024,0,?,?,?)",
+        params: [
+          JSON.stringify({
+            bootstrap: {
+              mechanism: "tart-guest-bootstrap-v1",
+              contractVersion: "1",
+              identityReset: true,
+            },
+          }),
+          JSON.stringify({
+            accessProtocols: ["ssh"],
+            ports: [22],
+            account: "hitchlet",
+            discovery: "guest_ipv4",
+            readiness: "authenticated_ssh",
+          }),
+          now,
+        ],
+      },
+      {
+        kind: "run",
+        sql: "UPDATE consumers SET authorization_json=json_set(authorization_json,'$.nodeIds',json_array(?, '40000000-0000-4000-8000-000000000001')) WHERE id=?",
+        params: [nodeId, consumerId],
+      },
+    ]);
+
+    let clock = now;
+    await expect(
+      service.preview(consumerId, {
+        image: { versionId: "20000000-0000-4000-8000-000000000003" },
+        kind: "vm",
+        allowedProviders: ["tart"],
+        allowedArchitectures: ["arm64"],
+        resources: {
+          cpuMillis: 1500,
+          memoryMiB: 2048,
+          scratchMiB: 0,
+          isolation: "virtual_machine",
+        },
+        networkProfileId: "30000000-0000-4000-8000-000000000001",
+      }),
+    ).rejects.toThrow("whole vCPUs");
+    const ticket = await service.acquire(consumerId, "tart-vm-lifecycle", {
+      image: { versionId: "20000000-0000-4000-8000-000000000003" },
+      kind: "vm",
+      allowedProviders: ["tart"],
+      allowedArchitectures: ["arm64"],
+      resources: {
+        cpuMillis: 2000,
+        memoryMiB: 2048,
+        scratchMiB: 0,
+        isolation: "virtual_machine",
+      },
+      networkProfileId: "30000000-0000-4000-8000-000000000001",
+      lease: { requestedSeconds: 900 },
+    });
+    const allocation = await service.reserveNext();
+    expect(allocation).toMatchObject({ ticketId: ticket.ticketId, nodeId });
+    const operation = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.provision'",
+      [allocation?.allocationId],
+    );
+    const secretKeyPath = join(dir, "test-master.key");
+    await writeFile(secretKeyPath, Buffer.alloc(32, 23), { mode: 0o600 });
+    const secrets = await LocalSecretStore.open(dir, secretKeyPath);
+    const accessMaterials = new SQLiteAccessMaterialStore(
+      storage,
+      secrets,
+      () => clock,
+    );
+    const { public: hostPublicKey, private: hostPrivateKey } =
+      ssh2.utils.generateKeyPairSync("ed25519");
+    const hostParsed = ssh2.utils.parseKey(hostPrivateKey);
+    if (hostParsed instanceof Error) throw hostParsed;
+    const hostKeyFingerprint = `SHA256:${createHash("sha256").update(hostParsed.getPublicSSH()).digest("base64").replace(/=+$/, "")}`;
+    const hash = (value: unknown) =>
+      createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    const vmNameFor = (identity: TartAllocationIdentity) => {
+      const ownerTuple = [
+        identity.installationId,
+        identity.runtimeIdentityId,
+        identity.connectionRevisionId,
+        identity.allocationId,
+        identity.generation,
+        identity.purpose,
+      ];
+      return `hitchlet-${createHash("sha256").update(JSON.stringify(ownerTuple)).digest("hex").slice(0, 32)}`;
+    };
+    let observation: TartInspection | undefined;
+    let savedBootstrap: TartGuestBootstrapRequest | undefined;
+    let cloneCount = 0;
+    let loseFirstBootstrapResponse = true;
+    let cleanupInventoryUnknown = false;
+    const runtime = {
+      async inspect(identity: TartAllocationIdentity): Promise<TartInspection> {
+        if (cleanupInventoryUnknown)
+          return {
+            presence: "unknown",
+            identity,
+            reason: "synthetic cleanup inventory unavailable",
+          };
+        return structuredClone(
+          observation ?? {
+            presence: "absent",
+            identity,
+            inventoryCompleteness: "complete",
+          },
+        );
+      },
+      async reconcile(request: TartReconcileRequest): Promise<TartInspection> {
+        savedBootstrap = request.bootstrap ?? savedBootstrap;
+        if (!observation || observation.presence === "absent") cloneCount++;
+        observation = {
+          presence: "present",
+          identity: request.identity,
+          vmName: vmNameFor(request.identity),
+          state: "running",
+          resources: request.resources,
+          bootstrapStatus: savedBootstrap ? "pending" : "not_requested",
+          ipAddress: "192.0.2.44",
+        };
+        if (request.bootstrap && loseFirstBootstrapResponse) {
+          loseFirstBootstrapResponse = false;
+          throw new Error(
+            "synthetic Tart reconcile response lost after VM and bootstrap intent persisted",
+          );
+        }
+        return structuredClone(observation);
+      },
+      async recordBootstrapReceipt(
+        identity: TartAllocationIdentity,
+        request: TartGuestBootstrapRequest,
+        receipt: TartGuestBootstrapReceipt,
+      ): Promise<TartInspection> {
+        expect(request).toEqual(savedBootstrap);
+        observation = {
+          presence: "present",
+          identity,
+          vmName: vmNameFor(identity),
+          state: "running",
+          resources: { cpus: 2, memoryMiB: 2048 },
+          bootstrapStatus: "applied",
+          bootstrapReceipt: receipt,
+          ipAddress: "192.0.2.44",
+        };
+        return structuredClone(observation);
+      },
+      async destroy(identity: TartAllocationIdentity): Promise<TartInspection> {
+        if (cleanupInventoryUnknown)
+          return {
+            presence: "unknown",
+            identity,
+            reason: "synthetic deletion outcome unknown",
+          };
+        observation = {
+          presence: "absent",
+          identity,
+          inventoryCompleteness: "complete",
+        };
+        return structuredClone(observation);
+      },
+    };
+    const execution = new TartExecutionProvider({
+      now: () => clock,
+      resolveRuntime: async (plan) => ({
+        runtimeIdentityId: plan.identity.runtimeIdentityId,
+        connectionRevisionId: plan.identity.connectionRevisionId,
+        artifactDigest: plan.artifact.digest,
+        template: {
+          source: "local",
+          name: plan.artifact.ref,
+          guestOS: "darwin",
+          guestArch: "arm64",
+          configSha256: "a".repeat(64),
+        },
+        runtime,
+      }),
+      accessMaterials,
+      network: {
+        async verify(plan) {
+          return {
+            runtimeIdentityId: plan.identity.runtimeIdentityId,
+            allocationId: plan.identity.allocationId,
+            generation: plan.identity.generation,
+            revisionId: plan.resolved.network.revisionId,
+            contractHash: hash(plan.resolved.network),
+            reference: `synthetic-network-${plan.identity.allocationId}`,
+            verifiedAt: new Date(clock).toISOString(),
+            expiresAt: new Date(
+              Math.min(clock + 600_000, plan.deadlineMs - 1),
+            ).toISOString(),
+          };
+        },
+      },
+      guestBootstrap: {
+        async apply(request) {
+          return {
+            status: "applied",
+            identity: request.identity,
+            nonce: request.nonce,
+            account: request.account,
+            clientPublicKeyFingerprint: request.clientPublicKeyFingerprint,
+            hostPublicKey,
+            hostKeyFingerprint,
+            networkEvidenceReference: request.networkEvidence.reference,
+            networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
+            observedAt: new Date(clock).toISOString(),
+          };
+        },
+      },
+      ssh: {
+        async verify(input) {
+          expect(input.host).toBe("192.0.2.44");
+          expect(input.port).toBe(22);
+          expect(input.hostPublicKey).toBe(hostPublicKey);
+          expect(input.hostKeyFingerprint).toBe(hostKeyFingerprint);
+          expect(input.privateKey).toContain("BEGIN OPENSSH PRIVATE KEY");
+          return {
+            authenticated: true,
+            username: input.username,
+            hostKeyFingerprint: input.hostKeyFingerprint,
+            clientPublicKeyFingerprint: input.clientPublicKeyFingerprint,
+          };
+        },
+      },
+    });
+    const worker = new SourceOperationWorker({
+      storage,
+      execution,
+      installationId: installId,
+      controllerEpoch: 1,
+      now: () => clock,
+    });
+    expect(await worker.run(operation?.id ?? "")).toBe(true);
+    expect(cloneCount).toBe(1);
+    clock += 3_000;
+    expect(await worker.run(operation?.id ?? "")).toBe(true);
+    expect(cloneCount).toBe(1);
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "ready" });
+
+    const leases = new LeaseService(storage, () => clock);
+    const claim = await leases.renew(
+      consumerId,
+      ticket.ticketId,
+      "tart-claim",
+      { generation: 1, expectedLeaseVersion: 2, maximumTtlSeconds: 900 },
+    );
+    expect(claim.outcome).toBe("pending");
+    if (claim.outcome !== "pending")
+      throw new Error("claim did not enter ledger");
+    expect(await leases.reconcilePending()).toBe(1);
+    expect(
+      (await leases.get(consumerId, ticket.ticketId, claim.renewal.id))?.state,
+    ).toBe("confirmed");
+    const access = await new AccessService(storage, () => clock, secrets).get(
+      consumerId,
+      ticket.ticketId,
+      "tart-access",
+      1,
+    );
+    expect(access.access.host).toBe("192.0.2.44");
+    expect(access.authentication.kind).toBe("ephemeral_private_key");
+    const renewal = await leases.renew(
+      consumerId,
+      ticket.ticketId,
+      "tart-renew",
+      { generation: 1, expectedLeaseVersion: 3, maximumTtlSeconds: 900 },
+    );
+    expect(renewal.outcome).toBe("pending");
+    if (renewal.outcome !== "pending")
+      throw new Error("renewal did not enter ledger");
+    expect(await leases.reconcilePending()).toBe(1);
+    expect(
+      (await leases.get(consumerId, ticket.ticketId, renewal.renewal.id))
+        ?.state,
+    ).toBe("confirmed");
+
+    await service.cancel(ticket.ticketId, consumerId);
+    const cleanup = await storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation?.allocationId],
+    );
+    cleanupInventoryUnknown = true;
+    expect(await worker.run(cleanup?.id ?? "")).toBe(true);
+    expect(
+      await storage.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ state: "committed" });
+    cleanupInventoryUnknown = false;
+    clock += 3_000;
+    expect(await worker.run(cleanup?.id ?? "")).toBe(true);
+    expect(
+      await storage.get("SELECT phase FROM tickets WHERE id=?", [
+        ticket.ticketId,
+      ]),
+    ).toMatchObject({ phase: "released" });
+    expect(
+      await storage.get(
+        "SELECT state FROM capacity_claims WHERE allocation_id=?",
+        [allocation?.allocationId],
+      ),
+    ).toMatchObject({ state: "released" });
+    expect(cloneCount).toBe(1);
   });
 });

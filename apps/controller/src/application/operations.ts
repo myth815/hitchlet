@@ -322,8 +322,9 @@ export class OperationWorker {
       await this.defer(op, token, "create_call_in_flight");
       return true;
     }
+    const executionMode = parseObject(op.intent_json).executionMode;
     const trackFlight =
-      parseObject(op.intent_json).executionMode === "portainer";
+      executionMode === "portainer" || executionMode === "tart";
     if (op.kind === "allocation.provision" && trackFlight)
       this.createCalls.enter(flightKey);
     try {
@@ -516,7 +517,10 @@ export class OperationWorker {
     await this.recordObjects(op, inspection.evidence.objects);
     if (await this.store.unknownCreateEffects(String(op.allocation_id)))
       return this.defer(op, token, "create_effect_outcome_unknown");
-    if (parseObject(op.intent_json).executionMode === "portainer")
+    if (
+      parseObject(op.intent_json).executionMode === "portainer" ||
+      parseObject(op.intent_json).executionMode === "tart"
+    )
       await this.store.assertProvisionActive(
         String(op.id),
         token,
@@ -527,7 +531,10 @@ export class OperationWorker {
       plan,
       inspection.evidence,
     );
-    if (parseObject(op.intent_json).executionMode === "portainer")
+    if (
+      parseObject(op.intent_json).executionMode === "portainer" ||
+      parseObject(op.intent_json).executionMode === "tart"
+    )
       await this.store.assertProvisionActive(
         String(op.id),
         token,
@@ -611,7 +618,12 @@ export class OperationWorker {
         contractHash: item.contractHash,
         ...(item.details
           ? {}
-          : { simulator: true, detachedOnly: item.ownership === "reference" }),
+          : {
+              ...(parseObject(op.intent_json).executionMode === "simulator"
+                ? { simulator: true }
+                : {}),
+              detachedOnly: item.ownership === "reference",
+            }),
       }),
     });
     if (result.changes !== 1n)
@@ -633,6 +645,7 @@ export class OperationWorker {
       throw new Error("Persisted provision inputs are incomplete");
     const subject = operationSubject(op);
     const frozen = parseObject(row.accepted_contract_json);
+    const isTart = parseObject(row.frozen_config_json).executionMode === "tart";
     const accepted =
       subject.kind === "tenant"
         ? (AcceptedAcquireRequestSchema.parse(
@@ -662,6 +675,17 @@ export class OperationWorker {
     const accessRecipe = objectValue(
       parseObject(stringField(val(row, "access_recipe_json"))),
     );
+    const artifact = {
+      id: stringField(val(op, "image_artifact_id")),
+      ref: row.artifact_ref,
+      digest: row.content_digest,
+      ...(isTart
+        ? {
+            guestOS: guestOS(row.guest_os),
+            architecture: architecture(row.architecture),
+          }
+        : {}),
+    };
     const selectionHash = stringField(frozen.selectionHash);
     let mounts: ProvisionPlan["resolved"]["mounts"] = storage.map((entry) => ({
       grantId: stringField(entry.grantId),
@@ -694,7 +718,8 @@ export class OperationWorker {
       if (persisted.every((m) => typeof m.resolvedSourceRef === "string"))
         mounts = persisted.map((m) => resolvedStorageMountSchema.parse(m));
       else if (
-        parseObject(row.frozen_config_json).executionMode === "portainer"
+        parseObject(row.frozen_config_json).executionMode === "portainer" ||
+        parseObject(row.frozen_config_json).executionMode === "tart"
       )
         throw new Error("Real runtime mount evidence missing");
       // Pre-D23 Simulator contracts stored frozen selections rather than host
@@ -716,11 +741,7 @@ export class OperationWorker {
     const contractPayload = {
       selectionHash,
       nodeId: row.node_id,
-      artifact: {
-        id: val(op, "image_artifact_id"),
-        ref: row.artifact_ref,
-        digest: row.content_digest,
-      },
+      artifact,
       resources,
       network: networkContract,
       mounts,
@@ -748,11 +769,7 @@ export class OperationWorker {
         runtimeIdentityId: row.runtime_identity_id,
         connectionRevisionId: binding,
       },
-      artifact: {
-        id: stringField(val(op, "image_artifact_id")),
-        ref: row.artifact_ref,
-        digest: row.content_digest,
-      },
+      artifact,
       resources,
       resolved: {
         id:
@@ -797,7 +814,8 @@ export class OperationWorker {
     if (
       typeof row.resolved_provision_contract_id !== "string" &&
       mounts.length &&
-      parseObject(row.frozen_config_json).executionMode === "portainer"
+      (parseObject(row.frozen_config_json).executionMode === "portainer" ||
+        parseObject(row.frozen_config_json).executionMode === "tart")
     ) {
       if (!this.options.execution.resolveMounts)
         throw new Error("Runtime storage facts unavailable");
@@ -915,7 +933,11 @@ export class OperationWorker {
       };
       await this.options.execution.revokeStop(cleanupPlan);
       const rank = (item: OwnedResource) =>
-        item.kind === "container" ? 0 : item.kind === "network_policy" ? 2 : 1;
+        item.kind === "container" || item.kind === "vm"
+          ? 0
+          : item.kind === "network_policy"
+            ? 2
+            : 1;
       knownObjects.sort((a, b) => rank(a) - rank(b));
       const destructionReceipts = [];
       for (const item of knownObjects) {
@@ -1082,8 +1104,18 @@ function storageMode(value: unknown): "read_only" | "read_write" {
     throw new Error("Persisted storage mode is invalid");
   return value;
 }
-function enforcement(value: unknown): "docker_iptables" {
-  if (value !== "docker_iptables")
+function guestOS(value: unknown): "linux" | "macos" {
+  if (value !== "linux" && value !== "macos")
+    throw new Error("Persisted Tart guest OS is invalid");
+  return value;
+}
+function architecture(value: unknown): "amd64" | "arm64" {
+  if (value !== "amd64" && value !== "arm64")
+    throw new Error("Persisted artifact architecture is invalid");
+  return value;
+}
+function enforcement(value: unknown): "docker_iptables" | "tart_agent" {
+  if (value !== "docker_iptables" && value !== "tart_agent")
     throw new Error("Persisted network enforcement is invalid");
   return value;
 }
@@ -1091,8 +1123,8 @@ function grantRevision(value: unknown): 1 {
   if (value !== 1) throw new Error("Persisted grant revision is invalid");
   return 1;
 }
-function networkMode(value: unknown): "isolated_bridge" {
-  if (value !== "isolated_bridge")
+function networkMode(value: unknown): "isolated_bridge" | "isolated_vm" {
+  if (value !== "isolated_bridge" && value !== "isolated_vm")
     throw new Error("Persisted network mode is invalid");
   return value;
 }
@@ -1184,6 +1216,7 @@ function journaledOwnedResource(plan: ProvisionPlan, row: Row): OwnedResource {
   if (
     ![
       "container",
+      "vm",
       "network_policy",
       "endpoint",
       "storage_reference",

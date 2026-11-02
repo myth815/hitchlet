@@ -1,6 +1,6 @@
 # Hitchlet 实施与验收记录
 
-2026-11-02 接续更新：review 四修及相邻收尾已完成于 `c7d665a`；用户随后选择优先 Tart。本机驱动已进入源码/受控夹具阶段，当前范围与未验证项见 [Tart 驱动说明](TART-DRIVER.md)。下文 D00–D25 的 Docker 批次与后置 VM 描述保留为该阶段历史，不能据此将 Tart 标为已可租用。
+2026-11-02 接续更新：review 四修及相邻收尾已完成于 `c7d665a`；用户随后选择优先 Tart。Tart 驱动、初始化/SSH 材料合同及同账本 Ticket/Operation/Lease/Claim 的服务层接入已进入源码/合成验证阶段；生产 server 与真实 VM 租用尚未开放，当前范围与未验证项见 [Tart 驱动说明](TART-DRIVER.md)。下文 D00–D25 的 Docker 批次与后置 VM 描述保留为该阶段历史，不能据此将 Tart 标为已可租用。
 
 实现基线：[设计 v1.3](design/README.md)。当前目标保持 M2（Docker 正式交付）；Hyper-V、Tart 和云扩容不在本轮实现范围。模拟器通过不代表真实 Docker 或宿主通过。
 

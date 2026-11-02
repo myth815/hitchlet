@@ -47,7 +47,11 @@ export class AccessService {
         ? Number(row.expires_at_ms)
         : Number(row.expires_at_ms);
     const simulator = row.execution_mode === "simulator";
-    if (!simulator && row.execution_mode !== "portainer")
+    if (
+      !simulator &&
+      row.execution_mode !== "portainer" &&
+      row.execution_mode !== "tart"
+    )
       throw conflict("execution_mode_unsupported");
     if (
       row.network_revoked === 1 ||

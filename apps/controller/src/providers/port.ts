@@ -55,7 +55,13 @@ export type ProvisionPlan = Readonly<{
   deadlineMs: number;
   runtimeConfig?: Readonly<Record<string, unknown>>;
   identity: ProvisionIdentity;
-  artifact: Readonly<{ id: string; ref: string; digest: string }>;
+  artifact: Readonly<{
+    id: string;
+    ref: string;
+    digest: string;
+    guestOS?: "linux" | "macos";
+    architecture?: "amd64" | "arm64";
+  }>;
   resources: ResourceContract;
   resolved: Readonly<{
     id: string;
@@ -66,12 +72,12 @@ export type ProvisionPlan = Readonly<{
       revisionId: string;
       frozenPlatformDenyRevisionId: string;
       platformDenyRevisionId: string;
-      mode: "isolated_bridge";
+      mode: "isolated_bridge" | "isolated_vm";
       ipv6: "disabled" | "verified_equivalent";
       allowedEgress: readonly NetworkDestination[];
       allowedIngressSourceCidrs: readonly string[];
       managementDenyRules: readonly NetworkDenyRule[];
-      enforcement: "docker_iptables";
+      enforcement: "docker_iptables" | "tart_agent";
       verificationRequired: true;
     }>;
     mounts: readonly ResolvedStorageMount[];
@@ -100,6 +106,7 @@ export type OwnedResource = Readonly<{
   id: string;
   kind:
     | "container"
+    | "vm"
     | "network_policy"
     | "endpoint"
     | "storage_reference"
@@ -181,7 +188,7 @@ export type CleanupReceipt = Readonly<{
 }>;
 
 export type CreateEffect = Readonly<{
-  kind: "network_policy" | "volume" | "container";
+  kind: "network_policy" | "volume" | "container" | "vm";
   name: string;
   requestHash: string;
 }>;

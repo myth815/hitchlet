@@ -19,7 +19,7 @@ export class SQLiteOperationStore {
     now: number,
   ): Promise<Row[]> {
     return this.db.all<Row>(
-      "SELECT id FROM operations WHERE kind IN ('allocation.provision','allocation.cleanup') AND json_extract(intent_json,'$.executionMode') IN ('simulator','portainer') AND (installation_id=? OR installation_id IS NULL) AND controller_epoch<=? AND (?=(SELECT controller_epoch FROM installations WHERE singleton=1) OR (json_extract(intent_json,'$.executionMode')='simulator' AND NOT EXISTS(SELECT 1 FROM installations))) AND ((state IN ('planned','unknown','failed') AND next_check_at_ms<=?) OR (state='running' AND locked_until_ms<=?)) ORDER BY next_check_at_ms,id LIMIT 32",
+      "SELECT id FROM operations WHERE kind IN ('allocation.provision','allocation.cleanup') AND json_extract(intent_json,'$.executionMode') IN ('simulator','portainer','tart') AND (installation_id=? OR installation_id IS NULL) AND controller_epoch<=? AND (?=(SELECT controller_epoch FROM installations WHERE singleton=1) OR (json_extract(intent_json,'$.executionMode')='simulator' AND NOT EXISTS(SELECT 1 FROM installations))) AND ((state IN ('planned','unknown','failed') AND next_check_at_ms<=?) OR (state='running' AND locked_until_ms<=?)) ORDER BY next_check_at_ms,id LIMIT 32",
       [installationId, epoch, epoch, now, now],
     );
   }
@@ -287,7 +287,7 @@ export class SQLiteOperationStore {
   }): Promise<Row | undefined> {
     const { operationId, installationId, epoch, token, now } = input;
     const claimed = await this.db.run(
-      "UPDATE operations SET result_json=CASE WHEN kind='allocation.provision' AND json_extract(intent_json,'$.executionMode')='portainer' AND attempt_count=0 THEN json_set(COALESCE(result_json,'{}'),'$.createJournalVersion',1) ELSE result_json END,state='running',controller_epoch=?,owner_token=?,locked_until_ms=?,attempt_count=attempt_count+1,version=version+1,updated_at_ms=? WHERE id=? AND kind IN ('allocation.provision','allocation.cleanup') AND json_extract(intent_json,'$.executionMode') IN ('simulator','portainer') AND (installation_id=? OR installation_id IS NULL) AND controller_epoch<=? AND (?=(SELECT controller_epoch FROM installations WHERE singleton=1) OR (json_extract(intent_json,'$.executionMode')='simulator' AND NOT EXISTS(SELECT 1 FROM installations))) AND ((state IN ('planned','unknown','failed') AND next_check_at_ms<=?) OR (state='running' AND locked_until_ms<=?))",
+      "UPDATE operations SET result_json=CASE WHEN kind='allocation.provision' AND json_extract(intent_json,'$.executionMode') IN ('portainer','tart') AND attempt_count=0 THEN json_set(COALESCE(result_json,'{}'),'$.createJournalVersion',1) ELSE result_json END,state='running',controller_epoch=?,owner_token=?,locked_until_ms=?,attempt_count=attempt_count+1,version=version+1,updated_at_ms=? WHERE id=? AND kind IN ('allocation.provision','allocation.cleanup') AND json_extract(intent_json,'$.executionMode') IN ('simulator','portainer','tart') AND (installation_id=? OR installation_id IS NULL) AND controller_epoch<=? AND (?=(SELECT controller_epoch FROM installations WHERE singleton=1) OR (json_extract(intent_json,'$.executionMode')='simulator' AND NOT EXISTS(SELECT 1 FROM installations))) AND ((state IN ('planned','unknown','failed') AND next_check_at_ms<=?) OR (state='running' AND locked_until_ms<=?))",
       [
         epoch,
         token,
@@ -357,7 +357,7 @@ export class SQLiteOperationStore {
 
   async unknownCreateEffects(allocationId: string): Promise<boolean> {
     return !!(await this.db.get(
-      "SELECT 1 FROM operations o WHERE o.allocation_id=? AND o.kind='allocation.provision' AND ((json_extract(o.intent_json,'$.executionMode')='portainer' AND o.attempt_count>0 AND COALESCE(json_extract(o.result_json,'$.createJournalVersion'),0)<>1) OR EXISTS(SELECT 1 FROM json_each(COALESCE(o.result_json,'{}'),'$.createEffects') e WHERE json_extract(e.value,'$.state')='unknown')) LIMIT 1",
+      "SELECT 1 FROM operations o WHERE o.allocation_id=? AND o.kind='allocation.provision' AND ((json_extract(o.intent_json,'$.executionMode') IN ('portainer','tart') AND o.attempt_count>0 AND COALESCE(json_extract(o.result_json,'$.createJournalVersion'),0)<>1) OR EXISTS(SELECT 1 FROM json_each(COALESCE(o.result_json,'{}'),'$.createEffects') e WHERE json_extract(e.value,'$.state')='unknown')) LIMIT 1",
       [allocationId],
     ));
   }
@@ -437,7 +437,7 @@ export class SQLiteOperationStore {
     ];
     if (
       input.ownership === "owned" &&
-      ["network_policy", "volume", "container"].includes(input.kind)
+      ["network_policy", "volume", "container", "vm"].includes(input.kind)
     ) {
       const path = `$.createEffects.${input.kind}`;
       statements.push({
@@ -469,13 +469,13 @@ export class SQLiteOperationStore {
   }
   provisionInputs(allocationId: string): Promise<Row | undefined> {
     return this.db.get<Row>(
-      "SELECT (SELECT COALESCE(json_extract(o.intent_json,'$.runtimeConfig'),json_extract(o.intent_json,'$.executionSnapshot.config')) FROM operations o WHERE o.allocation_id=a.id AND o.kind='allocation.provision') AS frozen_config_json,a.purpose,COALESCE(t.request_json,json_extract(v.accepted_contract_json,'$.request')) AS request_json,COALESCE(t.accepted_contract_json,v.accepted_contract_json) AS accepted_contract_json,a.node_id,a.resolved_provision_contract_id,a.runtime_identity_id,CASE WHEN a.purpose='validation' THEN json_extract(v.accepted_contract_json,'$.artifactRef') ELSE art.artifact_ref END AS artifact_ref,CASE WHEN a.purpose='validation' THEN json_extract(v.accepted_contract_json,'$.digest') ELSE art.content_digest END AS content_digest,CASE WHEN a.purpose='validation' THEN json_extract(v.accepted_contract_json,'$.requirements') ELSE art.requirements_json END AS requirements_json,CASE WHEN a.purpose='validation' THEN json_extract(v.accepted_contract_json,'$.access') ELSE art.access_recipe_json END AS access_recipe_json FROM allocations a LEFT JOIN tickets t ON a.ticket_id=t.id LEFT JOIN image_validations v ON v.id=a.image_validation_id JOIN image_artifacts art ON art.id=a.image_artifact_id WHERE a.id=?",
+      "SELECT (SELECT COALESCE(json_extract(o.intent_json,'$.runtimeConfig'),json_extract(o.intent_json,'$.executionSnapshot.config')) FROM operations o WHERE o.allocation_id=a.id AND o.kind='allocation.provision') AS frozen_config_json,a.purpose,COALESCE(t.request_json,json_extract(v.accepted_contract_json,'$.request')) AS request_json,COALESCE(t.accepted_contract_json,v.accepted_contract_json) AS accepted_contract_json,a.node_id,a.resolved_provision_contract_id,a.runtime_identity_id,CASE WHEN a.purpose='validation' THEN json_extract(v.accepted_contract_json,'$.artifactRef') ELSE art.artifact_ref END AS artifact_ref,CASE WHEN a.purpose='validation' THEN json_extract(v.accepted_contract_json,'$.digest') ELSE art.content_digest END AS content_digest,art.guest_os,art.architecture,CASE WHEN a.purpose='validation' THEN json_extract(v.accepted_contract_json,'$.requirements') ELSE art.requirements_json END AS requirements_json,CASE WHEN a.purpose='validation' THEN json_extract(v.accepted_contract_json,'$.access') ELSE art.access_recipe_json END AS access_recipe_json FROM allocations a LEFT JOIN tickets t ON a.ticket_id=t.id LEFT JOIN image_validations v ON v.id=a.image_validation_id JOIN image_artifacts art ON art.id=a.image_artifact_id WHERE a.id=?",
       [allocationId],
     );
   }
   cleanupResources(allocationId: string, generation: number): Promise<Row[]> {
     return this.db.all<Row>(
-      "SELECT COALESCE(provider_id,id) AS id,kind,ownership,ownership_json,details_json FROM managed_resources WHERE allocation_id=? AND generation=? AND ownership='owned' ORDER BY CASE kind WHEN 'container' THEN 1 WHEN 'network_policy' THEN 2 ELSE 3 END,id",
+      "SELECT COALESCE(provider_id,id) AS id,kind,ownership,ownership_json,details_json FROM managed_resources WHERE allocation_id=? AND generation=? AND ownership='owned' ORDER BY CASE kind WHEN 'container' THEN 1 WHEN 'vm' THEN 1 WHEN 'network_policy' THEN 2 ELSE 3 END,id",
       [allocationId, generation],
     );
   }
@@ -549,7 +549,7 @@ export class SQLiteOperationStore {
     if (!reason.trim() || reason.length > 500)
       throw new RangeError("Retry reason must contain 1-500 characters");
     const operation = await this.db.get<Row>(
-      "SELECT o.version,o.attempt_count,a.ticket_id,a.image_validation_id,COALESCE(t.version,v.version) AS subject_version FROM operations o JOIN allocations a ON a.id=o.allocation_id LEFT JOIN tickets t ON t.id=a.ticket_id LEFT JOIN image_validations v ON v.id=a.image_validation_id WHERE o.id=? AND o.state='failed' AND o.kind IN ('allocation.provision','allocation.cleanup') AND json_extract(o.intent_json,'$.executionMode') IN ('simulator','portainer')",
+      "SELECT o.version,o.attempt_count,a.ticket_id,a.image_validation_id,COALESCE(t.version,v.version) AS subject_version FROM operations o JOIN allocations a ON a.id=o.allocation_id LEFT JOIN tickets t ON t.id=a.ticket_id LEFT JOIN image_validations v ON v.id=a.image_validation_id WHERE o.id=? AND o.state='failed' AND o.kind IN ('allocation.provision','allocation.cleanup') AND json_extract(o.intent_json,'$.executionMode') IN ('simulator','portainer','tart')",
       [operationId],
     );
     if (!operation)
@@ -565,7 +565,7 @@ export class SQLiteOperationStore {
     await this.db.batchTransaction([
       {
         kind: "run",
-        sql: "UPDATE operations SET state='unknown',attempt_count=CASE WHEN json_extract(intent_json,'$.executionMode')='portainer' AND COALESCE(json_extract(result_json,'$.createJournalVersion'),0)<>1 THEN MAX(attempt_count,1) ELSE 0 END,next_check_at_ms=?,owner_token=NULL,locked_until_ms=NULL,result_json=json_patch(COALESCE(result_json,'{}'),json(?)),version=version+1,updated_at_ms=? WHERE id=? AND state='failed' AND version=?",
+        sql: "UPDATE operations SET state='unknown',attempt_count=CASE WHEN json_extract(intent_json,'$.executionMode') IN ('portainer','tart') AND COALESCE(json_extract(result_json,'$.createJournalVersion'),0)<>1 THEN MAX(attempt_count,1) ELSE 0 END,next_check_at_ms=?,owner_token=NULL,locked_until_ms=NULL,result_json=json_patch(COALESCE(result_json,'{}'),json(?)),version=version+1,updated_at_ms=? WHERE id=? AND state='failed' AND version=?",
         params: [
           now,
           JSON.stringify({
@@ -772,7 +772,7 @@ export class SQLiteOperationStore {
       },
       {
         kind: "run",
-        sql: "UPDATE allocations SET observed_state='absent',cleanup_status='complete',manifest_complete=CASE WHEN manifest_id IS NULL THEN 0 ELSE 1 END,version=version+1,updated_at_ms=? WHERE id=? AND desired_state='absent' AND control_version=? AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.allocation_id=allocations.id AND o.kind='allocation.provision' AND ((json_extract(o.intent_json,'$.executionMode')='portainer' AND o.attempt_count>0 AND COALESCE(json_extract(o.result_json,'$.createJournalVersion'),0)<>1) OR EXISTS(SELECT 1 FROM json_each(COALESCE(o.result_json,'{}'),'$.createEffects') e WHERE json_extract(e.value,'$.state')='unknown')))",
+        sql: "UPDATE allocations SET observed_state='absent',cleanup_status='complete',manifest_complete=CASE WHEN manifest_id IS NULL THEN 0 ELSE 1 END,version=version+1,updated_at_ms=? WHERE id=? AND desired_state='absent' AND control_version=? AND NOT EXISTS(SELECT 1 FROM operations o WHERE o.allocation_id=allocations.id AND o.kind='allocation.provision' AND ((json_extract(o.intent_json,'$.executionMode') IN ('portainer','tart') AND o.attempt_count>0 AND COALESCE(json_extract(o.result_json,'$.createJournalVersion'),0)<>1) OR EXISTS(SELECT 1 FROM json_each(COALESCE(o.result_json,'{}'),'$.createEffects') e WHERE json_extract(e.value,'$.state')='unknown')))",
         params: [now, allocationId, controlVersion],
         expectChanges: 1,
       },

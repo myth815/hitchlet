@@ -13,6 +13,22 @@ import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 import { promisify } from "node:util";
 import { z } from "zod";
+import {
+  tartAllocationOwnerTuple,
+  tartAllocationIdentitySchema,
+  tartGuestBootstrapReceiptSchema,
+  tartGuestBootstrapRequestSchema,
+  tartLocalTemplateRefSchema,
+  tartReconcileRequestSchema,
+  tartResourceSpecSchema,
+  type TartAllocationIdentity,
+  type TartGuestBootstrapReceipt,
+  type TartGuestBootstrapRequest,
+  type TartInspection,
+  type TartLocalTemplateRef,
+  type TartReconcileRequest,
+  type TartResourceSpec,
+} from "@hitchlet/contracts/internal";
 
 const execFileAsync = promisify(execFile);
 const SHORT_COMMAND_MS = 15_000;
@@ -22,79 +38,67 @@ const IP_POLL_MS = 1_000;
 const RUN_EXIT_MS = 5_000;
 const MAX_OUTPUT = 1024 * 1024;
 
-const inputSchema = z
+const manifestBase = {
+  version: z.literal(2),
+  identity: tartAllocationIdentitySchema,
+  highestControlVersion: z.number().int().positive(),
+  vmName: z.string(),
+  home: z
+    .object({ path: z.string(), device: z.string(), inode: z.string() })
+    .strict(),
+};
+const ownedManifestSchema = z
   .object({
-    allocationId: z.string().min(1).max(128),
-    generation: z.number().int().positive().max(2_147_483_647),
-    ownerId: z.string().min(1).max(128),
-    templateName: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
-    cpus: z.number().int().min(1).max(64),
-    memoryMiB: z.number().int().min(512).max(1_048_576),
-  })
-  .strict();
-
-const manifestSchema = z
-  .object({
-    version: z.literal(1),
-    allocationId: z.string(),
-    generation: z.number().int().positive(),
-    ownerId: z.string(),
-    templateName: z.string(),
-    vmName: z.string(),
+    ...manifestBase,
     phase: z.enum(["clone_intent", "owned", "deleting"]),
-    cpus: z.number().int().min(1).max(64),
-    memoryMiB: z.number().int().min(512).max(1_048_576),
-    home: z
-      .object({ path: z.string(), device: z.string(), inode: z.string() })
-      .strict(),
-    template: z
+    resources: tartResourceSpecSchema,
+    templateRef: tartLocalTemplateRefSchema,
+    templateIdentity: z
       .object({
         device: z.string(),
         inode: z.string(),
-        configSha256: z.string().regex(/^[a-f0-9]{64}$/),
-        guestOS: z.enum(["darwin", "linux"]),
-        arch: z.literal("arm64"),
+        macAddress: z.string().regex(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i),
       })
       .strict()
       .optional(),
-    identity: z
+    instance: z
       .object({
         device: z.string(),
         inode: z.string(),
         macAddress: z.string().regex(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i),
         guestOS: z.enum(["darwin", "linux"]),
         arch: z.literal("arm64"),
-        cpus: z.number().int().positive(),
-        memoryBytes: z.number().int().positive(),
       })
       .strict()
       .optional(),
+    bootstrapRequest: tartGuestBootstrapRequestSchema.optional(),
+    bootstrapReceipt: tartGuestBootstrapReceiptSchema.optional(),
   })
   .strict();
+const releasedTombstoneSchema = z
+  .object({ ...manifestBase, phase: z.literal("released") })
+  .strict();
+const manifestSchema = z.union([ownedManifestSchema, releasedTombstoneSchema]);
 
-type Input = z.infer<typeof inputSchema>;
-type Manifest = z.infer<typeof manifestSchema>;
+type Manifest = z.infer<typeof ownedManifestSchema>;
+type ReleasedTombstone = z.infer<typeof releasedTombstoneSchema>;
+type StoredManifest = Manifest | ReleasedTombstone;
 type InventoryRow = {
   Source: string;
   Name: string;
   Running: boolean;
   State: string;
 };
-type Identity = {
+type TartInstanceIdentity = {
   device: string;
   inode: string;
   macAddress: string;
   guestOS: "darwin" | "linux";
   arch: "arm64";
-  cpus: number;
-  memoryBytes: number;
 };
 type TemplateFacts = {
-  device: string;
-  inode: string;
-  configSha256: string;
-  guestOS: "darwin" | "linux";
-  arch: "arm64";
+  ref: TartLocalTemplateRef;
+  identity: { device: string; inode: string; macAddress: string };
 };
 type RunningChild = { child: ChildProcess; exit: Promise<void> };
 
@@ -106,13 +110,6 @@ export type TartDriverOptions = Readonly<{
   /** Absolute executable path. Production callers fix this to their installed Tart binary. */
   executable: string;
 }>;
-
-export type TartProvisionResult =
-  | Readonly<{ status: "observed_with_ip"; vmName: string; ipAddress: string }>
-  | Readonly<{ status: "unknown"; reason: string }>;
-export type TartDeleteResult =
-  | Readonly<{ status: "absent" }>
-  | Readonly<{ status: "unknown"; reason: string }>;
 
 /**
  * Finite, local Tart CLI adapter for macOS arm64. This is not a controller
@@ -162,16 +159,38 @@ export class TartLocalDriver {
     };
   }
 
-  provision(rawInput: unknown): Promise<TartProvisionResult> {
-    const input = inputSchema.parse(rawInput);
-    const key = this.operationKey(input);
-    return this.exclusive(key, () => this.provisionOwned(input));
+  inspect(rawIdentity: unknown): Promise<TartInspection> {
+    const identity = tartAllocationIdentitySchema.parse(rawIdentity);
+    return this.exclusive(ownerKey(identity), () =>
+      this.inspectOwned(identity),
+    );
   }
 
-  destroy(rawInput: unknown): Promise<TartDeleteResult> {
-    const input = inputSchema.parse(rawInput);
-    const key = this.operationKey(input);
-    return this.exclusive(key, () => this.destroyOwned(input));
+  reconcile(rawRequest: unknown): Promise<TartInspection> {
+    const request = tartReconcileRequestSchema.parse(rawRequest);
+    return this.exclusive(ownerKey(request.identity), () =>
+      this.reconcileOwned(request),
+    );
+  }
+
+  destroy(rawIdentity: unknown): Promise<TartInspection> {
+    const identity = tartAllocationIdentitySchema.parse(rawIdentity);
+    return this.exclusive(ownerKey(identity), () =>
+      this.destroyOwned(identity),
+    );
+  }
+
+  recordBootstrapReceipt(
+    rawIdentity: unknown,
+    rawRequest: unknown,
+    rawReceipt: unknown,
+  ): Promise<TartInspection> {
+    const identity = tartAllocationIdentitySchema.parse(rawIdentity);
+    const request = tartGuestBootstrapRequestSchema.parse(rawRequest);
+    const receipt = tartGuestBootstrapReceiptSchema.parse(rawReceipt);
+    return this.exclusive(ownerKey(identity), () =>
+      this.recordBootstrapReceiptOwned(identity, request, receipt),
+    );
   }
 
   /** Stop accepting work and wait for in-flight CLI state transitions. Running
@@ -182,10 +201,6 @@ export class TartLocalDriver {
     this.closed = true;
     await Promise.all([...this.operations.values()]);
     return { lastObservedOwnedRunningVMs: [...this.ownedRunningVMs] };
-  }
-
-  private operationKey(input: Input): string {
-    return `${input.allocationId}:${input.generation}`;
   }
 
   private async exclusive<T>(key: string, work: () => Promise<T>): Promise<T> {
@@ -207,208 +222,440 @@ export class TartLocalDriver {
     }
   }
 
-  private async provisionOwned(input: Input): Promise<TartProvisionResult> {
+  private async reconcileOwned(
+    request: TartReconcileRequest,
+  ): Promise<TartInspection> {
     await this.prepareDirectories();
-    const vmName = this.vmName(input);
-    const manifestPath = this.manifestPath(input);
+    const { identity } = request;
+    const vmName = this.vmName(identity);
+    const manifestPath = this.manifestPath(identity);
     let manifest = await this.readManifest(manifestPath);
-    if (manifest && !this.matchesInput(manifest, input, vmName))
-      return {
-        status: "unknown",
-        reason: "manifest_owner_or_generation_mismatch",
-      };
-    if (manifest?.phase === "deleting")
-      return { status: "unknown", reason: "deletion_already_in_progress" };
-    if (manifest && !(await this.matchesHome(manifest)))
-      return { status: "unknown", reason: "tart_home_identity_changed" };
+    const freshIntent = manifest === undefined;
 
-    const newIntent = manifest === undefined;
+    if (manifest && !sameOwner(manifest.identity, identity))
+      return unknown(identity, "manifest_owner_mismatch");
+    if (manifest && !(await this.matchesHome(manifest)))
+      return unknown(identity, "tart_home_identity_changed");
+    if (manifest?.phase === "released") return this.inspectOwned(identity);
+    if (manifest?.phase === "deleting")
+      return unknown(identity, "deletion_in_progress");
+    if (manifest && !acceptsFence(manifest, identity))
+      return unknown(identity, "stale_control_fence");
+
     if (!manifest) {
       const inventory = await this.inventory();
       if (inventory.status !== "complete")
-        return { status: "unknown", reason: "inventory_incomplete" };
+        return unknown(identity, "inventory_incomplete");
       if (inventory.names.has(vmName))
-        return { status: "unknown", reason: "unmanifested_vm_name_collision" };
-      if (!inventory.names.has(input.templateName))
-        return { status: "unknown", reason: "local_template_not_found" };
-      const template = await this.readTemplateFacts(input.templateName);
-      if (!template)
-        return {
-          status: "unknown",
-          reason: "local_template_identity_unavailable",
-        };
+        return unknown(identity, "unmanifested_vm_name_collision");
+      if (!inventory.names.has(request.template.name))
+        return unknown(identity, "local_template_not_found");
+      const templateRow = inventory.rows.find(
+        (item) => item.Name === request.template.name,
+      );
+      if (
+        !templateRow ||
+        templateRow.Source !== "local" ||
+        templateRow.Running ||
+        templateRow.State !== "stopped"
+      )
+        return unknown(identity, "template_not_stopped");
+      const template = await this.readTemplateFacts(request.template.name);
+      if (!template || !sameTemplateRef(template.ref, request.template))
+        return unknown(identity, "local_template_proof_mismatch");
       manifest = {
-        version: 1,
-        allocationId: input.allocationId,
-        generation: input.generation,
-        ownerId: input.ownerId,
-        templateName: input.templateName,
-        cpus: input.cpus,
-        memoryMiB: input.memoryMiB,
+        version: 2,
+        identity,
+        highestControlVersion: identity.controlVersion,
         vmName,
         phase: "clone_intent",
+        resources: request.resources,
         home: await this.homeIdentity(),
-        template,
+        templateRef: template.ref,
+        templateIdentity: template.identity,
       };
       await this.writeManifest(manifestPath, manifest);
     }
 
     if (manifest.phase === "clone_intent") {
-      if (!newIntent)
-        return {
-          status: "unknown",
-          reason: "interrupted_clone_identity_not_recorded",
-        };
+      if (!freshIntent)
+        return unknown(identity, "interrupted_clone_identity_not_recorded");
       const inventory = await this.inventory();
       if (inventory.status !== "complete")
-        return { status: "unknown", reason: "inventory_incomplete" };
-      // A clone can finish while the process is interrupted before identity is
-      // durably recorded. Name coincidence is not proof of ownership.
+        return unknown(identity, "inventory_incomplete");
       if (inventory.names.has(vmName))
-        return { status: "unknown", reason: "clone_identity_not_recorded" };
-      if (!inventory.names.has(input.templateName))
-        return { status: "unknown", reason: "local_template_not_found" };
-      const currentTemplate = await this.readTemplateFacts(input.templateName);
+        return unknown(identity, "clone_identity_not_recorded");
+      const templateRow = inventory.rows.find(
+        (item) => item.Name === request.template.name,
+      );
       if (
-        !manifest.template ||
-        !currentTemplate ||
-        !sameTemplate(manifest.template, currentTemplate)
+        !templateRow ||
+        templateRow.Source !== "local" ||
+        templateRow.Running ||
+        templateRow.State !== "stopped"
       )
-        return { status: "unknown", reason: "template_identity_changed" };
+        return unknown(identity, "template_not_stopped");
+      const template = await this.readTemplateFacts(request.template.name);
+      if (
+        !template ||
+        !sameTemplateRef(manifest.templateRef, request.template) ||
+        !sameTemplateFacts(
+          manifest.templateRef,
+          manifest.templateIdentity,
+          template,
+        )
+      )
+        return unknown(identity, "template_identity_changed");
+
       await this.runShort(
-        ["clone", input.templateName, vmName],
+        ["clone", request.template.name, vmName],
         CLONE_COMMAND_MS,
       );
+      // Persist immutable instance facts before any mutable configuration command.
+      const instance = await this.readInstanceIdentity(vmName);
+      if (!instance) return unknown(identity, "cloned_vm_identity_unavailable");
+      const templateIdentity = manifest.templateIdentity;
+      if (!templateIdentity)
+        return unknown(identity, "template_identity_missing");
+      manifest = { ...manifest, phase: "owned", instance };
+      await this.writeManifest(manifestPath, manifest);
+      if (instance.macAddress === templateIdentity.macAddress)
+        return unknown(identity, "clone_mac_not_regenerated");
+    }
+
+    const ownedInstance = manifest.instance;
+    if (!ownedInstance)
+      return unknown(identity, "manifest_instance_identity_missing");
+    const currentTemplate = await this.readTemplateFacts(request.template.name);
+    if (
+      !currentTemplate ||
+      !sameTemplateRef(manifest.templateRef, request.template) ||
+      !sameTemplateFacts(
+        manifest.templateRef,
+        manifest.templateIdentity,
+        currentTemplate,
+      )
+    )
+      return unknown(identity, "template_identity_changed");
+    if ((await this.verifyOwned(manifest)) !== "present")
+      return unknown(identity, "owned_vm_identity_or_inventory_mismatch");
+    if (
+      !manifest.templateIdentity ||
+      ownedInstance.macAddress === manifest.templateIdentity.macAddress
+    )
+      return unknown(identity, "clone_mac_not_regenerated");
+
+    if (manifest.identity.controlVersion < identity.controlVersion) {
+      manifest = {
+        ...manifest,
+        identity,
+        highestControlVersion: identity.controlVersion,
+        resources: request.resources,
+      };
+      await this.writeManifest(manifestPath, manifest);
+    } else {
+      if (!sameActionIdentity(manifest.identity, identity))
+        return unknown(identity, "operation_fence_mismatch");
+      if (!sameResources(manifest.resources, request.resources))
+        return unknown(identity, "operation_resource_mismatch");
+    }
+
+    if (request.bootstrap) {
+      if (!sameActionIdentity(request.bootstrap.identity, identity))
+        return unknown(identity, "bootstrap_action_identity_mismatch");
+      if (!validBootstrapPublicKeyFingerprints(request.bootstrap))
+        return unknown(identity, "bootstrap_public_key_fingerprint_mismatch");
+      if (
+        manifest.bootstrapRequest &&
+        JSON.stringify(manifest.bootstrapRequest) !==
+          JSON.stringify(request.bootstrap)
+      )
+        return unknown(identity, "bootstrap_request_changed");
+      if (!manifest.bootstrapRequest) {
+        manifest = { ...manifest, bootstrapRequest: request.bootstrap };
+        await this.writeManifest(manifestPath, manifest);
+      }
+    }
+
+    let observed = await this.readVmConfiguration(vmName);
+    if (!observed)
+      return unknown(identity, "owned_vm_configuration_unavailable");
+    if (!sameResources(observed.resources, request.resources)) {
       await this.runShort([
         "set",
         vmName,
         "--cpu",
-        String(input.cpus),
+        String(request.resources.cpus),
         "--memory",
-        String(input.memoryMiB),
-        "--random-mac",
+        String(request.resources.memoryMiB),
       ]);
-      const identity = await this.readIdentity(vmName);
+      observed = await this.readVmConfiguration(vmName);
+      const afterSet = await this.readInstanceIdentity(vmName);
       if (
-        !identity ||
-        identity.guestOS !== manifest.template.guestOS ||
-        identity.arch !== manifest.template.arch
+        !observed ||
+        !afterSet ||
+        !sameInstanceIdentity(ownedInstance, afterSet) ||
+        !sameResources(observed.resources, request.resources)
       )
-        return { status: "unknown", reason: "cloned_vm_identity_unavailable" };
-      if (
-        identity.cpus !== input.cpus ||
-        identity.memoryBytes !== input.memoryMiB * 1024 * 1024
-      )
-        return {
-          status: "unknown",
-          reason: "cloned_vm_resources_do_not_match_request",
-        };
-      manifest = { ...manifest, phase: "owned", identity };
-      await this.writeManifest(manifestPath, manifest);
+        return unknown(identity, "vm_resource_configuration_unverified");
     }
 
-    if (!manifest.identity)
-      return { status: "unknown", reason: "manifest_identity_missing" };
-    const currentTemplate = await this.readTemplateFacts(input.templateName);
-    if (
-      !manifest.template ||
-      !currentTemplate ||
-      !sameTemplate(manifest.template, currentTemplate)
-    )
-      return { status: "unknown", reason: "template_identity_changed" };
-    const verified = await this.verifyOwned(manifest);
-    if (verified !== "present")
-      return { status: "unknown", reason: `owned_vm_${verified}` };
     const inventory = await this.inventory();
     if (inventory.status !== "complete")
-      return { status: "unknown", reason: "inventory_incomplete" };
+      return unknown(identity, "inventory_incomplete");
     const row = inventory.rows.find((item) => item.Name === vmName);
     if (!row || row.Source !== "local")
-      return {
-        status: "unknown",
-        reason: "owned_vm_missing_from_cli_inventory",
-      };
+      return unknown(identity, "owned_vm_missing_from_cli_inventory");
     if (!row.Running) await this.startRun(vmName);
     const ipAddress = await this.discoverIp(vmName);
-    if (!ipAddress)
-      return {
-        status: "unknown",
-        reason: "guest_ip_not_observed_before_deadline",
-      };
-    this.ownedRunningVMs.add(vmName);
-    return { status: "observed_with_ip", vmName, ipAddress };
+    if (ipAddress) this.ownedRunningVMs.add(vmName);
+    return this.inspectOwned(identity);
   }
 
-  private async destroyOwned(input: Input): Promise<TartDeleteResult> {
+  private async recordBootstrapReceiptOwned(
+    identity: TartAllocationIdentity,
+    request: TartGuestBootstrapRequest,
+    receipt: TartGuestBootstrapReceipt,
+  ): Promise<TartInspection> {
     await this.prepareDirectories();
-    const manifestPath = this.manifestPath(input);
-    const manifest = await this.readManifest(manifestPath);
-    if (
-      !manifest ||
-      !this.matchesInput(manifest, input, this.vmName(input)) ||
-      !manifest.identity
-    )
-      return {
-        status: "unknown",
-        reason: "owned_manifest_or_identity_missing",
-      };
+    const manifestPath = this.manifestPath(identity);
+    let manifest = await this.readManifest(manifestPath);
+    if (!manifest || !sameOwner(manifest.identity, identity))
+      return unknown(identity, "bootstrap_manifest_missing");
     if (!(await this.matchesHome(manifest)))
-      return { status: "unknown", reason: "tart_home_identity_changed" };
-    const verified = await this.verifyOwned(manifest);
-    if (verified === "unknown")
-      return { status: "unknown", reason: "inventory_incomplete" };
-    if (verified === "absent") {
-      const inventory = await this.inventory();
+      return unknown(identity, "tart_home_identity_changed");
+    if (
+      manifest.phase !== "owned" ||
+      !manifest.instance ||
+      manifest.highestControlVersion !== identity.controlVersion ||
+      !sameActionIdentity(manifest.identity, identity)
+    )
+      return unknown(identity, "bootstrap_receipt_fence_closed");
+    if (
+      !manifest.bootstrapRequest ||
+      JSON.stringify(manifest.bootstrapRequest) !== JSON.stringify(request) ||
+      !sameActionIdentity(request.identity, identity) ||
+      !sameActionIdentity(receipt.identity, identity) ||
+      receipt.nonce !== request.nonce
+    )
+      return unknown(identity, "bootstrap_request_receipt_mismatch");
+    if (!validBootstrapPublicKeyFingerprints(request))
+      return unknown(identity, "bootstrap_client_key_fingerprint_mismatch");
+    if (receipt.status === "applied") {
+      const evidence = request.networkEvidence;
       if (
-        inventory.status !== "complete" ||
-        inventory.names.has(manifest.vmName)
+        receipt.account !== request.account ||
+        receipt.clientPublicKeyFingerprint !==
+          request.clientPublicKeyFingerprint ||
+        receipt.networkEvidenceReference !== evidence.reference ||
+        receipt.networkEvidenceExpiresAt !== evidence.expiresAt ||
+        Date.parse(receipt.observedAt) > Date.parse(evidence.expiresAt) ||
+        sshPublicKeyFingerprint(receipt.hostPublicKey) !==
+          receipt.hostKeyFingerprint.replace(/=+$/, "")
       )
-        return { status: "unknown", reason: "absence_not_verified" };
-      await rm(manifestPath, { force: true });
-      this.ownedRunningVMs.delete(manifest.vmName);
-      return { status: "absent" };
+        return unknown(identity, "bootstrap_receipt_evidence_mismatch");
     }
+    if (manifest.bootstrapReceipt) {
+      if (JSON.stringify(manifest.bootstrapReceipt) === JSON.stringify(receipt))
+        return this.inspectOwned(identity);
+      if (
+        manifest.bootstrapReceipt.status !== "unknown" ||
+        receipt.status !== "applied"
+      )
+        return unknown(identity, "bootstrap_receipt_conflict");
+    }
+    if ((await this.verifyOwned(manifest)) !== "present")
+      return unknown(identity, "owned_vm_identity_or_inventory_mismatch");
+    manifest = { ...manifest, bootstrapReceipt: receipt };
+    await this.writeManifest(manifestPath, manifest);
+    return this.inspectOwned(identity);
+  }
+
+  private async inspectOwned(
+    identity: TartAllocationIdentity,
+  ): Promise<TartInspection> {
+    await this.prepareDirectories();
+    const manifest = await this.readManifest(this.manifestPath(identity));
+    const vmName = this.vmName(identity);
+    if (!manifest) {
+      const inventory = await this.inventory();
+      if (inventory.status !== "complete")
+        return unknown(identity, "inventory_incomplete");
+      if (inventory.names.has(vmName))
+        return unknown(identity, "unmanifested_vm_name_collision");
+      return {
+        presence: "absent",
+        identity,
+        inventoryCompleteness: "complete",
+      };
+    }
+    if (!sameOwner(manifest.identity, identity))
+      return unknown(identity, "manifest_owner_mismatch");
+    if (!(await this.matchesHome(manifest)))
+      return unknown(identity, "tart_home_identity_changed");
     const inventory = await this.inventory();
     if (inventory.status !== "complete")
-      return { status: "unknown", reason: "inventory_incomplete" };
+      return unknown(identity, "inventory_incomplete");
+    if (!inventory.names.has(manifest.vmName)) {
+      if (manifest.phase === "released")
+        return {
+          presence: "absent",
+          identity: manifest.identity,
+          inventoryCompleteness: "complete",
+        };
+      if (manifest.phase === "clone_intent" || !manifest.instance)
+        return unknown(identity, "clone_identity_not_recorded");
+      await this.writeManifest(
+        this.manifestPath(identity),
+        toTombstone(manifest),
+      );
+      this.ownedRunningVMs.delete(manifest.vmName);
+      return {
+        presence: "absent",
+        identity: manifest.identity,
+        inventoryCompleteness: "complete",
+      };
+    }
+    if (manifest.phase === "released")
+      return unknown(identity, "released_vm_still_present");
+    if (manifest.phase === "clone_intent" || !manifest.instance)
+      return unknown(identity, "clone_identity_not_recorded");
+    if ((await this.verifyOwned(manifest)) !== "present")
+      return unknown(identity, "owned_vm_identity_or_inventory_mismatch");
     const row = inventory.rows.find((item) => item.Name === manifest.vmName);
     if (!row || row.Source !== "local")
-      return {
-        status: "unknown",
-        reason: "owned_vm_missing_from_cli_inventory",
-      };
-    await this.writeManifest(manifestPath, { ...manifest, phase: "deleting" });
+      return unknown(identity, "owned_vm_missing_from_cli_inventory");
+    const observed = await this.readVmConfiguration(manifest.vmName);
+    if (!observed)
+      return unknown(identity, "owned_vm_configuration_unavailable");
+    let ipAddress: string | undefined;
     if (row.Running) {
-      await this.runShort(["stop", "--timeout", "5", manifest.vmName]);
+      try {
+        const { stdout } = await this.runShort([
+          "ip",
+          "--wait",
+          "0",
+          manifest.vmName,
+        ]);
+        if (isIPv4(stdout.trim())) ipAddress = stdout.trim();
+      } catch {
+        /* An IP observation is optional, never readiness. */
+      }
+      this.ownedRunningVMs.add(manifest.vmName);
     }
-    if (!(await this.stopRunChild(manifest.vmName)))
-      return { status: "unknown", reason: "run_process_exit_not_observed" };
-    const stopped = await this.inventory();
-    if (stopped.status !== "complete")
-      return { status: "unknown", reason: "inventory_incomplete_after_stop" };
-    const stoppedRow = stopped.rows.find(
-      (item) => item.Name === manifest.vmName,
-    );
+    return {
+      presence: "present",
+      identity: manifest.identity,
+      vmName: manifest.vmName,
+      state: normalizeVmState(row),
+      resources: observed.resources,
+      bootstrapStatus: !manifest.bootstrapRequest
+        ? "not_requested"
+        : (manifest.bootstrapReceipt?.status ?? "pending"),
+      ...(ipAddress ? { ipAddress } : {}),
+      ...(manifest.bootstrapReceipt
+        ? { bootstrapReceipt: manifest.bootstrapReceipt }
+        : {}),
+    };
+  }
+
+  private async destroyOwned(
+    identity: TartAllocationIdentity,
+  ): Promise<TartInspection> {
+    await this.prepareDirectories();
+    let manifest = await this.readManifest(this.manifestPath(identity));
+    const vmName = this.vmName(identity);
+    if (!manifest) {
+      const inventory = await this.inventory();
+      if (inventory.status !== "complete")
+        return unknown(identity, "inventory_incomplete");
+      if (inventory.names.has(vmName))
+        return unknown(identity, "unmanifested_vm_name_collision");
+      await this.writeManifest(this.manifestPath(identity), {
+        version: 2,
+        identity,
+        highestControlVersion: identity.controlVersion,
+        vmName,
+        home: await this.homeIdentity(),
+        phase: "released",
+      });
+      return {
+        presence: "absent",
+        identity,
+        inventoryCompleteness: "complete",
+      };
+    }
+    if (!sameOwner(manifest.identity, identity))
+      return unknown(identity, "manifest_owner_mismatch");
+    if (!(await this.matchesHome(manifest)))
+      return unknown(identity, "tart_home_identity_changed");
+    if (!acceptsFence(manifest, identity))
+      return unknown(identity, "stale_control_fence");
+    if (manifest.phase === "released") {
+      if (identity.controlVersion > manifest.highestControlVersion) {
+        manifest = {
+          ...manifest,
+          identity,
+          highestControlVersion: identity.controlVersion,
+        };
+        await this.writeManifest(this.manifestPath(identity), manifest);
+      }
+      return this.inspectOwned(identity);
+    }
+    if (manifest.phase === "clone_intent" || !manifest.instance)
+      return unknown(identity, "clone_identity_not_recorded");
+
+    manifest = {
+      ...manifest,
+      identity,
+      highestControlVersion: identity.controlVersion,
+      phase: "deleting",
+    };
+    await this.writeManifest(this.manifestPath(identity), manifest);
+    let inventory = await this.inventory();
+    if (inventory.status !== "complete")
+      return unknown(identity, "inventory_incomplete");
+    if (!inventory.names.has(vmName)) {
+      manifest = toTombstone(manifest);
+      await this.writeManifest(this.manifestPath(identity), manifest);
+      this.ownedRunningVMs.delete(vmName);
+      return {
+        presence: "absent",
+        identity,
+        inventoryCompleteness: "complete",
+      };
+    }
+    if ((await this.verifyOwned(manifest)) !== "present")
+      return unknown(identity, "owned_vm_identity_or_inventory_mismatch");
+    const row = inventory.rows.find((item) => item.Name === vmName);
+    if (!row || row.Source !== "local")
+      return unknown(identity, "owned_vm_missing_from_cli_inventory");
+    if (row.Running) await this.runShort(["stop", "--timeout", "5", vmName]);
+    if (!(await this.stopRunChild(vmName)))
+      return unknown(identity, "run_process_exit_not_observed");
+    inventory = await this.inventory();
+    if (inventory.status !== "complete")
+      return unknown(identity, "inventory_incomplete_after_stop");
+    const stoppedRow = inventory.rows.find((item) => item.Name === vmName);
     if (
       !stoppedRow ||
       stoppedRow.Source !== "local" ||
       stoppedRow.Running ||
       stoppedRow.State !== "stopped"
     )
-      return { status: "unknown", reason: "vm_stop_not_verified" };
-    // Recheck immutable local identity immediately before the destructive CLI call.
+      return unknown(identity, "vm_stop_not_verified");
     if ((await this.verifyOwned(manifest)) !== "present")
-      return {
-        status: "unknown",
-        reason: "owned_vm_identity_changed_before_delete",
-      };
-    await this.runShort(["delete", manifest.vmName]);
-    const after = await this.inventory();
-    if (after.status !== "complete" || after.names.has(manifest.vmName))
-      return { status: "unknown", reason: "deletion_absence_not_verified" };
-    await rm(manifestPath, { force: true });
-    this.ownedRunningVMs.delete(manifest.vmName);
-    return { status: "absent" };
+      return unknown(identity, "owned_vm_identity_changed_before_delete");
+    await this.runShort(["delete", vmName]);
+    inventory = await this.inventory();
+    if (inventory.status !== "complete")
+      return unknown(identity, "inventory_incomplete_after_delete");
+    if (inventory.names.has(vmName))
+      return unknown(identity, "deletion_absence_not_verified");
+    manifest = toTombstone(manifest);
+    await this.writeManifest(this.manifestPath(identity), manifest);
+    this.ownedRunningVMs.delete(vmName);
+    return { presence: "absent", identity, inventoryCompleteness: "complete" };
   }
 
   private async prepareDirectories(): Promise<void> {
@@ -436,7 +683,7 @@ export class TartLocalDriver {
     };
   }
 
-  private async matchesHome(manifest: Manifest): Promise<boolean> {
+  private async matchesHome(manifest: StoredManifest): Promise<boolean> {
     const current = await this.homeIdentity();
     return (
       current.path === manifest.home.path &&
@@ -445,38 +692,22 @@ export class TartLocalDriver {
     );
   }
 
-  private vmName(input: Input): string {
-    const identity = createHash("sha256")
-      .update(`${input.ownerId}\0${input.allocationId}\0${input.generation}`)
+  private vmName(identity: TartAllocationIdentity): string {
+    const key = createHash("sha256")
+      .update(ownerKey(identity))
       .digest("hex")
       .slice(0, 32);
-    return `hitchlet-${identity}`;
+    return `hitchlet-${key}`;
   }
 
-  private manifestPath(input: Input): string {
-    const key = createHash("sha256")
-      .update(`${input.ownerId}\0${input.allocationId}\0${input.generation}`)
-      .digest("hex");
+  private manifestPath(identity: TartAllocationIdentity): string {
+    const key = createHash("sha256").update(ownerKey(identity)).digest("hex");
     return join(this.manifestRoot, `${key}.json`);
   }
 
-  private matchesInput(
-    manifest: Manifest,
-    input: Input,
-    vmName: string,
-  ): boolean {
-    return (
-      manifest.allocationId === input.allocationId &&
-      manifest.generation === input.generation &&
-      manifest.ownerId === input.ownerId &&
-      manifest.templateName === input.templateName &&
-      manifest.vmName === vmName &&
-      manifest.cpus === input.cpus &&
-      manifest.memoryMiB === input.memoryMiB
-    );
-  }
-
-  private async readManifest(path: string): Promise<Manifest | undefined> {
+  private async readManifest(
+    path: string,
+  ): Promise<StoredManifest | undefined> {
     try {
       return manifestSchema.parse(JSON.parse(await readFile(path, "utf8")));
     } catch (error) {
@@ -485,7 +716,10 @@ export class TartLocalDriver {
     }
   }
 
-  private async writeManifest(path: string, manifest: Manifest): Promise<void> {
+  private async writeManifest(
+    path: string,
+    manifest: StoredManifest,
+  ): Promise<void> {
     const tmp = `${path}.${randomUUID()}.tmp`;
     const file = await open(tmp, "wx", 0o600);
     try {
@@ -552,39 +786,54 @@ export class TartLocalDriver {
     }
   }
 
-  private async readIdentity(vmName: string): Promise<Identity | undefined> {
+  private async readInstanceIdentity(
+    vmName: string,
+  ): Promise<TartInstanceIdentity | undefined> {
     try {
       const directory = join(this.vmRoot, vmName);
       const [directoryStat, configText] = await Promise.all([
         stat(directory),
         readFile(join(directory, "config.json"), "utf8"),
       ]);
-      const config: unknown = JSON.parse(configText);
+      const parsed: unknown = JSON.parse(configText);
+      if (typeof parsed !== "object" || parsed === null) return undefined;
+      const config = parsed as Record<string, unknown>;
       if (
-        typeof config !== "object" ||
-        config === null ||
-        typeof (config as Record<string, unknown>).macAddress !== "string" ||
-        typeof (config as Record<string, unknown>).cpuCount !== "number" ||
-        typeof (config as Record<string, unknown>).memorySize !== "number" ||
-        !["darwin", "linux"].includes(
-          String((config as Record<string, unknown>).os),
-        ) ||
-        (config as Record<string, unknown>).arch !== "arm64"
+        typeof config.macAddress !== "string" ||
+        !/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(config.macAddress) ||
+        (config.os !== "darwin" && config.os !== "linux") ||
+        config.arch !== "arm64"
       )
-        return undefined;
-      const values = config as Record<string, unknown>;
-      const macAddress = values.macAddress as string;
-      if (!/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(macAddress))
         return undefined;
       return {
         device: String(directoryStat.dev),
         inode: String(directoryStat.ino),
-        macAddress: macAddress.toLowerCase(),
-        guestOS: values.os as "darwin" | "linux",
+        macAddress: config.macAddress.toLowerCase(),
+        guestOS: config.os,
         arch: "arm64",
-        cpus: values.cpuCount as number,
-        memoryBytes: values.memorySize as number,
       };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async readVmConfiguration(
+    vmName: string,
+  ): Promise<{ resources: TartResourceSpec } | undefined> {
+    try {
+      const config: unknown = JSON.parse(
+        await readFile(join(this.vmRoot, vmName, "config.json"), "utf8"),
+      );
+      if (typeof config !== "object" || config === null) return undefined;
+      const value = config as Record<string, unknown>;
+      const parsed = tartResourceSpecSchema.safeParse({
+        cpus: value.cpuCount,
+        memoryMiB:
+          typeof value.memorySize === "number"
+            ? value.memorySize / (1024 * 1024)
+            : undefined,
+      });
+      return parsed.success ? { resources: parsed.data } : undefined;
     } catch {
       return undefined;
     }
@@ -599,20 +848,29 @@ export class TartLocalDriver {
         stat(path),
         readFile(join(path, "config.json"), "utf8"),
       ]);
-      const config: unknown = JSON.parse(configText);
-      if (typeof config !== "object" || config === null) return undefined;
-      const values = config as Record<string, unknown>;
+      const parsed: unknown = JSON.parse(configText);
+      if (typeof parsed !== "object" || parsed === null) return undefined;
+      const config = parsed as Record<string, unknown>;
       if (
-        !["darwin", "linux"].includes(String(values.os)) ||
-        values.arch !== "arm64"
+        (config.os !== "darwin" && config.os !== "linux") ||
+        config.arch !== "arm64" ||
+        typeof config.macAddress !== "string" ||
+        !/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(config.macAddress)
       )
         return undefined;
       return {
-        device: String(directoryStat.dev),
-        inode: String(directoryStat.ino),
-        configSha256: createHash("sha256").update(configText).digest("hex"),
-        guestOS: values.os as "darwin" | "linux",
-        arch: "arm64",
+        ref: {
+          source: "local",
+          name: templateName,
+          guestOS: config.os,
+          guestArch: "arm64",
+          configSha256: createHash("sha256").update(configText).digest("hex"),
+        },
+        identity: {
+          device: String(directoryStat.dev),
+          inode: String(directoryStat.ino),
+          macAddress: config.macAddress.toLowerCase(),
+        },
       };
     } catch {
       return undefined;
@@ -624,20 +882,10 @@ export class TartLocalDriver {
   ): Promise<"present" | "absent" | "unknown"> {
     const inventory = await this.inventory();
     if (inventory.status !== "complete") return "unknown";
-    const exists = inventory.names.has(manifest.vmName);
-    if (!exists) return "absent";
-    if (!manifest.identity) return "unknown";
-    const identity = await this.readIdentity(manifest.vmName);
-    if (
-      !identity ||
-      identity.device !== manifest.identity.device ||
-      identity.inode !== manifest.identity.inode ||
-      identity.macAddress !== manifest.identity.macAddress ||
-      identity.guestOS !== manifest.identity.guestOS ||
-      identity.arch !== manifest.identity.arch ||
-      identity.cpus !== manifest.identity.cpus ||
-      identity.memoryBytes !== manifest.identity.memoryBytes
-    )
+    if (!inventory.names.has(manifest.vmName)) return "absent";
+    if (!manifest.instance) return "unknown";
+    const instance = await this.readInstanceIdentity(manifest.vmName);
+    if (!instance || !sameInstanceIdentity(manifest.instance, instance))
       return "unknown";
     return "present";
   }
@@ -776,14 +1024,143 @@ function isMissing(error: unknown): boolean {
   );
 }
 
-function sameTemplate(left: TemplateFacts, right: TemplateFacts): boolean {
+function ownerKey(identity: TartAllocationIdentity): string {
+  return JSON.stringify(tartAllocationOwnerTuple(identity));
+}
+
+function toTombstone(manifest: Manifest): ReleasedTombstone {
+  return {
+    version: 2,
+    identity: manifest.identity,
+    highestControlVersion: manifest.highestControlVersion,
+    vmName: manifest.vmName,
+    home: manifest.home,
+    phase: "released",
+  };
+}
+
+function sameOwner(
+  left: TartAllocationIdentity,
+  right: TartAllocationIdentity,
+): boolean {
+  return ownerKey(left) === ownerKey(right);
+}
+
+function acceptsFence(
+  manifest: StoredManifest,
+  identity: TartAllocationIdentity,
+): boolean {
+  return (
+    identity.controlVersion > manifest.highestControlVersion ||
+    (identity.controlVersion === manifest.highestControlVersion &&
+      identity.operationId === manifest.identity.operationId)
+  );
+}
+
+function sameActionIdentity(
+  left: TartAllocationIdentity,
+  right: TartAllocationIdentity,
+): boolean {
+  return (
+    sameOwner(left, right) &&
+    left.operationId === right.operationId &&
+    left.controlVersion === right.controlVersion
+  );
+}
+
+function sameResources(
+  left: TartResourceSpec,
+  right: TartResourceSpec,
+): boolean {
+  return left.cpus === right.cpus && left.memoryMiB === right.memoryMiB;
+}
+
+function sameInstanceIdentity(
+  left: TartInstanceIdentity,
+  right: TartInstanceIdentity,
+): boolean {
   return (
     left.device === right.device &&
     left.inode === right.inode &&
-    left.configSha256 === right.configSha256 &&
+    left.macAddress === right.macAddress &&
     left.guestOS === right.guestOS &&
     left.arch === right.arch
   );
+}
+
+function sameTemplateRef(
+  left: TartLocalTemplateRef,
+  right: TartLocalTemplateRef,
+): boolean {
+  return (
+    left.source === right.source &&
+    left.name === right.name &&
+    left.guestOS === right.guestOS &&
+    left.guestArch === right.guestArch &&
+    left.configSha256 === right.configSha256
+  );
+}
+
+function sameTemplateFacts(
+  ref: TartLocalTemplateRef,
+  identity: Manifest["templateIdentity"],
+  actual: TemplateFacts,
+): boolean {
+  return (
+    identity !== undefined &&
+    sameTemplateRef(ref, actual.ref) &&
+    identity.device === actual.identity.device &&
+    identity.inode === actual.identity.inode &&
+    identity.macAddress === actual.identity.macAddress
+  );
+}
+
+function normalizeVmState(
+  row: InventoryRow,
+): "running" | "stopped" | "suspended" {
+  if (row.Running) return "running";
+  return row.State === "suspended" ? "suspended" : "stopped";
+}
+
+function unknown(
+  identity: TartAllocationIdentity,
+  reason: string,
+): TartInspection {
+  return { presence: "unknown", identity, reason };
+}
+
+function isIPv4(value: string): boolean {
+  return (
+    /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) &&
+    value.split(".").every((part) => Number(part) <= 255)
+  );
+}
+
+function validBootstrapPublicKeyFingerprints(
+  request: TartGuestBootstrapRequest,
+): boolean {
+  const actual = sshPublicKeyFingerprint(request.clientPublicKey);
+  return (
+    actual !== undefined &&
+    actual === request.clientPublicKeyFingerprint.replace(/=+$/, "")
+  );
+}
+
+function sshPublicKeyFingerprint(publicKey: string): string | undefined {
+  const [algorithm, encoded] = publicKey.split(" ");
+  if (!algorithm || !encoded) return undefined;
+  const blob = Buffer.from(encoded, "base64");
+  if (blob.length < 8) return undefined;
+  const algorithmLength = blob.readUInt32BE(0);
+  if (algorithmLength < 1 || algorithmLength > blob.length - 4)
+    return undefined;
+  const wireAlgorithm = blob.subarray(4, 4 + algorithmLength).toString("ascii");
+  if (wireAlgorithm !== algorithm) return undefined;
+  const digest = createHash("sha256")
+    .update(blob)
+    .digest("base64")
+    .replace(/=+$/, "");
+  return `SHA256:${digest}`;
 }
 
 function commandBudget(deadlineMs?: number): number {

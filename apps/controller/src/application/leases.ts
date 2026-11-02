@@ -75,7 +75,8 @@ export class LeaseService {
       throw conflict("profile_grant_revoked");
     if (
       row.execution_mode !== "simulator" &&
-      row.execution_mode !== "portainer"
+      row.execution_mode !== "portainer" &&
+      row.execution_mode !== "tart"
     )
       throw conflict("execution_mode_unsupported");
     if (Number(row.generation) !== request.generation)
@@ -178,7 +179,8 @@ export class LeaseService {
         row.phase !== "ready" ||
         row.lease_state !== "active" ||
         (row.execution_mode !== "simulator" &&
-          row.execution_mode !== "portainer") ||
+          row.execution_mode !== "portainer" &&
+          row.execution_mode !== "tart") ||
         Number(row.lease_version) !== Number(row.expected_version) ||
         row.network_revoked === 1 ||
         row.network_revoked === 1n ||

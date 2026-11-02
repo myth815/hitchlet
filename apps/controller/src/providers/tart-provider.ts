@@ -1,0 +1,791 @@
+import { createHash } from "node:crypto";
+import { isIPv4 } from "node:net";
+import ssh2 from "ssh2";
+import {
+  tartGuestBootstrapReceiptSchema,
+  tartGuestBootstrapRequestSchema,
+  tartInspectionSchema,
+  tartLocalTemplateRefSchema,
+  tartAllocationOwnerTuple,
+  type EffectiveResources,
+  type TartAllocationIdentity,
+  type TartGuestBootstrapReceipt,
+  type TartGuestBootstrapRequest,
+  type TartInspection,
+  type TartLocalTemplateRef,
+  type TartReconcileRequest,
+} from "@hitchlet/contracts/internal";
+import { resourceManifest } from "../domain/resource-manifest.js";
+import type { SQLiteAccessMaterialStore } from "../storage/access-material-store.js";
+import type {
+  CleanupReceipt,
+  CreateEffect,
+  ExecutionPort,
+  Inspection,
+  InventoryEvidence,
+  OwnedResource,
+  ProvisionPlan,
+  ReadyReceipt,
+  ResourceJournal,
+} from "./port.js";
+
+const { utils: sshUtils } = ssh2;
+const EVIDENCE_MAX_AGE_MS = 30_000;
+
+export type TartRuntimePort = Readonly<{
+  inspect(identity: TartAllocationIdentity): Promise<TartInspection>;
+  reconcile(request: TartReconcileRequest): Promise<TartInspection>;
+  recordBootstrapReceipt(
+    identity: TartAllocationIdentity,
+    request: TartGuestBootstrapRequest,
+    receipt: TartGuestBootstrapReceipt,
+  ): Promise<TartInspection>;
+  destroy(identity: TartAllocationIdentity): Promise<TartInspection>;
+}>;
+
+export type ResolvedTartRuntime = Readonly<{
+  runtimeIdentityId: string;
+  connectionRevisionId: string;
+  artifactDigest: string;
+  template: TartLocalTemplateRef;
+  runtime: TartRuntimePort;
+}>;
+
+export type TartNetworkEvidence = Readonly<{
+  runtimeIdentityId: string;
+  allocationId: string;
+  generation: number;
+  revisionId: string;
+  contractHash: string;
+  reference: string;
+  verifiedAt: string;
+  expiresAt: string;
+}>;
+
+type TartSshProbeEvidence = Readonly<{
+  authenticated: true;
+  username: string;
+  hostKeyFingerprint: string;
+  clientPublicKeyFingerprint: string;
+  /** Optional authenticated guest observation; scratch remains best-effort. */
+  observedScratchMiB?: number;
+}>;
+
+export type TartExecutionProviderOptions = Readonly<{
+  resolveRuntime(plan: ProvisionPlan): Promise<ResolvedTartRuntime>;
+  accessMaterials: Pick<SQLiteAccessMaterialStore, "getOrCreate">;
+  guestBootstrap: Readonly<{
+    /** Must return the original receipt for the same immutable identity and nonce. */
+    apply(
+      request: TartGuestBootstrapRequest,
+      observedVM: Extract<TartInspection, { presence: "present" }>,
+    ): Promise<TartGuestBootstrapReceipt>;
+  }>;
+  network: Readonly<{
+    /** Return stable reference/expiry for the same frozen plan and VM, bounded by its deadline. */
+    verify(
+      plan: ProvisionPlan,
+      observedVM: Extract<TartInspection, { presence: "present" }>,
+    ): Promise<TartNetworkEvidence>;
+  }>;
+  ssh: Readonly<{
+    /** Resolves only after host-key confirmation and public-key authentication. */
+    verify(
+      input: Readonly<{
+        host: string;
+        port: number;
+        username: string;
+        privateKey: string;
+        hostPublicKey: string;
+        hostKeyFingerprint: string;
+        clientPublicKeyFingerprint: string;
+      }>,
+    ): Promise<TartSshProbeEvidence>;
+  }>;
+  now?: () => number;
+}>;
+
+/** Controller-side Tart adapter. It makes no platform calls except through injected ports. */
+export class TartExecutionProvider implements ExecutionPort {
+  private readonly now: () => number;
+
+  constructor(private readonly options: TartExecutionProviderOptions) {
+    this.now = options.now ?? Date.now;
+  }
+
+  async create(
+    plan: ProvisionPlan,
+    journal: ResourceJournal,
+  ): Promise<readonly OwnedResource[]> {
+    assertSupportedPlan(plan);
+    const resolved = await this.runtime(plan);
+    const identity = tartIdentity(plan);
+    let observed = tartInspectionSchema.parse(
+      await resolved.runtime.inspect(identity),
+    );
+    assertInspectionOwner(observed, identity);
+    if (observed.presence === "unknown")
+      throw new Error("Tart VM ownership is unknown");
+
+    const effect: CreateEffect = {
+      kind: "vm",
+      name: tartVmName(identity),
+      requestHash: sha256({
+        identity,
+        artifactDigest: plan.artifact.digest,
+        template: resolved.template,
+        resources: tartResources(plan),
+      }),
+    };
+    requireJournal(journal);
+    if (observed.presence === "absent") await journal.beforeCreate(effect);
+    else {
+      assertOwnedVmShape(observed, plan);
+      await journal.recordCreated(this.ownedVm(plan, resolved, observed));
+    }
+    await journal.assertActive();
+
+    // Reconcile checks an existing manifest before any clone and repairs only that owned VM.
+    const reconciled = tartInspectionSchema.parse(
+      await resolved.runtime.reconcile({
+        identity,
+        template: resolved.template,
+        resources: tartResources(plan),
+      }),
+    );
+    assertInspectionOwner(reconciled, identity);
+    observed =
+      reconciled.presence === "present"
+        ? reconciled
+        : tartInspectionSchema.parse(await resolved.runtime.inspect(identity));
+    assertInspectionOwner(observed, identity);
+    if (observed.presence !== "present")
+      throw new Error("Tart VM creation outcome is not verified");
+    assertOwnedVmShape(observed, plan);
+    await journal.recordCreated(this.ownedVm(plan, resolved, observed));
+    assertVmObservation(observed, plan, resolved);
+
+    const network = await this.networkEvidence(plan, observed);
+    const access = await this.options.accessMaterials.getOrCreate(
+      identity.allocationId,
+    );
+    const request = makeBootstrapRequest(
+      plan,
+      identity,
+      network,
+      access.publicKey,
+      access.fingerprint,
+    );
+
+    await journal.assertActive();
+    const desired = tartInspectionSchema.parse(
+      await resolved.runtime.reconcile({
+        identity,
+        template: resolved.template,
+        resources: tartResources(plan),
+        bootstrap: request,
+      }),
+    );
+    assertInspectionOwner(desired, identity);
+    // A persisted desired bootstrap may be unknown until its guest receipt is applied.
+    observed =
+      desired.presence === "present"
+        ? desired
+        : tartInspectionSchema.parse(await resolved.runtime.inspect(identity));
+    assertInspectionOwner(observed, identity);
+    if (observed.presence !== "present")
+      throw new Error("Tart VM disappeared during bootstrap preparation");
+    assertOwnedVmShape(observed, plan);
+    const resource = this.ownedVm(plan, resolved, observed, {
+      bootstrapRequest: request,
+      networkEvidence: network,
+    });
+    await journal.recordCreated(resource);
+    return [resource];
+  }
+
+  async inspect(plan: ProvisionPlan): Promise<Inspection> {
+    let resolved: ResolvedTartRuntime;
+    try {
+      assertSupportedPlan(plan);
+      resolved = await this.runtime(plan);
+    } catch {
+      return { presence: "unknown", reason: "runtime_identity_mismatch" };
+    }
+    const identity = tartIdentity(plan);
+    let observed: TartInspection;
+    try {
+      observed = tartInspectionSchema.parse(
+        await resolved.runtime.inspect(identity),
+      );
+    } catch {
+      return { presence: "unknown", reason: "inventory_incomplete" };
+    }
+    if (!inspectionOwnerMatches(observed, identity))
+      return { presence: "unknown", reason: "inventory_incomplete" };
+    if (observed.presence === "unknown")
+      return { presence: "unknown", reason: "inventory_incomplete" };
+    if (observed.presence === "absent")
+      return {
+        presence: "absent",
+        evidence: {
+          completeness: "complete",
+          runtime: runtimeBinding(plan),
+          identity: plan.identity,
+        },
+      };
+    if (!this.vmObservationMatches(observed, plan, resolved))
+      return { presence: "unknown", reason: "inventory_incomplete" };
+    const object = this.ownedVm(plan, resolved, observed);
+    return {
+      presence: "present",
+      evidence: {
+        completeness: "complete",
+        runtime: runtimeBinding(plan),
+        identity: plan.identity,
+        objects: [object],
+      },
+    };
+  }
+
+  async ready(
+    plan: ProvisionPlan,
+    inventory: InventoryEvidence,
+  ): Promise<ReadyReceipt> {
+    assertSupportedPlan(plan);
+    const resolved = await this.runtime(plan);
+    const identity = tartIdentity(plan);
+    assertInventory(plan, inventory, resolved);
+
+    let observed = tartInspectionSchema.parse(
+      await resolved.runtime.inspect(identity),
+    );
+    assertInspectionOwner(observed, identity);
+    if (observed.presence !== "present")
+      throw new Error("Tart VM is not completely present");
+    assertVmObservation(observed, plan, resolved);
+    assertInventoryVmMatches(inventory, this.ownedVm(plan, resolved, observed));
+
+    const network = await this.networkEvidence(plan, observed);
+    const materials = await this.options.accessMaterials.getOrCreate(
+      identity.allocationId,
+    );
+    const request = makeBootstrapRequest(
+      plan,
+      identity,
+      network,
+      materials.publicKey,
+      materials.fingerprint,
+    );
+    const rawReceipt = await this.options.guestBootstrap.apply(
+      request,
+      observed,
+    );
+    const receipt = tartGuestBootstrapReceiptSchema.parse(rawReceipt);
+    assertBootstrapReceipt(receipt, request, plan, this.now());
+
+    const persisted = tartInspectionSchema.parse(
+      await resolved.runtime.recordBootstrapReceipt(identity, request, receipt),
+    );
+    assertInspectionOwner(persisted, identity);
+    if (
+      persisted.presence !== "present" ||
+      persisted.bootstrapStatus !== "applied" ||
+      !persisted.bootstrapReceipt ||
+      !sameJson(persisted.bootstrapReceipt, receipt)
+    )
+      throw new Error("Tart bootstrap receipt readback is not verified");
+    assertVmObservation(persisted, plan, resolved);
+
+    const ssh = await this.options.ssh.verify({
+      host: persisted.ipAddress!,
+      port: 22,
+      username: plan.access.account,
+      privateKey: materials.privateKey,
+      hostPublicKey: receipt.hostPublicKey,
+      hostKeyFingerprint: receipt.hostKeyFingerprint,
+      clientPublicKeyFingerprint: materials.fingerprint,
+    });
+    if (
+      this.now() >= plan.deadlineMs ||
+      Date.parse(network.expiresAt) <= this.now() ||
+      ssh.authenticated !== true ||
+      ssh.username !== plan.access.account ||
+      ssh.hostKeyFingerprint !== receipt.hostKeyFingerprint ||
+      ssh.clientPublicKeyFingerprint !== materials.fingerprint ||
+      (ssh.observedScratchMiB !== undefined &&
+        (!Number.isSafeInteger(ssh.observedScratchMiB) ||
+          ssh.observedScratchMiB < 0))
+    )
+      throw new Error("Tart SSH readiness evidence does not match the request");
+
+    const finalInspection = tartInspectionSchema.parse(
+      await resolved.runtime.inspect(identity),
+    );
+    assertInspectionOwner(finalInspection, identity);
+    if (finalInspection.presence !== "present")
+      throw new Error("Tart VM changed during SSH readiness verification");
+    assertVmObservation(finalInspection, plan, resolved);
+    if (
+      finalInspection.vmName !== persisted.vmName ||
+      finalInspection.ipAddress !== persisted.ipAddress ||
+      !sameJson(finalInspection.bootstrapReceipt, receipt)
+    )
+      throw new Error(
+        "Tart VM readiness facts changed during SSH verification",
+      );
+
+    const scratchMiB =
+      ssh.observedScratchMiB === undefined
+        ? plan.resources.limit.scratchMiB
+        : Math.min(plan.resources.limit.scratchMiB, ssh.observedScratchMiB);
+    const objects = [this.ownedVm(plan, resolved, finalInspection)];
+    const hashes = provisionHashes(plan);
+    const effectiveResources: EffectiveResources = {
+      limits: {
+        cpuMillis: finalInspection.resources.cpus * 1000,
+        memoryMiB: finalInspection.resources.memoryMiB,
+        scratchMiB,
+      },
+      cpuEnforcement: "hard",
+      memoryEnforcement: "hard",
+      scratchEnforcement: "best_effort",
+      acceleratorAssignments: [],
+    };
+    return {
+      identity: plan.identity,
+      artifactDigest: plan.artifact.digest,
+      contractHash: plan.resolved.contractHash,
+      ...resourceManifest(plan, objects),
+      objectIds: objects.map((item) => item.id).sort(),
+      effectiveResources,
+      networkRevisionId: plan.resolved.network.revisionId,
+      networkContractHash: hashes.networkHash,
+      mountContractHash: hashes.mountsHash,
+      accessProtocol: "ssh",
+      bootstrapComplete: true,
+      offlineLeaseEnforcement: "unsupported",
+      access: {
+        host: finalInspection.ipAddress!,
+        port: 22,
+        username: plan.access.account,
+        hostKeyFingerprint: receipt.hostKeyFingerprint,
+        clientPublicKeyFingerprint: materials.fingerprint,
+      },
+    };
+  }
+
+  async revokeStop(plan: ProvisionPlan): Promise<void> {
+    const resolved = await this.runtime(plan);
+    const identity = tartIdentity(plan);
+    const result = tartInspectionSchema.parse(
+      await resolved.runtime.destroy(identity),
+    );
+    assertInspectionOwner(result, identity);
+    if (result.presence === "unknown")
+      throw new Error("Tart VM deletion outcome is unknown");
+    if (result.presence !== "absent")
+      throw new Error("Tart VM remains after deletion request");
+    const confirmed = tartInspectionSchema.parse(
+      await resolved.runtime.inspect(identity),
+    );
+    assertInspectionOwner(confirmed, identity);
+    if (confirmed.presence !== "absent")
+      throw new Error("Tart VM absence is not verified");
+  }
+
+  async destroy(
+    plan: ProvisionPlan,
+    resource: OwnedResource,
+  ): Promise<CleanupReceipt> {
+    if (resource.kind !== "vm" || resource.ownership !== "owned")
+      throw new Error("Tart destroy requires an owned VM resource");
+    const resolved = await this.runtime(plan);
+    const identity = tartIdentity(plan);
+    if (
+      resource.id !== tartVmName(identity) ||
+      !sameProvisionIdentity(resource.identity, plan.identity) ||
+      resource.contractHash !== plan.resolved.contractHash
+    )
+      throw new Error("Tart destroy resource ownership does not match plan");
+    const result = tartInspectionSchema.parse(
+      await resolved.runtime.destroy(identity),
+    );
+    assertInspectionOwner(result, identity);
+    if (result.presence === "unknown")
+      throw new Error("Tart VM deletion outcome is unknown");
+    if (result.presence !== "absent")
+      throw new Error("Tart VM remains after deletion request");
+    const confirmed = tartInspectionSchema.parse(
+      await resolved.runtime.inspect(identity),
+    );
+    assertInspectionOwner(confirmed, identity);
+    if (confirmed.presence !== "absent")
+      throw new Error("Tart VM absence is not verified");
+    return {
+      resourceId: resource.id,
+      kind: "vm",
+      runtime: runtimeBinding(plan),
+      identity: plan.identity,
+      presence: "absent",
+      networkRules: "not_applicable",
+      verifiedAtMs: this.now(),
+    };
+  }
+
+  private async runtime(plan: ProvisionPlan): Promise<ResolvedTartRuntime> {
+    const resolved = await this.options.resolveRuntime(plan);
+    tartLocalTemplateRefSchema.parse(resolved.template);
+    if (
+      resolved.runtimeIdentityId !== plan.identity.runtimeIdentityId ||
+      resolved.connectionRevisionId !== plan.identity.connectionRevisionId ||
+      resolved.artifactDigest !== plan.artifact.digest ||
+      resolved.template.name !== plan.artifact.ref ||
+      resolved.template.source !== "local" ||
+      resolved.template.guestArch !== plan.artifact.architecture ||
+      resolved.template.guestArch !== "arm64" ||
+      resolved.template.guestOS !==
+        (plan.artifact.guestOS === "macos" ? "darwin" : "linux")
+    )
+      throw new Error("Resolved Tart runtime differs from the frozen plan");
+    return resolved;
+  }
+
+  private async networkEvidence(
+    plan: ProvisionPlan,
+    observed: Extract<TartInspection, { presence: "present" }>,
+  ): Promise<TartNetworkEvidence> {
+    const evidence = await this.options.network.verify(plan, observed);
+    const now = this.now();
+    const verifiedAt = Date.parse(evidence.verifiedAt);
+    const expiresAt = Date.parse(evidence.expiresAt);
+    if (
+      evidence.runtimeIdentityId !== plan.identity.runtimeIdentityId ||
+      evidence.allocationId !== plan.identity.allocationId ||
+      evidence.generation !== plan.identity.generation ||
+      evidence.revisionId !== plan.resolved.network.revisionId ||
+      evidence.contractHash !== sha256(plan.resolved.network) ||
+      !evidence.reference ||
+      !Number.isFinite(verifiedAt) ||
+      !Number.isFinite(expiresAt) ||
+      verifiedAt > now ||
+      now - verifiedAt > EVIDENCE_MAX_AGE_MS ||
+      expiresAt <= now ||
+      expiresAt > plan.deadlineMs
+    )
+      throw new Error("Tart network verification is stale or mismatched");
+    return evidence;
+  }
+
+  private ownedVm(
+    plan: ProvisionPlan,
+    resolved: ResolvedTartRuntime,
+    observed: Extract<TartInspection, { presence: "present" }>,
+    extraDetails: Readonly<Record<string, unknown>> = {},
+  ): OwnedResource {
+    const hashes = provisionHashes(plan);
+    return {
+      id: tartVmName(tartIdentity(plan)),
+      kind: "vm",
+      ownership: "owned",
+      identity: plan.identity,
+      contractHash: plan.resolved.contractHash,
+      evidence: {
+        artifactDigest: resolved.artifactDigest,
+        resourcesHash: hashes.resourcesHash,
+        networkHash: hashes.networkHash,
+        mountsHash: hashes.mountsHash,
+        accessProtocol: "ssh",
+      },
+      details: {
+        nativeName: tartVmName(tartIdentity(plan)),
+        vmName: observed.vmName,
+        state: observed.state,
+        ipAddress: observed.ipAddress ?? null,
+        resources: observed.resources,
+        ...(observed.bootstrapReceipt
+          ? { bootstrapReceipt: observed.bootstrapReceipt }
+          : {}),
+        ...extraDetails,
+      },
+    };
+  }
+
+  private vmObservationMatches(
+    observed: Extract<TartInspection, { presence: "present" }>,
+    plan: ProvisionPlan,
+    resolved: ResolvedTartRuntime,
+  ): boolean {
+    return (
+      sameOwner(observed.identity, tartIdentity(plan)) &&
+      observed.vmName === tartVmName(tartIdentity(plan)) &&
+      resolved.artifactDigest === plan.artifact.digest
+    );
+  }
+}
+
+function assertSupportedPlan(plan: ProvisionPlan): void {
+  if (
+    !["linux", "macos"].includes(plan.artifact.guestOS ?? "") ||
+    plan.artifact.architecture !== "arm64" ||
+    plan.resources.isolation !== "virtual_machine" ||
+    plan.resolved.network.mode !== "isolated_vm" ||
+    plan.resolved.network.enforcement !== "tart_agent" ||
+    plan.resolved.network.verificationRequired !== true ||
+    plan.bootstrap.mechanism !== "tart-guest-bootstrap-v1" ||
+    plan.bootstrap.contractVersion !== "1" ||
+    plan.bootstrap.identityReset !== true ||
+    plan.access.discovery !== "guest_ipv4" ||
+    plan.access.readiness !== "authenticated_ssh" ||
+    plan.accessProtocol !== "ssh" ||
+    plan.access.accessProtocols.length !== 1 ||
+    plan.access.accessProtocols[0] !== "ssh" ||
+    plan.access.ports.length !== 1 ||
+    plan.access.ports[0] !== 22 ||
+    plan.resolved.mounts.length > 0 ||
+    plan.resources.scratchEnforcement === "required" ||
+    plan.resources.accelerators.length > 0
+  )
+    throw new Error("Tart supports only local isolated SSH virtual machines");
+  if (
+    plan.resources.request.cpuMillis !== plan.resources.limit.cpuMillis ||
+    plan.resources.request.memoryMiB !== plan.resources.limit.memoryMiB ||
+    plan.resources.request.scratchMiB !== plan.resources.limit.scratchMiB ||
+    plan.resources.limit.cpuMillis % 1000 !== 0
+  )
+    throw new Error("Tart requires whole-CPU frozen resource limits");
+}
+
+function tartResources(plan: ProvisionPlan) {
+  return {
+    cpus: plan.resources.limit.cpuMillis / 1000,
+    memoryMiB: plan.resources.limit.memoryMiB,
+  };
+}
+
+function tartIdentity(plan: ProvisionPlan): TartAllocationIdentity {
+  const identity = plan.identity;
+  return {
+    installationId: identity.installationId,
+    runtimeIdentityId: identity.runtimeIdentityId,
+    connectionRevisionId: identity.connectionRevisionId,
+    allocationId: identity.allocationId,
+    generation: identity.generation,
+    operationId: identity.operationId,
+    controlVersion: identity.controlVersion,
+    purpose: identity.purpose,
+  };
+}
+
+function runtimeBinding(plan: ProvisionPlan) {
+  return {
+    runtimeIdentityId: plan.identity.runtimeIdentityId,
+    connectionRevisionId: plan.identity.connectionRevisionId,
+  };
+}
+
+function sameOwner(
+  observed: TartAllocationIdentity,
+  expected: TartAllocationIdentity,
+): boolean {
+  return (
+    observed.installationId === expected.installationId &&
+    observed.runtimeIdentityId === expected.runtimeIdentityId &&
+    observed.connectionRevisionId === expected.connectionRevisionId &&
+    observed.allocationId === expected.allocationId &&
+    observed.generation === expected.generation &&
+    observed.purpose === expected.purpose
+  );
+}
+
+function sameProvisionIdentity(
+  left: TartAllocationIdentity,
+  right: TartAllocationIdentity,
+): boolean {
+  return (
+    sameOwner(left, right) &&
+    left.operationId === right.operationId &&
+    left.controlVersion === right.controlVersion
+  );
+}
+
+function inspectionOwnerMatches(
+  inspection: TartInspection,
+  expected: TartAllocationIdentity,
+): boolean {
+  return (
+    sameOwner(inspection.identity, expected) &&
+    inspection.identity.controlVersion <= expected.controlVersion &&
+    (inspection.identity.controlVersion < expected.controlVersion ||
+      inspection.identity.operationId === expected.operationId)
+  );
+}
+
+function assertInspectionOwner(
+  inspection: TartInspection,
+  expected: TartAllocationIdentity,
+): void {
+  if (!inspectionOwnerMatches(inspection, expected))
+    throw new Error("Tart runtime identity differs from the provision plan");
+}
+
+function assertOwnedVmShape(
+  observed: Extract<TartInspection, { presence: "present" }>,
+  plan: ProvisionPlan,
+): void {
+  if (
+    !sameOwner(observed.identity, tartIdentity(plan)) ||
+    observed.vmName !== tartVmName(tartIdentity(plan))
+  )
+    throw new Error("Tart VM ownership does not match the frozen plan");
+}
+
+function assertVmObservation(
+  observed: Extract<TartInspection, { presence: "present" }>,
+  plan: ProvisionPlan,
+  resolved: ResolvedTartRuntime,
+): void {
+  if (
+    !sameOwner(observed.identity, tartIdentity(plan)) ||
+    observed.identity.controlVersion > plan.identity.controlVersion ||
+    (observed.identity.controlVersion === plan.identity.controlVersion &&
+      observed.identity.operationId !== plan.identity.operationId) ||
+    observed.vmName !== tartVmName(tartIdentity(plan)) ||
+    observed.resources.cpus !== tartResources(plan).cpus ||
+    observed.resources.memoryMiB !== tartResources(plan).memoryMiB ||
+    observed.state !== "running" ||
+    !observed.ipAddress ||
+    !isIPv4(observed.ipAddress) ||
+    resolved.artifactDigest !== plan.artifact.digest
+  )
+    throw new Error("Tart VM readback differs from the frozen plan");
+}
+
+function assertInventory(
+  plan: ProvisionPlan,
+  inventory: InventoryEvidence,
+  resolved: ResolvedTartRuntime,
+): void {
+  if (
+    inventory.completeness !== "complete" ||
+    !sameProvisionIdentity(inventory.identity, tartIdentity(plan)) ||
+    inventory.runtime.runtimeIdentityId !== resolved.runtimeIdentityId ||
+    inventory.runtime.connectionRevisionId !== resolved.connectionRevisionId ||
+    inventory.objects.length !== 1
+  )
+    throw new Error("Tart inventory does not match the frozen plan");
+}
+
+function assertInventoryVmMatches(
+  inventory: InventoryEvidence,
+  current: OwnedResource,
+): void {
+  const prior = inventory.objects[0];
+  if (
+    !prior ||
+    prior.kind !== "vm" ||
+    prior.ownership !== "owned" ||
+    prior.id !== current.id ||
+    prior.contractHash !== current.contractHash ||
+    !sameProvisionIdentity(prior.identity, current.identity) ||
+    !sameJson(prior.evidence, current.evidence)
+  )
+    throw new Error("Tart VM inventory changed before readiness verification");
+}
+
+function makeBootstrapRequest(
+  plan: ProvisionPlan,
+  identity: TartAllocationIdentity,
+  network: TartNetworkEvidence,
+  clientPublicKey: string,
+  clientPublicKeyFingerprint: string,
+): TartGuestBootstrapRequest {
+  if (fingerprint(clientPublicKey) !== clientPublicKeyFingerprint)
+    throw new Error("Tart client key material does not match its fingerprint");
+  const nonce = createHash("sha256")
+    .update(
+      JSON.stringify([
+        identity.installationId,
+        identity.runtimeIdentityId,
+        identity.connectionRevisionId,
+        identity.allocationId,
+        identity.generation,
+        identity.purpose,
+        plan.resolved.contractHash,
+      ]),
+    )
+    .digest("base64url");
+  return tartGuestBootstrapRequestSchema.parse({
+    identity,
+    nonce,
+    account: plan.access.account,
+    clientPublicKey,
+    clientPublicKeyFingerprint,
+    networkEvidence: {
+      reference: network.reference,
+      revisionId: network.revisionId,
+      expiresAt: network.expiresAt,
+    },
+  });
+}
+
+function assertBootstrapReceipt(
+  receipt: TartGuestBootstrapReceipt,
+  request: TartGuestBootstrapRequest,
+  plan: ProvisionPlan,
+  now: number,
+): asserts receipt is Extract<
+  TartGuestBootstrapReceipt,
+  { status: "applied" }
+> {
+  if (
+    receipt.status !== "applied" ||
+    !sameProvisionIdentity(receipt.identity, request.identity) ||
+    receipt.nonce !== request.nonce ||
+    receipt.account !== request.account ||
+    receipt.clientPublicKeyFingerprint !== request.clientPublicKeyFingerprint ||
+    receipt.networkEvidenceReference !== request.networkEvidence.reference ||
+    receipt.networkEvidenceExpiresAt !== request.networkEvidence.expiresAt ||
+    Date.parse(receipt.observedAt) > now ||
+    Date.parse(receipt.observedAt) > plan.deadlineMs ||
+    Date.parse(receipt.networkEvidenceExpiresAt) <= now ||
+    Date.parse(receipt.networkEvidenceExpiresAt) > plan.deadlineMs ||
+    fingerprint(receipt.hostPublicKey) !== receipt.hostKeyFingerprint
+  )
+    throw new Error("Tart guest bootstrap receipt does not match the request");
+}
+
+function fingerprint(publicKey: string): string {
+  const parsed = sshUtils.parseKey(publicKey);
+  if (parsed instanceof Error || parsed.isPrivateKey())
+    throw new Error("Tart SSH public key is invalid");
+  return `SHA256:${createHash("sha256").update(parsed.getPublicSSH()).digest("base64").replace(/=+$/, "")}`;
+}
+
+function tartVmName(identity: TartAllocationIdentity): string {
+  const ownerKey = JSON.stringify(tartAllocationOwnerTuple(identity));
+  return `hitchlet-${createHash("sha256").update(ownerKey).digest("hex").slice(0, 32)}`;
+}
+
+function provisionHashes(plan: ProvisionPlan) {
+  return {
+    resourcesHash: sha256(plan.resources),
+    networkHash: sha256(plan.resolved.network),
+    mountsHash: sha256(plan.resolved.mounts),
+  };
+}
+
+function sha256(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function sameJson(left: unknown, right: unknown): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function requireJournal(
+  journal: ResourceJournal,
+): asserts journal is Required<ResourceJournal> {
+  if (!journal.beforeCreate || !journal.assertActive || !journal.recordCreated)
+    throw new Error("Tart create requires a durable VM resource journal");
+}

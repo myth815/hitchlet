@@ -51,7 +51,7 @@ export class SQLiteRenewalStore {
     proposedExpiresAt: number;
     decisionDeadline: number;
     initial: boolean;
-    executionMode: "simulator" | "portainer";
+    executionMode: "simulator" | "portainer" | "tart";
     now: number;
   }): Promise<void> {
     await this.db.batchTransaction([
@@ -173,7 +173,7 @@ export class SQLiteRenewalStore {
         SELECT 1 FROM lease_renewals r JOIN tickets t ON t.id=(SELECT ticket_id FROM leases WHERE id=r.lease_id) JOIN allocations a ON a.id=(SELECT allocation_id FROM leases WHERE id=r.lease_id) JOIN operations o ON o.id=r.operation_id
         WHERE r.id=? AND r.state='pending' AND r.decision_deadline_ms>? AND t.phase='ready' AND a.desired_state='present' AND a.generation=(SELECT generation FROM leases WHERE id=r.lease_id)
         AND a.control_version=o.control_version AND o.generation=a.generation AND o.kind='lease.renew'
-        AND json_extract(o.intent_json,'$.executionMode') IN ('simulator','portainer')
+        AND json_extract(o.intent_json,'$.executionMode') IN ('simulator','portainer','tart')
         AND json_extract(o.intent_json,'$.executionMode')=(SELECT json_extract(p.intent_json,'$.executionMode') FROM operations p WHERE p.allocation_id=a.id AND p.kind='allocation.provision' ORDER BY p.created_at_ms DESC LIMIT 1)
         AND (r.is_initial_claim=0 OR (SELECT claim_by_ms FROM leases WHERE id=r.lease_id)>?) AND (SELECT renew_until_ms FROM leases WHERE id=r.lease_id)>?
         AND r.proposed_expires_at_ms<=(SELECT renew_until_ms FROM leases WHERE id=r.lease_id)

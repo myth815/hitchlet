@@ -284,6 +284,19 @@ export class TicketService {
       ...accepted,
       storage: request.storage ?? [],
     });
+    if (contract.kind === "vm") {
+      if (contract.resources.request.cpuMillis % 1000 !== 0)
+        throw new RangeError("VM CPU requests must use whole vCPUs");
+      if (
+        contract.resources.isolation !== "virtual_machine" ||
+        contract.resources.scratchEnforcement !== "best_effort" ||
+        contract.access.protocol !== "ssh" ||
+        storageRows.length > 0
+      )
+        throw new RangeError(
+          "Current Tart VM leases require virtual-machine isolation, best-effort scratch, SSH, and no mounts",
+        );
+    }
     const deny = await this.store.networkDenyBaseline();
     if (!deny?.id)
       throw new Error("No platform network deny baseline is configured");
@@ -324,12 +337,12 @@ export class TicketService {
         grantId: this.id(),
         networkProfileRevisionId: String(network.id),
         platformDenyRevisionId: String(deny.id),
-        mode: "isolated_bridge",
+        mode: contract.kind === "vm" ? "isolated_vm" : "isolated_bridge",
         allowedEgress,
         allowedIngressSourceCidrs,
         managementDenyRules: parseDenyRules(deny.management_deny_rules_json),
         ipv6: networkPolicy.ipv6,
-        enforcement: "docker_iptables",
+        enforcement: contract.kind === "vm" ? "tart_agent" : "docker_iptables",
         verificationRequired: true,
       },
     };
@@ -712,6 +725,21 @@ export class TicketService {
     const caps = object(
       parseJson(candidate.capabilities_json, "node capabilities"),
     );
+    if (
+      contract.kind === "vm" &&
+      (candidate.backend_kind !== "tart" ||
+        executionMode(candidate.config_json) !== "tart")
+    )
+      hardReasons.add("vm_provider_execution_unsupported");
+    if (
+      contract.kind === "vm" &&
+      (contract.resources.request.cpuMillis % 1000 !== 0 ||
+        contract.access.protocol !== "ssh" ||
+        contract.resources.isolation !== "virtual_machine" ||
+        contract.resources.scratchEnforcement !== "best_effort" ||
+        (Array.isArray(frozen.storage) && frozen.storage.length > 0))
+    )
+      hardReasons.add("vm_contract_unsupported");
     const labels = object(
       parseJson(candidate.machine_labels, "machine labels"),
     );
@@ -792,11 +820,32 @@ export class TicketService {
       const recipe = object(
         parseJson(candidate.access_recipe_json, "artifact access recipe"),
       );
+      const recipeProtocols = stringListRequired(
+        recipe.accessProtocols,
+        "artifact protocols",
+      );
+      const recipePorts =
+        recipe.ports === undefined
+          ? [22]
+          : Array.isArray(recipe.ports) &&
+              recipe.ports.every(
+                (port): port is number =>
+                  typeof port === "number" && Number.isSafeInteger(port),
+              )
+            ? recipe.ports
+            : [];
+      const tartSshRecipeInvalid =
+        contract.kind === "vm" &&
+        candidate.backend_kind === "tart" &&
+        (recipeProtocols.length !== 1 ||
+          recipeProtocols[0] !== "ssh" ||
+          recipePorts.length !== 1 ||
+          recipePorts[0] !== 22 ||
+          (typeof recipe.account === "string" &&
+            !/^[a-z_][a-z0-9_-]{0,31}$/.test(recipe.account)));
       if (
-        !stringListRequired(
-          recipe.accessProtocols,
-          "artifact protocols",
-        ).includes(contract.access.protocol) ||
+        !recipeProtocols.includes(contract.access.protocol) ||
+        tartSshRecipeInvalid ||
         (executionMode(candidate.config_json) === "portainer" &&
           !supportsNodeSshRecipe({ bootstrap: requirements.bootstrap }, recipe))
       )
@@ -833,7 +882,7 @@ export class TicketService {
 
 function executionMode(
   value: unknown,
-): "simulator" | "portainer" | "unconfigured" {
+): "simulator" | "portainer" | "tart" | "unconfigured" {
   if (typeof value !== "string") return "unconfigured";
   try {
     const config: unknown = JSON.parse(value);
@@ -843,7 +892,8 @@ function executionMode(
       !Array.isArray(config) &&
       "executionMode" in config &&
       (config.executionMode === "simulator" ||
-        config.executionMode === "portainer")
+        config.executionMode === "portainer" ||
+        config.executionMode === "tart")
     )
       return config.executionMode;
   } catch {
