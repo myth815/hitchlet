@@ -891,6 +891,12 @@ export class OperationWorker {
         ...baseCreatePlan,
         deadlineMs: this.now() + 30_000,
         executionPhase: "cleanup" as const,
+        cleanupAuthorization: {
+          cleanupOperationId: stringField(val(op, "id")),
+          createOperationId: stringField(val(createOperation, "id")),
+          ownerToken: token,
+          operationVersion: Number(op.version),
+        },
         cleanupResources: journaledObjects,
       };
       let createInspection = await this.inspect(createPlan);

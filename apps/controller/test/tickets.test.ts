@@ -2,7 +2,7 @@ import Database from "better-sqlite3";
 import { TicketQueries } from "../dist/application/queries.js";
 import { SQLiteMachineNodeStore } from "../src/storage/machine-node-store.js";
 import { SQLiteOperationStore } from "../dist/storage/operation-store.js";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,6 +26,8 @@ import type {
   TartReconcileRequest,
 } from "@hitchlet/contracts/internal";
 import { createTartExecutionComposition } from "../src/providers/tart-runtime-composition.js";
+import { resolveTartCleanupRuntime } from "../src/providers/tart-runtime-resolver.js";
+import type { RuntimeAgentJsonTransport } from "../src/providers/runtime-network-client.js";
 import { TicketService as SourceTicketService } from "../src/application/tickets.js";
 
 function tartNetworkObservation(
@@ -342,6 +344,7 @@ async function addChildNode(
 }
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(
     opened.splice(0).map((db) => db.close().catch(() => undefined)),
   );
@@ -2749,7 +2752,7 @@ describe("Tart VM ticket ledger integration", () => {
       },
       {
         kind: "run",
-        sql: "INSERT INTO runtime_identities(id,backend_kind,native_kind,native_id,created_at_ms) VALUES(?,'tart','tart_host','synthetic-test-host',?)",
+        sql: "INSERT INTO runtime_identities(id,backend_kind,native_kind,native_id,created_at_ms) VALUES(?,'tart','tart_host','80000000-0000-4000-8000-00000000000f',?)",
         params: [runtimeId, now],
       },
       {
@@ -2800,7 +2803,21 @@ describe("Tart VM ticket ledger integration", () => {
             accelerators: [],
             reportId: "synthetic-test-only",
           }),
-          JSON.stringify({ executionMode: "tart", testFixture: true }),
+          JSON.stringify({
+            executionMode: "tart",
+            runtimeProfile: {
+              runtimeAgent: {
+                id: "80000000-0000-4000-8000-00000000000c",
+                baseUrl: "https://runtime-agent.test.invalid",
+                tokenSecretRef: `secret:${"1".repeat(32)}`,
+                caSecretRef: `secret:${"2".repeat(32)}`,
+                clientCertSecretRef: `secret:${"3".repeat(32)}`,
+                clientKeySecretRef: `secret:${"4".repeat(32)}`,
+              },
+              managementDenyRevisionId: "80000000-0000-4000-8000-00000000000d",
+              managementDenyRules: [],
+            },
+          }),
           now,
           now,
           now,
@@ -2835,6 +2852,7 @@ describe("Tart VM ticket ledger integration", () => {
     ]);
 
     let clock = now;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
     await expect(
       service.preview(consumerId, {
         image: { versionId: "20000000-0000-4000-8000-000000000003" },
@@ -2999,6 +3017,7 @@ describe("Tart VM ticket ledger integration", () => {
         if (observation?.presence === "present")
           observation = {
             ...observation,
+            identity,
             network: {
               backend: "softnet",
               status: "unknown",
@@ -3035,6 +3054,69 @@ describe("Tart VM ticket ledger integration", () => {
         return structuredClone(observation);
       },
     };
+    let wrongNativeNamespace = false;
+    let cleanupAuthorizationChecksPassed = false;
+    let cleanupActionOwnerCheckPassed = false;
+    let cleanupActionCount = 0;
+    const cleanupTransport: RuntimeAgentJsonTransport = {
+      async exchangeJson(path, payload) {
+        const request = payload as {
+          requestNonce: string;
+          installationId: string;
+          runtimeIdentityId: string;
+          action?: {
+            kind: string;
+            identity?: TartAllocationIdentity;
+            network?: TartNetworkPlan;
+          };
+        };
+        if (path === "/v1/tart/facts")
+          return {
+            requestNonce: request.requestNonce,
+            installationId: request.installationId,
+            runtimeIdentityId: request.runtimeIdentityId,
+            facts: {
+              nativeRuntimeNamespaceId: wrongNativeNamespace
+                ? "80000000-0000-4000-8000-000000000010"
+                : "80000000-0000-4000-8000-00000000000f",
+              tartVersion: "2.41.1",
+              hostOS: "macos",
+              hostArch: "arm64",
+              hostCpuCount: 8,
+              hostMemoryBytes: 16 * 1024 * 1024 * 1024,
+              templates: [],
+            },
+          };
+        if (path !== "/v1/tart/actions" || !request.action?.identity)
+          throw new Error("unexpected synthetic Runtime Agent request");
+        cleanupActionCount += 1;
+        let result: TartInspection;
+        switch (request.action.kind) {
+          case "inspect":
+            result = await runtime.inspect(request.action.identity);
+            break;
+          case "network.revoke":
+            if (!request.action.network)
+              throw new Error("network plan missing from cleanup action");
+            result = await runtime.revokeNetwork(
+              request.action.identity,
+              request.action.network,
+            );
+            break;
+          case "destroy":
+            result = await runtime.destroy(request.action.identity);
+            break;
+          default:
+            throw new Error("cleanup transport exposed a non-cleanup action");
+        }
+        return {
+          requestNonce: request.requestNonce,
+          installationId: request.installationId,
+          runtimeIdentityId: request.runtimeIdentityId,
+          result,
+        };
+      },
+    };
     const composition = createTartExecutionComposition({
       storage,
       secrets,
@@ -3054,6 +3136,126 @@ describe("Tart VM ticket ledger integration", () => {
         },
         runtime,
       }),
+      resolveCleanupRuntime: async (plan, authorization) => {
+        if (!cleanupAuthorizationChecksPassed) {
+          for (const badAuthorization of [
+            { ...authorization, ownerToken: "wrong-owner-token" },
+            {
+              ...authorization,
+              operationVersion: authorization.operationVersion + 1,
+            },
+            {
+              ...authorization,
+              cleanupOperationId: "80000000-0000-4000-8000-0000000000ff",
+            },
+          ])
+            await expect(
+              resolveTartCleanupRuntime(
+                storage,
+                secrets,
+                plan,
+                badAuthorization,
+                1,
+                clock,
+                cleanupTransport,
+              ),
+            ).rejects.toThrow(
+              "Exact Tart cleanup operation or current revision is unavailable",
+            );
+          for (const wrongIdentity of [
+            {
+              ...plan.identity,
+              runtimeIdentityId: "80000000-0000-4000-8000-0000000000ff",
+            },
+            {
+              ...plan.identity,
+              connectionRevisionId: "80000000-0000-4000-8000-0000000000ff",
+            },
+            { ...plan.identity, generation: plan.identity.generation + 1 },
+            {
+              ...plan.identity,
+              controlVersion: plan.identity.controlVersion + 1,
+            },
+            { ...plan.identity, installationId: "wrong-installation" },
+          ])
+            await expect(
+              resolveTartCleanupRuntime(
+                storage,
+                secrets,
+                { ...plan, identity: wrongIdentity },
+                authorization,
+                1,
+                clock,
+                cleanupTransport,
+              ),
+            ).rejects.toThrow(
+              "Exact Tart cleanup operation or current revision is unavailable",
+            );
+          await expect(
+            resolveTartCleanupRuntime(
+              storage,
+              secrets,
+              plan,
+              authorization,
+              1,
+              clock,
+            ),
+          ).rejects.toThrow();
+          const failingTransport: RuntimeAgentJsonTransport = {
+            async exchangeJson() {
+              throw new Error("synthetic mTLS exchange failure");
+            },
+          };
+          await expect(
+            resolveTartCleanupRuntime(
+              storage,
+              secrets,
+              plan,
+              authorization,
+              1,
+              clock,
+              failingTransport,
+            ),
+          ).rejects.toThrow("synthetic mTLS exchange failure");
+          wrongNativeNamespace = true;
+          await expect(
+            resolveTartCleanupRuntime(
+              storage,
+              secrets,
+              plan,
+              authorization,
+              1,
+              clock,
+              cleanupTransport,
+            ),
+          ).rejects.toThrow("Tart cleanup Runtime Agent identity changed");
+          wrongNativeNamespace = false;
+          cleanupAuthorizationChecksPassed = true;
+        }
+        const resolved = await resolveTartCleanupRuntime(
+          storage,
+          secrets,
+          plan,
+          authorization,
+          1,
+          clock,
+          cleanupTransport,
+        );
+        if (!cleanupActionOwnerCheckPassed) {
+          const before = cleanupActionCount;
+          await expect(() =>
+            resolved.runtime.inspect({
+              ...plan.identity,
+              allocationId: "80000000-0000-4000-8000-0000000000ff",
+            }),
+          ).toThrow(
+            "Tart cleanup action identity differs from its authorization",
+          );
+          expect(cleanupActionCount).toBe(before);
+          cleanupActionOwnerCheckPassed = true;
+        }
+        return resolved;
+      },
       ssh: {
         async verify(input) {
           expect(input.host).toBe("192.0.2.44");
@@ -3124,12 +3326,34 @@ describe("Tart VM ticket ledger integration", () => {
     ).toBe("confirmed");
 
     await composition.tickets.cancel(ticket.ticketId, consumerId);
+    const replacementRevisionId = "80000000-0000-4000-8000-00000000000e";
+    await storage.batchTransaction([
+      {
+        kind: "run",
+        sql: "INSERT INTO provider_connection_revisions(id,connection_id,revision,endpoint_ref,provider_endpoint_id,verified_runtime_identity_id,verified_at_ms,evidence_json,created_at_ms) VALUES(?,?,2,'synthetic://replacement','test-host',?,?,?,?)",
+        params: [
+          replacementRevisionId,
+          connectionId,
+          runtimeId,
+          clock,
+          JSON.stringify({ testFixture: true }),
+          clock,
+        ],
+      },
+      {
+        kind: "run",
+        sql: "UPDATE provider_connections SET enabled=0,current_revision_id=? WHERE id=?",
+        params: [replacementRevisionId, connectionId],
+      },
+    ]);
     const cleanup = await storage.get<{ id: string }>(
       "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
       [allocation?.allocationId],
     );
     cleanupInventoryUnknown = true;
     expect(await worker.run(cleanup?.id ?? "")).toBe(true);
+    expect(cleanupAuthorizationChecksPassed).toBe(true);
+    expect(cleanupActionOwnerCheckPassed).toBe(true);
     expect(
       await storage.get(
         "SELECT state FROM capacity_claims WHERE allocation_id=?",

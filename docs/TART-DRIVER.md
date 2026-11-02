@@ -52,7 +52,7 @@ Controller 验证双方公钥指纹、精确回执与身份、冻结规格、网
 
 认证 facts 证明来源与模板，**不证明能力资格**。注册后仍 disabled/unknown、空能力；池预算不得超过原始宿主 CPU/内存。独立 Tart attestation 需匹配 namespace、版本、平台、模板 digest 和真实验收报告，沿用现有六 scope、report SHA、network revision 与有效期机制，不借用 Docker 版本/iptables 成功标记。测试报告均明确 synthetic，未提交任何真实节点资格。
 
-发布还要求持久验证完成、验证 allocation 查实清理、相关 Claim 归还、CAS 成功，并通过 fresh authenticated facts 重新核模板。封存或人工资格报告单独不能直接发布。Tart connection revision 的重新提议/轮换尚未提供；当前 discovery 管理初次身份，不承诺生产轮换闭环。管理 GUI 可展示 Tart facts，但尚无 Tart 注册/资格表单，这段使用正常 API/SDK；租客 VM 选择已接入 GUI。
+发布还要求持久验证完成、验证 allocation 查实清理、相关 Claim 归还、CAS 成功，并通过 fresh authenticated facts 重新核模板。封存或人工资格报告单独不能直接发布。已登记资源的回收使用独立 cleanup-only resolver：必须有正在执行的持久清理 Operation、精确 Allocation/owner/generation/controlVersion 与有效认证，才可在连接停用或模板证明失效后观察/归还；新建/启动不使用此权限。实际 Runtime/native identity 仍核验，发布证明不再被混作已归属资源的清理资格。Tart connection revision 的重新提议/轮换尚未提供；当前 discovery 管理初次身份，不承诺生产轮换闭环。管理 GUI 可展示 Tart facts，但尚无 Tart 注册/资格表单，这段使用正常 API/SDK；租客 VM 选择已接入 GUI。
 
 ## 验证入口与下一步
 

@@ -6,6 +6,7 @@ import {
 import {
   RuntimeAgentHttpTransport,
   RuntimeNetworkHttpClient,
+  type RuntimeAgentJsonTransport,
   type RuntimeNetworkCredentials,
 } from "./runtime-network-client.js";
 import {
@@ -88,17 +89,20 @@ export function createTartRuntimeClient(
     deadlineMs: number;
     now?: () => number;
   }>,
+  transport?: RuntimeAgentJsonTransport,
 ): TartRuntimeHttpClient {
   const now = input.now ?? Date.now;
   const remainingMs = input.deadlineMs - now();
   if (remainingMs < 1)
     throw new Error("Tart Runtime Agent action deadline has expired");
   return new TartRuntimeHttpClient({
-    transport: runtimeAgentTransport(
-      input.profile,
-      input.secrets,
-      Math.min(TART_ACTION_TIMEOUT_MS, remainingMs),
-    ),
+    transport:
+      transport ??
+      runtimeAgentTransport(
+        input.profile,
+        input.secrets,
+        Math.min(TART_ACTION_TIMEOUT_MS, remainingMs),
+      ),
     installationId: input.installationId,
     runtimeIdentityId: input.runtimeIdentityId,
     controllerEpoch: input.controllerEpoch,
@@ -116,12 +120,11 @@ export function tartRuntimeFactsForNode(
     runtimeIdentityId: string;
   }>,
   timeoutMs = TART_FACTS_TIMEOUT_MS,
+  transportOverride?: RuntimeAgentJsonTransport,
 ) {
-  const transport = runtimeAgentTransport(
-    input.profile,
-    input.secrets,
-    timeoutMs,
-  );
+  const transport =
+    transportOverride ??
+    runtimeAgentTransport(input.profile, input.secrets, timeoutMs);
   return readTartRuntimeFacts(
     transport,
     input.installationId,

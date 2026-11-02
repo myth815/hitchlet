@@ -26,9 +26,15 @@ Controller 对新鲜观察时间检查，bootstrap 的 network expiry 仍绑定�
 
 Softnet 控制 EOF 只会关闭管理通道，不能单凭 EOF 宣称后端已退出；正常 Tart 停止的子进程等待行为仍须实机验证。重启后丢失原控制 FD 不凭 PID 接管；已持久的 removed/not_started 回执与 tombstone 可继续回收。未完成收尾的中断不会被描述为已自动恢复，本批没有实现任意 native 进程的重新接管。
 
-仍有两个明确的启用前边界：
+新增的清理权限仅适用于已登记 Allocation 且有持久 cleanup Operation 的路径：
 
-- 现有 resolver 保留 enabled/current connection 和 fresh sealed-template 检查；停用连接或模板证明失效时，自动 cleanup/observe 可能受阻。这些检查尚未拆成只针对已归属资源的清理权限，原逻辑保留，不能据本批声称已解决。
+- Worker 传递原创建 OperationId 和当前 cleanup OperationId/token/version；专用 resolver 核对正在执行的清理任务、lease、installation、owner、generation/controlVersion、同一 Runtime 与 revision、desired_state=absent。清理计划保留原创建 OperationId，但权限由新 controlVersion 的 cleanup Operation 证明，不能套用原创建版本等式。
+- 只有这条清理路径允许 provider connection 停用或模板发布证明失效；仍用有效秘密引用和原 mTLS 通道读取可信 facts，核对实际 native namespace/宿主身份。凭据撤回、身份不匹配或跨 owner 仍拒绝。它返回仅绑定本票身份的 inspect/revokeNetwork/destroy 包装，没有创建、启动或 bootstrap 方法。
+- 清理测试可在内部注入合成 RuntimeAgentJsonTransport；生产 composition 不暴露该覆盖配置，仍默认使用现有 RuntimeAgentHttpTransport、秘密加载与 mTLS。缺失凭据和通信认证错误继续向上失败，不回退到匿名通道。
+- 新建与 readiness 继续使用原 enabled/current connection、模板证明及网络资格要求，并拒绝清理授权。Node admission 停用、provider connection 停用、模板发布资格和运行时身份变化分别处理；没有开放任意 observe 路径。
+
+仍有明确的启用前边界：
+
 - server composition 共用现有 lease/operation loops，但没有伪造 Tart Host 压力、人员 presence 或自动延长人工资格。自动 Tart observation 刷新尚未接入，已有观测仍会按原新鲜度到期；不承诺长期生产接单。
 
 Controller 离线严格到期硬停仍不支持。Linux guest、动态网络修订、真实后端故障、媒体/Vesta 作业和长期生产运行未由本批证明；Tart 的真实执行 guard 保持关闭。

@@ -60,6 +60,23 @@ export type ResolvedTartRuntime = Readonly<{
   runtime: TartRuntimePort;
 }>;
 
+export type TartCleanupRuntimePort = Pick<
+  TartRuntimePort,
+  "inspect" | "revokeNetwork" | "destroy"
+>;
+
+export type ResolvedTartCleanupRuntime = Readonly<{
+  runtimeIdentityId: string;
+  connectionRevisionId: string;
+  artifactDigest: string;
+  runtime: TartCleanupRuntimePort;
+}>;
+
+type TartResolvedIdentity = Pick<
+  ResolvedTartRuntime,
+  "runtimeIdentityId" | "connectionRevisionId" | "artifactDigest"
+>;
+
 export type TartNetworkEvidence = Readonly<{
   runtimeIdentityId: string;
   allocationId: string;
@@ -85,6 +102,10 @@ export type TartSshProbeEvidence = Readonly<{
 
 export type TartExecutionProviderOptions = Readonly<{
   resolveRuntime(plan: ProvisionPlan): Promise<ResolvedTartRuntime>;
+  resolveCleanupRuntime(
+    plan: ProvisionPlan,
+    authorization: NonNullable<ProvisionPlan["cleanupAuthorization"]>,
+  ): Promise<ResolvedTartCleanupRuntime>;
   accessMaterials: Pick<SQLiteAccessMaterialStore, "getOrCreate">;
   ssh: Readonly<{
     /** Resolves only after host-key confirmation and public-key authentication. */
@@ -118,6 +139,7 @@ export class TartExecutionProvider implements ExecutionPort {
     plan: ProvisionPlan,
     journal: ResourceJournal,
   ): Promise<readonly OwnedResource[]> {
+    assertProvisionPhase(plan);
     assertSupportedPlan(plan);
     const resolved = await this.runtime(plan);
     const identity = tartIdentity(plan);
@@ -210,10 +232,13 @@ export class TartExecutionProvider implements ExecutionPort {
   }
 
   async inspect(plan: ProvisionPlan): Promise<Inspection> {
-    let resolved: ResolvedTartRuntime;
+    let resolved: ResolvedTartRuntime | ResolvedTartCleanupRuntime;
     try {
       assertSupportedPlan(plan);
-      resolved = await this.runtime(plan);
+      resolved =
+        plan.executionPhase === "cleanup"
+          ? await this.cleanupRuntime(plan)
+          : await this.runtime(plan);
     } catch {
       return { presence: "unknown", reason: "runtime_identity_mismatch" };
     }
@@ -257,6 +282,7 @@ export class TartExecutionProvider implements ExecutionPort {
     plan: ProvisionPlan,
     inventory: InventoryEvidence,
   ): Promise<ReadyReceipt> {
+    assertProvisionPhase(plan);
     assertSupportedPlan(plan);
     const resolved = await this.runtime(plan);
     const identity = tartIdentity(plan);
@@ -395,7 +421,7 @@ export class TartExecutionProvider implements ExecutionPort {
   }
 
   async revokeStop(plan: ProvisionPlan): Promise<void> {
-    const resolved = await this.runtime(plan);
+    const resolved = await this.cleanupRuntime(plan);
     const identity = tartIdentity(plan);
     const network = tartNetworkPlanFor(plan);
     const result = tartInspectionSchema.parse(
@@ -428,9 +454,9 @@ export class TartExecutionProvider implements ExecutionPort {
     plan: ProvisionPlan,
     resource: OwnedResource,
   ): Promise<CleanupReceipt> {
+    const resolved = await this.cleanupRuntime(plan);
     if (resource.kind !== "vm" || resource.ownership !== "owned")
       throw new Error("Tart destroy requires an owned VM resource");
-    const resolved = await this.runtime(plan);
     const identity = tartIdentity(plan);
     if (
       resource.id !== tartVmName(identity) ||
@@ -480,6 +506,7 @@ export class TartExecutionProvider implements ExecutionPort {
   }
 
   private async runtime(plan: ProvisionPlan): Promise<ResolvedTartRuntime> {
+    assertProvisionPhase(plan);
     const resolved = await this.options.resolveRuntime(plan);
     tartLocalTemplateRefSchema.parse(resolved.template);
     if (
@@ -494,6 +521,34 @@ export class TartExecutionProvider implements ExecutionPort {
         (plan.artifact.guestOS === "macos" ? "darwin" : "linux")
     )
       throw new Error("Resolved Tart runtime differs from the frozen plan");
+    return resolved;
+  }
+
+  private async cleanupRuntime(
+    plan: ProvisionPlan,
+  ): Promise<ResolvedTartCleanupRuntime> {
+    assertSupportedPlan(plan);
+    const authorization = plan.cleanupAuthorization;
+    if (plan.executionPhase !== "cleanup" || !authorization)
+      throw new Error("Tart cleanup requires a claimed cleanup operation");
+    if (
+      authorization.createOperationId !== plan.identity.operationId ||
+      !authorization.cleanupOperationId ||
+      !authorization.ownerToken ||
+      !Number.isSafeInteger(authorization.operationVersion) ||
+      authorization.operationVersion < 1
+    )
+      throw new Error("Tart cleanup authorization does not match the plan");
+    const resolved = await this.options.resolveCleanupRuntime(
+      plan,
+      authorization,
+    );
+    if (
+      resolved.runtimeIdentityId !== plan.identity.runtimeIdentityId ||
+      resolved.connectionRevisionId !== plan.identity.connectionRevisionId ||
+      resolved.artifactDigest !== plan.artifact.digest
+    )
+      throw new Error("Tart cleanup runtime differs from the frozen owner");
     return resolved;
   }
 
@@ -546,7 +601,7 @@ export class TartExecutionProvider implements ExecutionPort {
 
   private ownedVm(
     plan: ProvisionPlan,
-    resolved: ResolvedTartRuntime,
+    resolved: TartResolvedIdentity,
     observed: Extract<TartInspection, { presence: "present" }>,
     extraDetails: Readonly<Record<string, unknown>> = {},
   ): OwnedResource {
@@ -581,7 +636,7 @@ export class TartExecutionProvider implements ExecutionPort {
   private vmObservationMatches(
     observed: Extract<TartInspection, { presence: "present" }>,
     plan: ProvisionPlan,
-    resolved: ResolvedTartRuntime,
+    resolved: TartResolvedIdentity,
   ): boolean {
     return (
       sameOwner(observed.identity, tartIdentity(plan)) &&
@@ -622,6 +677,11 @@ function assertSupportedPlan(plan: ProvisionPlan): void {
     plan.resources.limit.cpuMillis % 1000 !== 0
   )
     throw new Error("Tart requires whole-CPU frozen resource limits");
+}
+
+function assertProvisionPhase(plan: ProvisionPlan): void {
+  if (plan.executionPhase === "cleanup" || plan.cleanupAuthorization)
+    throw new Error("Tart cleanup plans cannot create or bootstrap VMs");
 }
 
 export function tartNetworkPlanFor(plan: ProvisionPlan): TartNetworkPlan {
@@ -780,7 +840,7 @@ function assertOwnedVmShape(
 function assertVmObservation(
   observed: Extract<TartInspection, { presence: "present" }>,
   plan: ProvisionPlan,
-  resolved: ResolvedTartRuntime,
+  resolved: TartResolvedIdentity,
 ): void {
   if (
     !sameOwner(observed.identity, tartIdentity(plan)) ||

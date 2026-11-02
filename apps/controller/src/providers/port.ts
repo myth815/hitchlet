@@ -84,6 +84,13 @@ export type ProvisionPlan = Readonly<{
   }>;
   /** Cleanup has its own short command deadline; the create deadline stays frozen. */
   executionPhase?: "provision" | "cleanup" | "observe";
+  /** In-memory proof inputs for the exact durable cleanup operation holding this plan. */
+  cleanupAuthorization?: Readonly<{
+    cleanupOperationId: string;
+    createOperationId: string;
+    ownerToken: string;
+    operationVersion: number;
+  }>;
   /** Persisted resources supplied only to cleanup so a missing container does
    * not erase the original network ports/bridge facts needed to revoke rules. */
   cleanupResources?: readonly OwnedResource[];

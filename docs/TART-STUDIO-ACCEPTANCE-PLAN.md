@@ -6,7 +6,7 @@
 
 Studio：macOS 27.0.1 (26A434)、arm64、18 核、64 GiB、硬件虚拟化标志 1；本地卷可用约 262 GiB。Tart 未在 PATH、常见 app/brew 路径或 brew 已装列表中发现，默认 `~/.tart` 也不存在。只读查询时 33510/33511 未监听；最终启动前应复查。静态容量不是实时负载保证，真实 Tart 与该宿主版本的兼容性尚未验证。
 
-已具备独立 Runtime 入口、可信通道、guest helper、SSH probe 和管理发布源码。本批已补网络计划/Softnet 控制 FD/策略读回/回收与 Controller composition 的受控源码，细节见 [网络接线](TART-NETWORK.md)。当前 `EXECUTION_MODE=tart` 启动 guard 保留。真实工具、来源映射、正反流量、停止回收及受控部署仍未验收；自动观测刷新和受限 cleanup 的剩余边界也需先明确，不能写成只等安装批准。
+已具备独立 Runtime 入口、可信通道、guest helper、SSH probe 和管理发布源码。本批已补网络计划/Softnet 控制 FD/策略读回/回收与 Controller composition 的受控源码，细节见 [网络接线](TART-NETWORK.md)。当前 `EXECUTION_MODE=tart` 启动 guard 保留。真实工具、来源映射、正反流量、停止回收及受控部署仍未验收；自动观测刷新与丢 FD 的剩余恢复边界也需先明确，不能写成只等安装批准。
 
 首轮推荐仅 Studio 上的租客客户端/Controller 主动连接 guest:22；这是租客 SSH 入口，不允许 guest 主动连接宿主:22，也不是 Runtime 管理通道。Runtime 管理仍为 localhost HTTPS 33511。VM 不主动访问外网/管理服务/peer，ipv6 disabled。现有公共合同只有字面 CIDR，本批直接编译这些 CIDR，不使用 `@host` 动态别名。实机前应观察 Studio 客户端连接 guest 时的真实来源，冻结对应 IPv4 `/32` 并核对来源保真；变化则拒绝而不扩大范围。没有观测前不填写 127.0.0.1 或猜网段，不需要新增公开 source 类型。
 
@@ -18,7 +18,7 @@ Docker 的专用 bridge、iptables INPUT/FORWARD/DOCKER-USER、conntrack、Docke
 
 Softnet 是当前官方工具链中可控制方向/来源/目的地/端口的最小候选，不是 Hitchlet 合同指定依赖。普通 Tart NAT 可以提供 IP/SSH 连通，但未证明上述来源和 egress 边界；因此不能直接替代。首轮 host→guest:22、无主动 egress、IPv6 disabled 已足够，无需 NAS allow、共享文件夹或全网探针。仍需验证非允许路径不可达和恢复顺序，不把“macOS VM”当作隔离取证。VM 的可信身份应绑定实际 Tart 后端、本票 VM/MAC/目录与自有控制通道，不要求存在 Linux network namespace。首轮 egress=[] 只验证无主动出口，不声称已经实测允许 egress 的正例。
 
-当前源码会在 run 前校验冻结网络计划与 adapter，并携带限制启动；策略读回绑定本票 VM/进程/控制 FD。它不等于实际流量资格。丢失原 FD 后不自动接管；停用连接或模板证明失效后的 cleanup 仍受旧 resolver 限制，server 尚无自动 Tart observation 刷新。这些边界须在启用前明确，本批没有用合成资格删除启动 guard。
+当前源码会在 run 前校验冻结网络计划与 adapter，并携带限制启动；策略读回绑定本票 VM/进程/控制 FD。它不等于实际流量资格。丢失原 FD 后不自动接管；连接停用或模板证明失效后的精确已登记资源清理已有专用源码路径，要求持久 cleanup Operation、有效认证和 native 身份匹配；这不授予新建/启动权限。server 尚无自动 Tart observation 刷新。这些边界须在启用前明确，本批没有用合成资格删除启动 guard。
 
 ## 固定工具与镜像候选
 

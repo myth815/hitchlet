@@ -13,6 +13,7 @@ import {
 } from "./tart-provider.js";
 import {
   createTartReadinessPorts,
+  resolveTartCleanupRuntime,
   resolveTartExecutionRuntime,
 } from "./tart-runtime-resolver.js";
 
@@ -24,6 +25,8 @@ export type TartExecutionCompositionOptions = Readonly<{
   now?: () => number;
   /** Narrow fake-runtime seam for synthetic ledger tests. */
   resolveRuntime?: TartExecutionProviderOptions["resolveRuntime"];
+  /** Narrow fake cleanup-runtime seam for synthetic ownership tests. */
+  resolveCleanupRuntime?: TartExecutionProviderOptions["resolveCleanupRuntime"];
   /** Narrow SSH probe seam for synthetic ledger tests. */
   ssh?: TartExecutionProviderOptions["ssh"];
 }>;
@@ -42,6 +45,17 @@ export function createTartExecutionComposition(
           options.storage,
           options.secrets,
           plan,
+          options.controllerEpoch,
+          now(),
+        )),
+    resolveCleanupRuntime:
+      options.resolveCleanupRuntime ??
+      ((plan, authorization) =>
+        resolveTartCleanupRuntime(
+          options.storage,
+          options.secrets,
+          plan,
+          authorization,
           options.controllerEpoch,
           now(),
         )),

@@ -970,6 +970,17 @@ describe("Tart artifact draft persistence", () => {
         },
         runtime,
       }),
+      resolveCleanupRuntime: async (plan) => ({
+        runtimeIdentityId: plan.identity.runtimeIdentityId,
+        connectionRevisionId: plan.identity.connectionRevisionId,
+        artifactDigest: plan.artifact.digest,
+        runtime: {
+          inspect: (identity) => runtime.inspect(identity),
+          revokeNetwork: (identity, network) =>
+            runtime.revokeNetwork(identity, network),
+          destroy: (identity) => runtime.destroy(identity),
+        },
+      }),
       accessMaterials,
       ssh: {
         async verify(input) {

@@ -374,6 +374,17 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
       },
       runtime,
     }),
+    resolveCleanupRuntime: async (cleanupPlan) => ({
+      runtimeIdentityId: cleanupPlan.identity.runtimeIdentityId,
+      connectionRevisionId: cleanupPlan.identity.connectionRevisionId,
+      artifactDigest: cleanupPlan.artifact.digest,
+      runtime: {
+        inspect: (identity) => runtime.inspect(identity),
+        revokeNetwork: (identity, network) =>
+          runtime.revokeNetwork(identity, network),
+        destroy: (identity) => runtime.destroy(identity),
+      },
+    }),
     accessMaterials: {
       getOrCreate: async () => ({ ...client, secretRef: "secret:test-only" }),
     },
@@ -498,7 +509,24 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
   observation = { ...observation, network: verifiedNetwork };
   expect(journalState.effects).toHaveLength(1);
   expect(journalState.resources.length).toBeGreaterThanOrEqual(4);
-  await provider.revokeStop(plan);
-  const cleanup = await provider.destroy(plan, ownedResources[0]!);
+  const cleanupPlan: ProvisionPlan = {
+    ...plan,
+    executionPhase: "cleanup",
+    cleanupAuthorization: {
+      cleanupOperationId: "cleanup-tart",
+      createOperationId: plan.identity.operationId,
+      ownerToken: "claimed-cleanup-token",
+      operationVersion: 2,
+    },
+  };
+  await expect(provider.create(cleanupPlan, journal)).rejects.toThrow(
+    "Tart cleanup plans cannot create or bootstrap VMs",
+  );
+  await expect(provider.ready(cleanupPlan, inventory.evidence)).rejects.toThrow(
+    "Tart cleanup plans cannot create or bootstrap VMs",
+  );
+  expect((await provider.inspect(cleanupPlan)).presence).toBe("present");
+  await provider.revokeStop(cleanupPlan);
+  const cleanup = await provider.destroy(cleanupPlan, ownedResources[0]!);
   expect(cleanup.networkRules).toBe("removed");
 });
