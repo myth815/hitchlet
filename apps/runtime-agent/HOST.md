@@ -38,6 +38,23 @@ A heartbeat binds the installation, Machine, Agent, controller epoch, sender epo
 
 The latest snapshot is stored in `machine_snapshots`; querying after 30 seconds, revocation or controller epoch change returns `fresh=false` and `humanPresence=unknown`. Historical values remain labeled as historical and unknown resource values remain `null`. A new boot clears the old latest snapshot until a new observation arrives. Sequence numbers restart only with a new fenced boot. No snapshot is itself permission to shut down or evidence that a machine is safe to power off.
 
+Memory eligibility uses the optional `resources.memoryAvailablePercent`,
+`memoryPressurePercent`, and `memoryPressureSource` fields. The estimate is
+`100 - memoryAvailablePercent`; raw `memoryUsedBytes` remains a separate Node
+OS diagnostic and is never substituted when the estimate is absent. Linux
+reports kernel `MemAvailable/MemTotal`, macOS reports the available percentage
+from fixed `memory_pressure -Q`, and Windows reports physical total/available
+bytes from `GlobalMemoryStatusEx`. The estimate is not Linux PSI or macOS
+Activity Monitor's combined pressure signal. Older Host Agents omit the new
+optional fields; a new controller reads their heartbeat but treats memory
+pressure as unknown and blocks shared `observed_host` admission. Upgrade the
+controller before deploying an Agent that sends these fields because older
+strict controllers reject them. Unknown or malformed measurements do not
+change the existing partial session/unmanaged-work evidence or grant power.
+The administrator DTO retains its legacy `memoryPercent` raw-use ratio for
+compatibility and diagnostics; admission, power guards, and the GUI use the
+separate pressure estimate and source.
+
 For a lost credential, enrollment response loss or failure to save the binding, a full administrator reads `GET /v1/agents/{id}` and calls `POST /v1/agents/{id}/revoke` with `expectedSessionEpoch` and a nonempty `reason`. This invalidates the credential, pending pairing and current boot atomically and increments the sender epoch. Read the new summary and create a new pairing with the same Machine plus its current `expectedSessionEpoch`; install the new binding after securely removing the unusable old local binding. Re-pair is allowed only while disabled. Both pair and revoke write actor/request/reason audit records. Expired or lost **unused** pairing receipts can also be replaced while disabled using the current epoch. Existing boots remain in the ledger for fencing. This explicit revoke/re-pair flow is the D20 credential rotation path.
 
 ## Native sampling and limits

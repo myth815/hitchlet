@@ -130,6 +130,30 @@ describe("physical host observations", () => {
         resources: { cpuPercent: 2, memoryUsedBytes: 3, memoryTotalBytes: 2 },
       }).success,
     ).toBe(false);
+    const availableMemory = {
+      ...base,
+      resources: {
+        cpuPercent: 2,
+        memoryUsedBytes: 1,
+        memoryTotalBytes: 2,
+        memoryAvailableBytes: 0,
+        memoryAvailableTotalBytes: 1000,
+        memoryAvailablePercent: 99,
+        memoryPressurePercent: 1,
+        memoryPressureSource: "linux_memavailable" as const,
+      },
+    };
+    expect(hostSnapshotSchema.safeParse(availableMemory).success).toBe(false);
+    expect(
+      hostSnapshotSchema.safeParse({
+        ...availableMemory,
+        resources: {
+          ...availableMemory.resources,
+          memoryAvailablePercent: 0,
+          memoryPressurePercent: 100,
+        },
+      }).success,
+    ).toBe(true);
     expect(
       hostSnapshotSchema.safeParse({
         ...base,

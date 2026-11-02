@@ -14,14 +14,81 @@ const measuredResources = z
   .object({
     /** Measured busy time over the sampling interval; percent, 0–100. */
     cpuPercent: z.number().finite().min(0).max(100),
-    /** Native OS memory pressure inputs in bytes; null resources means unavailable. */
+    /** Raw Node OS counters, retained for diagnostics; not a memory-pressure signal. */
     memoryUsedBytes: z.number().int().nonnegative().safe(),
     memoryTotalBytes: z.number().int().positive().safe(),
+    /** Native available-memory estimate, when the host OS probe supports it. */
+    memoryAvailableBytes: z.number().int().nonnegative().safe().optional(),
+    memoryAvailableTotalBytes: z.number().int().positive().safe().optional(),
+    memoryAvailablePercent: z.number().finite().min(0).max(100).optional(),
+    /** Available-derived pressure proxy: 100 - native available percentage. */
+    memoryPressurePercent: z.number().finite().min(0).max(100).optional(),
+    memoryPressureSource: z
+      .enum([
+        "linux_memavailable",
+        "macos_memory_pressure_free",
+        "windows_global_memory_status_ex",
+      ])
+      .optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
     if (value.memoryUsedBytes > value.memoryTotalBytes)
       ctx.addIssue({ code: "custom", message: "used memory exceeds total" });
+    const hasPressure = value.memoryPressurePercent !== undefined;
+    if (
+      hasPressure !== (value.memoryPressureSource !== undefined) ||
+      hasPressure !== (value.memoryAvailablePercent !== undefined)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "memory availability and pressure evidence must be supplied together",
+      });
+    if (
+      hasPressure &&
+      Math.abs(
+        value.memoryPressurePercent! + value.memoryAvailablePercent! - 100,
+      ) > 1e-9
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "memory pressure must equal 100 minus availability",
+      });
+    if (
+      ["linux_memavailable", "windows_global_memory_status_ex"].includes(
+        value.memoryPressureSource ?? "",
+      ) &&
+      (value.memoryAvailableBytes === undefined ||
+        value.memoryAvailableTotalBytes === undefined)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message:
+          "byte-based memory availability requires native available and total bytes",
+      });
+    if (
+      value.memoryAvailableBytes !== undefined &&
+      value.memoryAvailableTotalBytes !== undefined &&
+      value.memoryAvailableBytes > value.memoryAvailableTotalBytes
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "available memory exceeds total",
+      });
+    if (
+      value.memoryAvailableBytes !== undefined &&
+      value.memoryAvailableTotalBytes !== undefined &&
+      value.memoryAvailablePercent !== undefined &&
+      Math.abs(
+        value.memoryAvailablePercent -
+          (value.memoryAvailableBytes / value.memoryAvailableTotalBytes) * 100,
+      ) > 1e-6
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "byte-based memory availability disagrees with its percentage",
+      });
   });
 
 /**

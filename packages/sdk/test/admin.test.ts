@@ -4,6 +4,53 @@ import { ComputeClientError, HitchletClient } from "../src/index.js";
 const id = "00000000-0000-4000-8000-000000000001";
 
 describe("admin SDK commands", () => {
+  it("reads a legacy Machine response as unknown pressure instead of raw usage", async () => {
+    const client = new HitchletClient("https://controller.test", {
+      auth: { kind: "bearer", token: "test" },
+      fetch: async () =>
+        new Response(
+          JSON.stringify([
+            {
+              machineId: id,
+              name: "machine",
+              usageMode: "shared",
+              admission: "enabled",
+              hostObservation: {
+                state: "fresh",
+                humanPresence: "present",
+                cpuPercent: 1,
+                memoryPercent: 99,
+                unmanagedActivityHold: null,
+                receivedAtMs: 1,
+                probeStatus: "partial",
+                sessionsComplete: false,
+                interactiveSessionCount: 1,
+              },
+              capacity: { cpuMillis: 1, memoryMiB: 1, scratchMiB: 0 },
+              systemReserve: { cpuMillis: 0, memoryMiB: 0, scratchMiB: 0 },
+              humanUsePolicy: null,
+              policySource: "missing",
+              physicalUsage: { cpuMillis: 0, memoryMiB: 0, scratchMiB: 0 },
+              workloadUsage: { cpuMillis: 0, memoryMiB: 0, scratchMiB: 0 },
+              shutdownDisabledReasons: [],
+              holds: [],
+              dependencyTree: [],
+              canAdmitTenants: false,
+              disabledReasons: [],
+              nodes: [],
+              version: 1,
+            },
+          ]),
+          { headers: { "content-type": "application/json" } },
+        ),
+    });
+    const [machine] = await client.admin.machines();
+    expect(machine?.hostObservation).toMatchObject({
+      memoryPercent: 99,
+      memoryPressurePercent: null,
+      memoryPressureSource: null,
+    });
+  });
   it("uses the admin version, validation, alias, and cache receipt routes with shared response schemas", async () => {
     const calls: Array<{ url: string; method: string }> = [];
     const client = new HitchletClient("https://controller.test", {

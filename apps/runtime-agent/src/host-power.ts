@@ -444,7 +444,8 @@ export function nativePowerEvidenceIsSafe(
     e.unmanagedActivityHold === false &&
     !!e.resources &&
     e.resources.cpuPercent < 50 &&
-    e.resources.memoryUsedBytes / e.resources.memoryTotalBytes < 0.8
+    e.resources.memoryPressurePercent !== undefined &&
+    e.resources.memoryPressurePercent < 80
   );
 }
 /** Durable write precedes side effects. A recovered executing journal only cancels; never replays. */

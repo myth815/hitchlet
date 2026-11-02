@@ -13,8 +13,10 @@ export type HostCommand =
   | "mac-console"
   | "mac-json"
   | "mac-virtual"
+  | "mac-memory"
   | "who"
   | "linux-virtual"
+  | "linux-memory"
   | "linux-sessions"
   | "linux-session"
   | "windows-sessions";
@@ -38,6 +40,10 @@ export const runHostCommand: CommandRunner = async (command, argument) => {
       file = "/usr/sbin/sysctl";
       args = ["-n", "kern.hv_vmm_present"];
       break;
+    case "mac-memory":
+      file = "/usr/bin/memory_pressure";
+      args = ["-Q"];
+      break;
     case "who":
       file = "/usr/bin/who";
       args = [];
@@ -45,6 +51,10 @@ export const runHostCommand: CommandRunner = async (command, argument) => {
     case "linux-virtual":
       file = "/usr/bin/systemd-detect-virt";
       args = [];
+      break;
+    case "linux-memory":
+      file = "/usr/bin/cat";
+      args = ["/proc/meminfo"];
       break;
     case "linux-sessions":
       file = "/usr/bin/loginctl";
@@ -105,12 +115,23 @@ export const runHostCommand: CommandRunner = async (command, argument) => {
 };
 
 type Session = HostSnapshot["sessions"][number];
+type MemoryPressureSource = Exclude<
+  NonNullable<HostSnapshot["resources"]>["memoryPressureSource"],
+  undefined
+>;
 type SessionEvidence = {
   sessions: Session[];
   complete: boolean;
   errors: string[];
   activeInteraction: boolean | "unknown";
 };
+type MemoryAvailability = Readonly<{
+  memoryAvailablePercent: number;
+  memoryPressurePercent: number;
+  memoryPressureSource: MemoryPressureSource;
+  memoryAvailableBytes?: number;
+  memoryAvailableTotalBytes?: number;
+}>;
 const ref = (value: string) => createHash("sha256").update(value).digest("hex");
 const unknown = (code: string): SessionEvidence => ({
   sessions: [],
@@ -265,6 +286,8 @@ const windowsOutput = z
   .object({
     physical: z.boolean(),
     complete: z.boolean(),
+    memoryAvailableTotalBytes: z.number().int().positive().safe().optional(),
+    memoryAvailableBytes: z.number().int().nonnegative().safe().optional(),
     sessions: z.array(
       z.object({
         id: z.number().int().nonnegative(),
@@ -278,11 +301,16 @@ const windowsOutput = z
   .strict();
 export function parseWindowsSessions(
   value: unknown,
-): SessionEvidence & { physical: boolean } {
+): SessionEvidence & { physical: boolean; memory?: MemoryAvailability } {
   const parsed = windowsOutput.safeParse(value);
   if (!parsed.success)
     return { ...unknown("windows_wts_shape_unknown"), physical: false };
   const d = parsed.data;
+  const memory = parseAvailableBytes(
+    d.memoryAvailableBytes,
+    d.memoryAvailableTotalBytes,
+    "windows_global_memory_status_ex",
+  );
   return {
     physical: d.physical,
     sessions: d.sessions.map((s) => ({
@@ -305,14 +333,76 @@ export function parseWindowsSessions(
     complete: d.complete && d.sessions.length === 0,
     activeInteraction:
       d.sessions.length === 0 && d.complete ? false : "unknown",
-    errors:
-      d.complete && d.sessions.length === 0
+    errors: [
+      ...(d.complete && d.sessions.length === 0
         ? []
         : [
             d.complete
               ? "windows_lock_state_unknown"
               : "windows_session_enumeration_incomplete",
-          ],
+          ]),
+      ...(!memory ? ["windows_memory_availability_unknown"] : []),
+    ],
+    ...(memory ? { memory } : {}),
+  };
+}
+
+/** Linux MemAvailable estimates memory the kernel can make available without swapping. */
+export function parseLinuxMemoryInfo(text: string): MemoryAvailability {
+  const values = new Map<string, number>();
+  for (const line of text.split("\n")) {
+    const match = /^(MemTotal|MemAvailable):\s+(\d+)\s+kB\s*$/.exec(line);
+    if (!match) continue;
+    const bytes = Number(match[2]) * 1024;
+    if (!Number.isSafeInteger(bytes) || values.has(match[1]!))
+      throw new Error("linux_memory_shape_unknown");
+    values.set(match[1]!, bytes);
+  }
+  const total = values.get("MemTotal"),
+    available = values.get("MemAvailable");
+  const result = parseAvailableBytes(available, total, "linux_memavailable");
+  if (!result) throw new Error("linux_memory_shape_unknown");
+  return result;
+}
+
+/** memory_pressure -Q reports the native available-memory percentage. */
+export function parseMacMemoryPressure(text: string): MemoryAvailability {
+  const matches = [
+    ...text.matchAll(/System-wide memory free percentage:\s*(\d+(?:\.\d+)?)%/g),
+  ];
+  if (matches.length !== 1) throw new Error("mac_memory_shape_unknown");
+  const available = Number(matches[0]![1]);
+  if (!Number.isFinite(available) || available < 0 || available > 100)
+    throw new Error("mac_memory_shape_unknown");
+  return {
+    memoryAvailablePercent: available,
+    memoryPressurePercent: 100 - available,
+    memoryPressureSource: "macos_memory_pressure_free",
+  };
+}
+
+function parseAvailableBytes(
+  available: number | undefined,
+  total: number | undefined,
+  source: MemoryPressureSource,
+): MemoryAvailability | undefined {
+  if (
+    available === undefined ||
+    total === undefined ||
+    !Number.isSafeInteger(available) ||
+    !Number.isSafeInteger(total) ||
+    total <= 0 ||
+    available < 0 ||
+    available > total
+  )
+    return undefined;
+  const memoryAvailablePercent = (available / total) * 100;
+  return {
+    memoryAvailablePercent,
+    memoryPressurePercent: 100 - memoryAvailablePercent,
+    memoryPressureSource: source,
+    memoryAvailableBytes: available,
+    memoryAvailableTotalBytes: total,
   };
 }
 
@@ -336,7 +426,8 @@ export async function collectHostEvidence(
   >
 > {
   let evidence = unknown("unsupported_host_os"),
-    physical = false;
+    physical = false,
+    memory: MemoryAvailability | undefined;
   try {
     if (platform === "darwin") {
       try {
@@ -350,6 +441,11 @@ export async function collectHostEvidence(
         );
       } catch {
         evidence = unknown("mac_console_probe_failed");
+      }
+      try {
+        memory = parseMacMemoryPressure(await run("mac-memory"));
+      } catch {
+        evidence.errors.push("mac_memory_availability_unknown");
       }
       try {
         evidence.sessions.push(...parseWho(await run("who")));
@@ -388,11 +484,17 @@ export async function collectHostEvidence(
         )
           evidence.activeInteraction = "unknown";
       }
+      try {
+        memory = parseLinuxMemoryInfo(await run("linux-memory"));
+      } catch {
+        evidence.errors.push("linux_memory_availability_unknown");
+      }
     } else if (platform === "win32") {
       const parsed = parseWindowsSessions(
         JSON.parse(await run("windows-sessions")),
       );
       physical = parsed.physical;
+      memory = parsed.memory;
       evidence = parsed;
     }
   } catch {
@@ -413,7 +515,11 @@ export async function collectHostEvidence(
   }
   let resources: HostSnapshot["resources"] = null;
   try {
-    resources = await sample();
+    const sampled = await sample();
+    resources = hostSnapshotSchema.shape.resources.unwrap().parse({
+      ...sampled,
+      ...(memory ?? {}),
+    });
   } catch {
     evidence.errors.push("host_resources_probe_failed");
   }

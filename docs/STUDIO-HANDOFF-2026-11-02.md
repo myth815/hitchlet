@@ -52,6 +52,8 @@ Hitchlet 是独立、业务无关的通用计算环境供给平台。Docker/Port
 
 ## 后续范围与 Codex 会话
 
+真实验收后的 [运行可靠性阶段](STUDIO-RELIABILITY-2026-11-02.md) 已修正可用内存判据，并在同栈原票上验证控制器中断、真实截止、Agent 不可达与恢复回收。仍不声明离线强停保证，媒体/Vesta 适配范围不变。
+
 审计 `AUDIT-USABILITY-2026-11-02.md` 是保全的历史审计；其中后端/SDK缺口已由云原提交接续，GUI 指纹/pending 缺口由本轮补齐。旧 media worker、自动续租消费策略和媒体/Vesta 接入不在本轮实现范围，消费者仓库及其未提交改动没有迁入，不能声称媒体业务已可用。
 
 侧栏 Hitchlet 项目尚未创建，不能因此阻断仓库开发。原生 `com.openai.codex` 路径曾被安全拒绝，不能重试或修改应用数据库/私有配置。当前为正常 create_thread 创建的本地 projectless 会话《Hitchlet Studio 开发接续》，threadId `01a19ae0-f34c-78f0-86ce-5ba02c9eaf26`、hostId `local`，尚无 Hitchlet projectId。会话默认 cwd 与独立 Hitchlet clone 的工程 cwd 不同；所有工程命令必须显式以该 clone 为 workdir，不能冒称会话已绑定侧栏项目。

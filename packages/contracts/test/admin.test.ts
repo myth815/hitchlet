@@ -6,6 +6,25 @@ const uuid = "00000000-0000-4000-8000-000000000001";
 const secretRef = `secret:${"a".repeat(32)}`;
 
 describe("shared administrator contracts", () => {
+  it("defaults missing pressure fields from legacy controller projections to unknown", () => {
+    const legacyHost =
+      AdminSchemas.MachineDependencyViewSchema.shape.hostObservation.parse({
+        state: "fresh",
+        humanPresence: "present",
+        cpuPercent: 2,
+        memoryPercent: 99,
+        unmanagedActivityHold: null,
+        receivedAtMs: 1,
+        probeStatus: "partial",
+        sessionsComplete: false,
+        interactiveSessionCount: 1,
+      });
+    expect(legacyHost).toMatchObject({
+      memoryPercent: 99,
+      memoryPressurePercent: null,
+      memoryPressureSource: null,
+    });
+  });
   it("keeps the complete Node runtime and attestation schema at the admin entry", () => {
     expect(
       AdminSchemas.NodeRuntimeConfigSchema.parse({

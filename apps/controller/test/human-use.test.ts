@@ -69,8 +69,13 @@ function fixture(): MachineAdmissionContext {
         activeInteraction: false,
         resources: {
           cpuPercent: 20,
-          memoryUsedBytes: 200,
+          memoryUsedBytes: 990,
           memoryTotalBytes: 1000,
+          memoryAvailableBytes: 800,
+          memoryAvailableTotalBytes: 1000,
+          memoryAvailablePercent: 80,
+          memoryPressurePercent: 20,
+          memoryPressureSource: "linux_memavailable",
         },
         unmanagedActivityHold: false,
         errorCodes: [],
@@ -299,6 +304,31 @@ describe("one Machine human-use and physical-budget admission rule", () => {
     const result = evaluateMachineAdmission(fixture(), now, "n");
     expect(result.allowed).toBe(true);
     expect(result.admissionAssurance).toBe("complete_host");
+  });
+  it("treats legacy fresh Host memory data as unknown and blocks observed-host admission", () => {
+    const c = fixture();
+    delete c.observation!.snapshot.resources!.memoryAvailableBytes;
+    delete c.observation!.snapshot.resources!.memoryAvailablePercent;
+    delete c.observation!.snapshot.resources!.memoryPressurePercent;
+    delete c.observation!.snapshot.resources!.memoryPressureSource;
+    const result = evaluateMachineAdmission(c, now, "n", amounts(1));
+    expect(result.allowed).toBe(false);
+    expect(result.reasons).toContain(
+      "Memory pressure is unknown or above policy",
+    );
+    expect(result.hostObservation.memoryPressurePercent).toBeNull();
+    expect(result.hostObservation.memoryPressureSource).toBeNull();
+  });
+  it("compares the available-derived estimate with the existing memory threshold", () => {
+    const c = fixture();
+    c.observation!.snapshot.resources!.memoryAvailableBytes = 200;
+    c.observation!.snapshot.resources!.memoryAvailablePercent = 20;
+    c.observation!.snapshot.resources!.memoryPressurePercent = 80;
+    const result = evaluateMachineAdmission(c, now, "n", amounts(1));
+    expect(result.allowed).toBe(false);
+    expect(result.reasons).toContain(
+      "Memory pressure is unknown or above policy",
+    );
   });
   it("keeps the explicit M1 static trial separate from shared-host evidence", () => {
     const c = fixture();

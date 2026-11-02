@@ -159,6 +159,10 @@ export function evaluateMachineAdmission(
         snapshot.resources.memoryTotalBytes) *
       100
     : null;
+  const memoryPressurePercent =
+    snapshot?.resources?.memoryPressurePercent ?? null;
+  const memoryPressureSource =
+    snapshot?.resources?.memoryPressureSource ?? null;
   const boundedPartial =
     !manual &&
     fresh &&
@@ -167,6 +171,7 @@ export function evaluateMachineAdmission(
     humanPresence !== "unknown" &&
     policy?.admissionDuringInteraction === "within_reserved_budget" &&
     snapshot.resources !== null &&
+    memoryPressurePercent !== null &&
     snapshot.unmanagedActivityHold !== true;
   const limitations = manual
     ? [
@@ -188,7 +193,9 @@ export function evaluateMachineAdmission(
     ? ("manual_inventory_trial" as const)
     : boundedPartial
       ? ("bounded_partial_host" as const)
-      : fresh && snapshot?.probeStatus === "complete"
+      : fresh &&
+          snapshot?.probeStatus === "complete" &&
+          memoryPressurePercent !== null
         ? ("complete_host" as const)
         : ("unavailable_host" as const);
   const hostObservation = {
@@ -202,6 +209,8 @@ export function evaluateMachineAdmission(
     humanPresence: humanPresence as "present" | "absent" | "unknown",
     cpuPercent,
     memoryPercent,
+    memoryPressurePercent,
+    memoryPressureSource,
     unmanagedActivityHold: snapshot?.unmanagedActivityHold ?? null,
     receivedAtMs: observation?.receivedAtMs ?? null,
     probeStatus: snapshot?.probeStatus ?? null,
@@ -290,9 +299,9 @@ export function evaluateMachineAdmission(
     )
       block("cpu_pressure_blocked", "CPU pressure is unknown or above policy");
     if (
-      (!manual || memoryPercent !== null) &&
-      (memoryPercent === null ||
-        memoryPercent >= policy.memoryPressureLimitPercent)
+      (!manual || memoryPressurePercent !== null) &&
+      (memoryPressurePercent === null ||
+        memoryPressurePercent >= policy.memoryPressureLimitPercent)
     )
       block(
         "memory_pressure_blocked",

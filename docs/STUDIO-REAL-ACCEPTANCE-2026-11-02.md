@@ -2,6 +2,8 @@
 
 本阶段完成独立 Colima → Portainer → Runtime Agent → 控制器正常注册、真实资格检查、正式镜像验证与发布，以及一张通用 SSH 租客 Ticket 的完整生命周期。使用生产控制器后台循环、真实 Docker 和 SSH；数据只有合成烟测输入及其输出。前一阶段 Simulator 记录见 [接续说明](STUDIO-HANDOFF-2026-11-02.md)，两阶段证据不混用。
 
+本文件保存首轮验收时点的记录。后续 [运行可靠性阶段](STUDIO-RELIABILITY-2026-11-02.md) 修正内存判据，将测试 Machine 的显式阈值改回 90%，并新增一张有限故障测试票；当前累计票据和清理状态以该后续记录为准。
+
 ## 隔离安装和实际配置
 
 Mac Studio / M5 Max / 64 GiB / arm64；宿主 Node 24.21.0、pnpm 10.28.2。新建 `hitchlet-studio-acceptance` Colima profile，Docker context 为 `colima-hitchlet-studio-acceptance`，6 CPU、8 GiB RAM、40 GiB 数据盘、20 GiB 根盘，VZ / Linux arm64。既有 `default` profile 保持运行，未切换全局 Docker context。

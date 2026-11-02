@@ -27,7 +27,9 @@ function machine(): Machine {
       state: "fresh",
       humanPresence: "present",
       cpuPercent: 1,
-      memoryPercent: 2,
+      memoryPercent: 99,
+      memoryPressurePercent: 2,
+      memoryPressureSource: "linux_memavailable",
       unmanagedActivityHold: null,
       receivedAtMs: 100,
       probeStatus: "partial",
@@ -110,6 +112,24 @@ async function enter(element: Element, label: string, value: string) {
   });
 }
 describe("Machine policy editing", () => {
+  it("labels memory as an available-derived estimate and shows its source", async () => {
+    const f = await render();
+    expect(f.element.textContent).toContain(
+      "内存压力估计（100% − 系统报告可用量）",
+    );
+    expect(f.element.textContent).toContain("Linux MemAvailable");
+  });
+  it("shows missing legacy pressure fields as unknown even when raw usage is high", async () => {
+    const current = machine();
+    current.hostObservation.memoryPercent = 99;
+    current.hostObservation.memoryPressurePercent = null;
+    current.hostObservation.memoryPressureSource = null;
+    const f = await render(current);
+    expect(f.element.textContent).toContain(
+      "内存压力估计（100% − 系统报告可用量） 未知",
+    );
+    expect(f.element.textContent).not.toContain("99.0%");
+  });
   it("previews edited budgets, saves exact version/policy once, and preserves zero values", async () => {
     const current = machine(),
       f = await render(current);

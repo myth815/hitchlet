@@ -56,10 +56,10 @@ export function shutdownReasons(c: PowerContext, now: number): string[] {
     reasons.push("Human-use policy is missing or invalid");
   if (
     a.hostObservation.cpuPercent === null ||
-    a.hostObservation.memoryPercent === null ||
+    a.hostObservation.memoryPressurePercent === null ||
     a.hostObservation.cpuPercent >=
       (c.admission.policy?.cpuPressureLimitPercent ?? 0) ||
-    a.hostObservation.memoryPercent >=
+    a.hostObservation.memoryPressurePercent >=
       (c.admission.policy?.memoryPressureLimitPercent ?? 0)
   )
     reasons.push("Resource pressure is unknown or above policy");

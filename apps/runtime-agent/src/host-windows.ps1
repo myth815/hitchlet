@@ -6,10 +6,13 @@ using System.Runtime.InteropServices;
 using System.Collections.Generic;
 public static class HitchletSessions {
  [StructLayout(LayoutKind.Sequential)] public struct Session { public int Id; public IntPtr Station; public int State; }
+ [StructLayout(LayoutKind.Sequential)] public class MemoryStatus { public uint Length = (uint)Marshal.SizeOf(typeof(MemoryStatus)); public uint Load; public ulong TotalPhysical; public ulong AvailablePhysical; public ulong TotalPageFile; public ulong AvailablePageFile; public ulong TotalVirtual; public ulong AvailableVirtual; public ulong AvailableExtendedVirtual; }
  public class Item { public int id; public string user; public string domain; public int state; public int protocol; }
  [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool WTSEnumerateSessions(IntPtr server,int reserved,int version,out IntPtr sessions,out int count);
  [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool WTSQuerySessionInformation(IntPtr server,int session,int info,out IntPtr buffer,out int bytes);
  [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr memory);
+ [DllImport("kernel32.dll", SetLastError=true)] static extern bool GlobalMemoryStatusEx([In,Out] MemoryStatus status);
+ public static MemoryStatus Memory() { var status=new MemoryStatus(); if(!GlobalMemoryStatusEx(status)) throw new InvalidOperationException("global_memory_status_failed"); return status; }
  static string Query(int id,int info) { IntPtr p; int bytes; if(!WTSQuerySessionInformation(IntPtr.Zero,id,info,out p,out bytes)) throw new InvalidOperationException("wts_query_failed"); try { return Marshal.PtrToStringUni(p) ?? ""; } finally { WTSFreeMemory(p); } }
  static int Protocol(int id) { IntPtr p; int bytes; if(!WTSQuerySessionInformation(IntPtr.Zero,id,16,out p,out bytes)) throw new InvalidOperationException("wts_protocol_failed"); try { if(bytes<2)throw new InvalidOperationException("wts_protocol_incomplete"); return (int)(ushort)Marshal.ReadInt16(p); } finally {WTSFreeMemory(p);} }
  public static Item[] Read() { IntPtr p; int count; if(!WTSEnumerateSessions(IntPtr.Zero,0,1,out p,out count)) throw new InvalidOperationException("wts_enumeration_failed"); var result=new List<Item>(); try { for(int i=0;i<count;i++){var s=(Session)Marshal.PtrToStructure(IntPtr.Add(p,i*Marshal.SizeOf(typeof(Session))),typeof(Session)); string user=Query(s.Id,5); if(user.Length>0)result.Add(new Item{id=s.Id,user=user,domain=Query(s.Id,7),state=s.State,protocol=Protocol(s.Id)});} } finally {WTSFreeMemory(p);} return result.ToArray(); }
@@ -26,4 +29,5 @@ $validUuid = [Guid]::TryParse([string]$product.UUID, [ref]$systemUuid) -and $sys
 $nativeIdentityAvailable = $validUuid -and -not [string]::IsNullOrWhiteSpace([string]$product.UUID) -and -not [string]::IsNullOrWhiteSpace($vendor) -and -not [string]::IsNullOrWhiteSpace($model)
 $virtualModel = ($vendor + ' ' + $model) -match 'Virtual|VMware|KVM|QEMU|Xen|Parallels|Hyper-V|Amazon|Google'
 if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\ContainerType') { $virtualModel = $true }
-[pscustomobject]@{ physical = [bool]($nativeIdentityAvailable -and -not $virtualModel); complete = $true; sessions = @([HitchletSessions]::Read()) } | ConvertTo-Json -Depth 5 -Compress
+$memory = [HitchletSessions]::Memory()
+[pscustomobject]@{ physical = [bool]($nativeIdentityAvailable -and -not $virtualModel); complete = $true; sessions = @([HitchletSessions]::Read()); memoryAvailableTotalBytes = $memory.TotalPhysical; memoryAvailableBytes = $memory.AvailablePhysical } | ConvertTo-Json -Depth 5 -Compress

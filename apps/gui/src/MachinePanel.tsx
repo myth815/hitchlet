@@ -31,6 +31,11 @@ const assuranceLabels: Record<
 };
 const format = (r: Machine["capacity"]) =>
   `${r.cpuMillis}m CPU / ${r.memoryMiB} MiB 内存 / ${r.scratchMiB} MiB 临时盘`;
+const memoryPressureSourceName = {
+  linux_memavailable: "Linux MemAvailable",
+  macos_memory_pressure_free: "macOS memory_pressure -Q",
+  windows_global_memory_status_ex: "Windows GlobalMemoryStatusEx",
+} as const;
 const message = (cause: unknown) =>
   cause instanceof ComputeClientError
     ? `${cause.message}（${cause.code}）`
@@ -265,10 +270,13 @@ function MachineCard({
         {machine.hostObservation.cpuPercent === null
           ? "未知"
           : `${machine.hostObservation.cpuPercent.toFixed(1)}%`}{" "}
-        · 内存{" "}
-        {machine.hostObservation.memoryPercent === null
+        · 内存压力估计（100% − 系统报告可用量）{" "}
+        {machine.hostObservation.memoryPressurePercent === null
           ? "未知"
-          : `${machine.hostObservation.memoryPercent.toFixed(1)}%`}{" "}
+          : `${machine.hostObservation.memoryPressurePercent.toFixed(1)}%`}{" "}
+        {machine.hostObservation.memoryPressureSource
+          ? `· ${memoryPressureSourceName[machine.hostObservation.memoryPressureSource]}`
+          : ""}{" "}
         · 未管理工作{" "}
         {machine.hostObservation.unmanagedActivityHold === null
           ? "未知"

@@ -4,6 +4,8 @@ import {
   parseMacConsole,
   parseWho,
   parseLinuxSession,
+  parseLinuxMemoryInfo,
+  parseMacMemoryPressure,
   parseWindowsSessions,
   collectHostEvidence,
   type CommandRunner,
@@ -23,6 +25,11 @@ const sample = async () => ({
   cpuPercent: 2,
   memoryUsedBytes: 1,
   memoryTotalBytes: 2,
+  memoryAvailableBytes: 1,
+  memoryAvailableTotalBytes: 2,
+  memoryAvailablePercent: 50,
+  memoryPressurePercent: 50,
+  memoryPressureSource: "linux_memavailable" as const,
 });
 const present = (sessions: ReturnType<typeof parseMacConsole>) =>
   classifyHumanPresence(
@@ -112,6 +119,80 @@ describe("fixed native Host probes", () => {
       parseLinuxSession(entry.replace("Class=user", "Class=manager")),
     ).toMatchObject({ complete: true, sessions: [] });
   });
+  it("derives Linux pressure from MemAvailable and parses macOS native free percentage", () => {
+    const linux = parseLinuxMemoryInfo(
+      "MemTotal: 1000 kB\nMemFree: 20 kB\nMemAvailable: 250 kB\n",
+    );
+    expect(linux).toEqual({
+      memoryAvailableBytes: 256_000,
+      memoryAvailableTotalBytes: 1_024_000,
+      memoryAvailablePercent: 25,
+      memoryPressurePercent: 75,
+      memoryPressureSource: "linux_memavailable",
+    });
+    expect(
+      parseMacMemoryPressure("System-wide memory free percentage: 78%\n"),
+    ).toEqual({
+      memoryAvailablePercent: 78,
+      memoryPressurePercent: 22,
+      memoryPressureSource: "macos_memory_pressure_free",
+    });
+    expect(() =>
+      parseLinuxMemoryInfo("MemTotal: 1 kB\nMemFree: 1 kB\n"),
+    ).toThrow();
+    expect(() =>
+      parseLinuxMemoryInfo("MemTotal: 1 kB\nMemAvailable: 2 kB\n"),
+    ).toThrow();
+    expect(() => parseMacMemoryPressure("unrecognized output")).toThrow();
+  });
+  it("uses Windows GlobalMemoryStatusEx only when its returned bounds are valid", () => {
+    expect(
+      parseWindowsSessions({
+        physical: true,
+        complete: true,
+        sessions: [],
+        memoryAvailableTotalBytes: 1000,
+        memoryAvailableBytes: 250,
+      }),
+    ).toMatchObject({
+      memory: {
+        memoryAvailableBytes: 250,
+        memoryAvailableTotalBytes: 1000,
+        memoryAvailablePercent: 25,
+        memoryPressurePercent: 75,
+        memoryPressureSource: "windows_global_memory_status_ex",
+      },
+    });
+    expect(
+      parseWindowsSessions({
+        physical: true,
+        complete: true,
+        sessions: [],
+        memoryAvailableTotalBytes: 1000,
+        memoryAvailableBytes: 1001,
+      }),
+    ).not.toHaveProperty("memory");
+    expect(
+      parseWindowsSessions({ physical: true, complete: true, sessions: [] }),
+    ).toMatchObject({ errors: ["windows_memory_availability_unknown"] });
+  });
+  it("keeps old Host memory payloads parseable without inventing a pressure value", () => {
+    const legacy = hostSnapshotSchema.parse({
+      ...ids,
+      probeStatus: "partial",
+      sessionsComplete: false,
+      sessions: [],
+      activeInteraction: "unknown",
+      resources: {
+        cpuPercent: 1,
+        memoryUsedBytes: 990,
+        memoryTotalBytes: 1000,
+      },
+      unmanagedActivityHold: null,
+      errorCodes: ["fixture"],
+    });
+    expect(legacy.resources?.memoryPressurePercent).toBeUndefined();
+  });
   it("treats native complete empty Linux/WTS session enumeration separately from unknown unmanaged workloads", async () => {
     for (const platform of ["linux", "win32"] as const) {
       const run: CommandRunner = async (command) => {
@@ -193,5 +274,23 @@ describe("fixed native Host probes", () => {
     expect(
       classifyHumanPresence(hostSnapshotSchema.parse({ ...ids, ...evidence })),
     ).toBe("unknown");
+  });
+  it("does not fall back to raw used ratio when native Linux availability is missing", async () => {
+    const run: CommandRunner = async (command) => {
+      if (command === "linux-virtual") return "none";
+      if (command === "linux-sessions") return "[]";
+      throw new Error("native memory source unavailable");
+    };
+    const evidence = await collectHostEvidence("linux", run, async () => ({
+      cpuPercent: 1,
+      memoryUsedBytes: 990,
+      memoryTotalBytes: 1000,
+    }));
+    expect(evidence.resources).toMatchObject({
+      memoryUsedBytes: 990,
+      memoryTotalBytes: 1000,
+    });
+    expect(evidence.resources).not.toHaveProperty("memoryPressurePercent");
+    expect(evidence.errorCodes).toContain("linux_memory_availability_unknown");
   });
 });

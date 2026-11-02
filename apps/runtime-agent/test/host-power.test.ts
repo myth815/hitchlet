@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   NativePowerExecutor,
+  nativePowerEvidenceIsSafe,
   WorkloadGuardSchema,
   workloadReasons,
   type PowerJournal,
@@ -95,6 +96,43 @@ const prepare = (expiresAtMs = 6000) => ({
   machineEpoch: 2,
   token: null,
   expiresAtMs,
+});
+describe("native power resource guard", () => {
+  it("uses available-derived memory evidence and treats legacy Host metrics as unknown", () => {
+    const base = {
+      probeStatus: "complete" as const,
+      sessionsComplete: true,
+      sessions: [],
+      activeInteraction: false,
+      unmanagedActivityHold: false,
+      resources: {
+        cpuPercent: 1,
+        memoryUsedBytes: 100,
+        memoryTotalBytes: 100,
+        memoryAvailableBytes: 90,
+        memoryAvailablePercent: 90,
+        memoryPressurePercent: 10,
+        memoryPressureSource: "linux_memavailable" as const,
+      },
+    };
+    expect(nativePowerEvidenceIsSafe(base)).toBe(true);
+    expect(
+      nativePowerEvidenceIsSafe({
+        ...base,
+        resources: {
+          cpuPercent: 1,
+          memoryUsedBytes: 1,
+          memoryTotalBytes: 100,
+        },
+      }),
+    ).toBe(false);
+    expect(
+      nativePowerEvidenceIsSafe({
+        ...base,
+        resources: { ...base.resources, memoryPressurePercent: 80 },
+      }),
+    ).toBe(false);
+  });
 });
 describe("immutable native startup event identity", () => {
   const start = "2026-10-20T10:00:00.1234567Z";

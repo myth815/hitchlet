@@ -817,7 +817,7 @@ D25 的正式准入是两份互不替代的证据：Node 的隔离/能力实测�
 
 `complete_host` 可按策略允许 attended/unattended 上限。`bounded_partial_host` 仅在新鲜可信人员证据可判定为 present 或完整确认 absent、资源压力已测且低于阈值、策略显式为 `within_reserved_budget` 时成立；始终使用 attended 上限。partial 下的 `unmanagedActivityHold=null` 保持 unknown 并必须在API/GUI和节点承诺中披露。完整准入不表示可自动关机；无人登录策略也不替代电源验证。未知/过期/撤销Host、压力、能力或Runtime身份使正式准入失败/停排；恢复控制账本或重新配对Host后须等待新的boot/session/controller epoch心跳，再重新判定。
 
-Host `memoryPercent` 是根据操作系统报告的 total/free 内存计算出的使用占比，可能将缓存计入使用量；它不是 macOS 专有的 `memory_pressure` 信号。内存指标缺失、无效或达到策略阈值时仍 fail closed，不据此推断操作系统压力低。
+Host 内存准入值是 `memoryPressurePercent = 100 - native available-memory percent` 的 available-derived estimate：Linux `MemAvailable/MemTotal`、macOS `memory_pressure -Q` 的系统可用百分比、Windows `GlobalMemoryStatusEx` 物理可用/总量。它不是 Linux PSI 或 Activity Monitor 的综合内存压力。原始 `totalmem - freemem` 只保留为诊断数据；缺少新可用量字段的旧 Host 不回退到该 raw ratio，而在 `observed_host` 准入中保留 unknown 并阻断。管理员 DTO 为旧消费者保留 `memoryPercent` raw-use 字段，但准入、电源和 GUI 使用独立的 estimate/source。新 Host 会发送可选的压力字段，须先升级严格校验协议的 controller。
 
 逐节点发布矩阵至少记录：安装/代码版本、Machine/Node与RuntimeIdentity、OS/架构及Portainer/Engine版本、连接/网络/存储修订、报告ID与SHA256及范围/检查时间/到期时间、Host probe与人员/资源/未管理活动完整性、HumanUsePolicy与保留/attended预算、底座依赖/Hold、镜像manifest digest与实际架构、验证/清理报告、消费者真实连接/续租/归还、重启/恢复结果、当前准入模式、承诺范围和限制。证据必须能指向原始控制台、日志、容器读回或独立NAS验证；字段/ID/hash本身、模拟器、历史节点或另一节点的报告不构成实测。存储协议、架构、镜像分别按矩阵逐项承诺；未知能力保持unsupported。
 

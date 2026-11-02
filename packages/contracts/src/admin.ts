@@ -185,7 +185,18 @@ export const MachineDependencyViewSchema = z
         state: z.enum(["fresh", "stale", "missing", "revoked"]),
         humanPresence: z.enum(["present", "absent", "unknown"]),
         cpuPercent: z.number().nullable(),
+        /** Legacy raw used ratio, retained for diagnostics only; never an admission/power signal. */
         memoryPercent: z.number().nullable(),
+        /** Available-derived estimate (100 - OS available percentage), not raw used RAM. */
+        memoryPressurePercent: z.number().nullable().default(null),
+        memoryPressureSource: z
+          .enum([
+            "linux_memavailable",
+            "macos_memory_pressure_free",
+            "windows_global_memory_status_ex",
+          ])
+          .nullable()
+          .default(null),
         unmanagedActivityHold: z.boolean().nullable(),
         receivedAtMs: z.number().int().nonnegative().nullable(),
         probeStatus: z.enum(["complete", "partial", "failed"]).nullable(),
