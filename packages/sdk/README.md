@@ -28,6 +28,8 @@ Consumer Ticket writes are prepared and deeply frozen before sending. Persist th
 
 The client accepts a `fetch` override as its second constructor argument for existing callers, or a `SdkOptions` object for authentication and deterministic wait/fetch dependencies. Responses, requests, and saved prepared commands are validated against shared contracts before use.
 
+See [examples/resumable-tenant.mjs](examples/resumable-tenant.mjs) and its [run guide](examples/README.md) for a resumable Node consumer workflow using only the public SDK.
+
 管理端通过 `client.admin.machines()` / `machineDryRun(machineId)` 读取机器、
 Node、容量池和活跃 Allocation 依赖树。`previewHumanUsePolicy(machineId,
 {expectedVersion, policy})` 只预演，`updateHumanUsePolicy(machineId, body, key)`
