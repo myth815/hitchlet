@@ -46,10 +46,16 @@ function csrfCookie() {
 
 function errorText(error: unknown) {
   if (error instanceof ComputeClientError) {
+    if (error.statusCode === 401)
+      return "访问令牌无效或会话已过期，请重新登录。";
+    if (error.code === "NETWORK_RESULT_UNKNOWN")
+      return error.recovery.idempotencyKey
+        ? "连接中断，操作结果尚未确认。请在待恢复操作中检查并恢复原请求。"
+        : "连接中断，当前状态未知。请检查连接后重试读取。";
+    if (error.code === "HTTP_ERROR")
+      return "服务连接不可用，请检查控制器地址与连接后重试。";
     const action = (
       {
-        NETWORK_RESULT_UNKNOWN:
-          "结果尚不确定。请在“待恢复操作”中使用原请求恢复。",
         WAIT_TIMEOUT: "等待超时只停止本地等待，Ticket 未被自动取消。",
         LEASE_VERSION_CONFLICT: "租约版本已变化，请刷新详情后再操作。",
         NOT_AUTHORIZED: "当前身份没有执行此操作的权限。",
@@ -75,6 +81,11 @@ export function App({ client: injected }: { client?: HitchletClient }) {
   const [principal, setPrincipal] =
     React.useState<AuthenticatedPrincipal | null>(null);
   const [sessionReady, setSessionReady] = React.useState(false);
+  const [view, setView] = React.useState<
+    "environments" | "acquire" | "management"
+  >("environments");
+  const [healthRefresh, setHealthRefresh] = React.useState(0);
+  const [loginBusy, setLoginBusy] = React.useState(false);
   const [issuedCredential, setIssuedCredential] = React.useState("");
   const [health, setHealth] = React.useState<Health | null>(null);
   const [healthError, setHealthError] = React.useState("");
@@ -143,6 +154,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
     if (accessTimer.current !== undefined)
       window.clearTimeout(accessTimer.current);
     setPrincipal(null);
+    setView("environments");
     setTickets([]);
     setListLoading(false);
     setImages([]);
@@ -218,7 +230,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
       alive = false;
       window.clearInterval(timer);
     };
-  }, [client]);
+  }, [client, healthRefresh]);
 
   const refreshList = React.useCallback(
     async (wantedCursor = cursor, wantedPhase = phase) => {
@@ -384,6 +396,8 @@ export function App({ client: injected }: { client?: HitchletClient }) {
 
   async function login(event: React.FormEvent) {
     event.preventDefault();
+    if (loginBusy) return;
+    setLoginBusy(true);
     const token = loginToken;
     setLoginToken("");
     setError("");
@@ -397,8 +411,11 @@ export function App({ client: injected }: { client?: HitchletClient }) {
       setSelectedId(null);
       setGrant(null);
       setPrincipal(authenticated);
+      setView("environments");
     } catch (e) {
       setError(errorText(e));
+    } finally {
+      setLoginBusy(false);
     }
   }
 
@@ -429,6 +446,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
         setCursor(null);
         setCursorHistory([]);
         setSelectedId(receipt.ticket.id);
+        setView("environments");
         void refreshList(null, phase);
       },
     );
@@ -456,6 +474,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
         if (hint.idempotencyKey)
           completeCommand(principal.consumerId, hint.idempotencyKey);
         setNotice("原准备请求已恢复并取得服务端结果。");
+        setView("environments");
         if (hint.ticketId) {
           setSelectedId(hint.ticketId);
           void refreshDetail(hint.ticketId);
@@ -500,584 +519,749 @@ export function App({ client: injected }: { client?: HitchletClient }) {
       return hint.kind === kind && (!ticketId || hint.ticketId === ticketId);
     });
 
+  const canManage =
+    !!principal && ["admin", "operator", "viewer"].includes(principal.role);
+  const viewTitle = !principal
+    ? "连接计算资源控制台"
+    : view === "management"
+      ? "管理工作台"
+      : view === "acquire"
+        ? "申请环境"
+        : "我的环境";
+  const nextStep = !ticket
+    ? ""
+    : ticket.cleanupStatus === "blocked"
+      ? "回收受阻，容量仍被占用。查看下方原因并联系管理员查实。"
+      : ticket.phase === "queued"
+        ? "正在等待匹配与容量；可查看阻断原因，或取消申请。"
+        : ticket.phase === "reserved" || ticket.phase === "provisioning"
+          ? "资源已预留，正在准备环境。准备完成后才能接用。"
+          : ticket.phase === "ready" && !lease?.claimedAt
+            ? "环境已就绪，请在首次接用截止前接用。"
+            : ticket.phase === "ready"
+              ? "环境已接用。可获取连接材料、续租，或保存数据后归还。"
+              : ticket.phase === "releasing"
+                ? "正在查实回收。完成前仍占用容量，请等待确认。"
+                : "环境已释放。需要继续工作时，请重新申请环境。";
+
   return (
-    <div className="app-shell">
-      <header className="topbar">
-        <a className="brand" href="#">
-          <span className="brand-mark">H</span>
-          <span>
-            HITCHLET<small>计算资源控制台</small>
-          </span>
-        </a>
-        {principal ? (
-          <div className="identity">
+    <div className={`app-shell ${principal ? "console-shell" : "login-shell"}`}>
+      {principal ? (
+        <aside className="console-sidebar">
+          <div className="brand">
+            <span className="brand-mark">H</span>
             <span>
-              {principal.role} · {principal.consumerId.slice(0, 8)}…
+              HITCHLET<small>计算资源控制台</small>
             </span>
-            <button className="quiet-button" onClick={() => void logout()}>
-              退出
+          </div>
+          <div className="nav-label">工作区</div>
+          <nav className="console-nav" aria-label="工作区导航">
+            <button
+              aria-current={view === "environments" ? "page" : undefined}
+              onClick={() => setView("environments")}
+            >
+              我的环境 <span>→</span>
             </button>
-          </div>
-        ) : null}
-      </header>
-      <main>
-        <section className="hero">
-          <div>
-            <div className="eyebrow">临时计算环境</div>
-            <h1>
-              搭个便车：
-              <br className="mobile-break" />
-              凭票上车，用完下车
-            </h1>
-            <p>为任务申请临时计算环境，并在确认保存结果后安全归还。</p>
-          </div>
-          <div className="hero-ornament" aria-hidden="true">
-            <span>01</span>
-            <i>→</i>
-            <span>02</span>
-            <i>→</i>
-            <span>03</span>
-          </div>
-        </section>
-        {issuedCredential ? (
-          <section className="panel">
-            <h2>新控制 token（立即安全保存）</h2>
-            <textarea
-              aria-label="新控制 token"
-              readOnly
-              value={issuedCredential}
-            />
-            <p>
-              旧 token
-              与其会话已失效。此值仅在当前页面内存中显示，刷新页面后无法再次领取。
-            </p>
-            <button onClick={() => setIssuedCredential("")}>
-              已保存，清除 token 显示
+            <button
+              aria-current={view === "acquire" ? "page" : undefined}
+              onClick={() => setView("acquire")}
+            >
+              申请环境 <span>＋</span>
             </button>
-          </section>
-        ) : null}
-        <HealthPanel health={health} error={healthError} />
-        {principal?.scopes.includes("events:read") ? (
-          <EventUpdates
-            key={`events:${principal.consumerId}`}
-            client={client}
-            onRefresh={() => {
-              void refreshList();
-              if (selectedId) void refreshDetail(selectedId);
-            }}
-          />
-        ) : null}
-        {principal &&
-        ["admin", "operator", "viewer"].includes(principal.role) ? (
-          <ManagementConsole
-            key={`management:${principal.consumerId}`}
-            client={client}
-            principal={principal}
-            onCredentialIssued={setIssuedCredential}
-          />
-        ) : null}
-        {notice ? (
-          <div className="notice" role="status">
-            {notice}
+            {canManage ? (
+              <button
+                aria-current={view === "management" ? "page" : undefined}
+                onClick={() => setView("management")}
+              >
+                管理工作台 <span>⚙</span>
+              </button>
+            ) : null}
+          </nav>
+          <p className="sidebar-note">
+            关闭浏览器不会归还环境。
+            <br />
+            保存数据后，主动确认归还。
+          </p>
+        </aside>
+      ) : null}
+      <div className="workspace">
+        <header className="topbar">
+          <div className="workspace-title">
+            {!principal ? <span className="brand-mark">H</span> : null}
+            <div>
+              <h1>{viewTitle}</h1>
+              <p>
+                {!principal
+                  ? "Hitchlet · 临时环境与租约管理"
+                  : view === "management"
+                    ? "管理资源、授权与运行策略"
+                    : view === "acquire"
+                      ? "选择授权镜像，预检后提交申请"
+                      : "跟踪准备进度、接用与回收"}
+              </p>
+            </div>
           </div>
-        ) : null}
-        {error ? (
-          <div className="error-banner" role="alert">
-            {error}
-          </div>
-        ) : null}
-        {!sessionReady ? (
-          <LoginPanel
-            token={loginToken}
-            onToken={setLoginToken}
-            onSubmit={login}
-            loading
+          {principal ? (
+            <div className="identity">
+              <span>
+                {principal.role} · {principal.consumerId.slice(0, 8)}…
+              </span>
+              <button className="quiet-button" onClick={() => void logout()}>
+                退出
+              </button>
+            </div>
+          ) : null}
+        </header>
+        <main>
+          {issuedCredential ? (
+            <section className="panel">
+              <h2>新控制 token（立即安全保存）</h2>
+              <textarea
+                aria-label="新控制 token"
+                readOnly
+                value={issuedCredential}
+              />
+              <p>
+                旧 token
+                与其会话已失效。此值仅在当前页面内存中显示，刷新页面后无法再次领取。
+              </p>
+              <button onClick={() => setIssuedCredential("")}>
+                已保存，清除 token 显示
+              </button>
+            </section>
+          ) : null}
+          <HealthPanel
+            health={health}
+            error={healthError}
+            onRetry={() => setHealthRefresh((n) => n + 1)}
           />
-        ) : !principal ? (
-          <LoginPanel
-            token={loginToken}
-            onToken={setLoginToken}
-            onSubmit={login}
-            loading={false}
-          />
-        ) : (
-          <>
-            <TicketListPanel
-              tickets={tickets}
-              loading={listLoading}
-              error={listError}
-              phase={phase}
-              cursorHistory={cursorHistory}
-              nextCursor={nextCursor}
-              selectedId={selectedId}
-              onRefresh={() => void refreshList()}
-              onPhase={(next) => {
-                setPhase(next);
-                setCursor(null);
-                setCursorHistory([]);
-                void refreshList(null, next);
+          {principal?.scopes.includes("events:read") ? (
+            <EventUpdates
+              key={`events:${principal.consumerId}`}
+              client={client}
+              onRefresh={() => {
+                void refreshList();
+                if (selectedId) void refreshDetail(selectedId);
               }}
-              onPrevious={() => {
-                const previous =
-                  cursorHistory[cursorHistory.length - 1] ?? null;
-                setCursorHistory(cursorHistory.slice(0, -1));
-                setCursor(previous);
-                void refreshList(previous);
-              }}
-              onNext={() => {
-                setCursorHistory([...cursorHistory, cursor]);
-                setCursor(nextCursor);
-                void refreshList(nextCursor);
-              }}
-              onSelect={setSelectedId}
             />
-            {ticket ? (
-              <section className="detail-section">
-                <div className="section-title-row">
-                  <div>
-                    <div className="section-kicker">Ticket 详情</div>
-                    <h2>
-                      {phaseLabel(ticket.phase)}{" "}
-                      <span className="version-tag">v{ticket.version}</span>
-                    </h2>
-                  </div>
-                  <button
-                    className="quiet-button"
-                    onClick={() => void refreshDetail(ticket.id)}
-                  >
-                    刷新详情 ↻
-                  </button>
-                </div>
-                <div className="ticket-id">{ticket.id}</div>
-                <div className="detail-grid">
-                  <div>
-                    <small>镜像版本</small>
-                    <b>{ticket.acceptedRequest.image.versionId}</b>
-                  </div>
-                  <div>
-                    <small>资源合同 · request / limit</small>
-                    <b>
-                      {ticket.acceptedRequest.resources.request.cpuMillis} /{" "}
-                      {ticket.acceptedRequest.resources.limit.cpuMillis}m CPU ·{" "}
-                      {ticket.acceptedRequest.resources.request.memoryMiB} /{" "}
-                      {ticket.acceptedRequest.resources.limit.memoryMiB} MiB
-                      内存 ·{" "}
-                      {ticket.acceptedRequest.resources.request.scratchMiB} /{" "}
-                      {ticket.acceptedRequest.resources.limit.scratchMiB} MiB
-                      临时盘
-                    </b>
-                    <span>
-                      {ticket.acceptedRequest.resources.scratchEnforcement ===
-                      "required"
-                        ? "要求硬限额"
-                        : "空间预算，不保证硬限额"}
-                    </span>
-                  </div>
-                  <div>
-                    <small>放置</small>
-                    <b>
-                      {ticket.placement
-                        ? `${ticket.placement.provider} · ${ticket.placement.architecture}`
-                        : "尚未分配"}
-                    </b>
-                    <span>
-                      {ticket.placement
-                        ? `Node ${ticket.placement.nodeId}`
-                        : "等待调度"}
-                    </span>
-                  </div>
-                  <div>
-                    <small>Lease generation / version</small>
-                    <b>
-                      {lease
-                        ? `${lease.generation} / ${lease.version}`
-                        : "尚未建立"}
-                    </b>
-                    <span>
-                      接用：
-                      {lease?.claimedAt
-                        ? dateLabel(lease.claimedAt)
-                        : "尚未接用"}
-                    </span>
-                  </div>
-                  <div>
-                    <small>首次接用截止</small>
-                    <b>{dateLabel(lease?.claimBy ?? null)}</b>
-                  </div>
-                  <div>
-                    <small>当前到期 / 总寿命截止</small>
-                    <b>{dateLabel(lease?.expiresAt ?? null)}</b>
-                    <span>
-                      续租上限：{dateLabel(lease?.renewUntil ?? null)}
-                    </span>
-                  </div>
-                </div>
-                <div className="explain-box">
-                  <b>技术状态：{ticket.health.state}</b>
-                  <p>
-                    技术健康只说明执行环境的观测结果，不代表你的业务任务成功或数据已保存。
-                  </p>
-                  {ticket.scheduling.reasonCodes.length ? (
-                    <p>
-                      等待原因：
-                      {ticket.scheduling.reasonCodes
-                        .map(reasonLabel)
-                        .join("、")}
-                    </p>
-                  ) : null}
-                  {ticket.cleanupBlockedResources.length ? (
-                    <p className="error-inline">
-                      回收阻塞：
-                      {ticket.cleanupBlockedResources
-                        .flatMap((r) => r.reasonCodes)
-                        .map(reasonLabel)
-                        .join("、") || "资源仍未查实"}
-                    </p>
-                  ) : null}
-                  <p>
-                    终止原因：{terminalLabel(ticket.terminalReason)} · 清理：
-                    {cleanupLabel(ticket.cleanupStatus)}
-                    {ticket.releasedAt
-                      ? `（${dateLabel(ticket.releasedAt)}）`
-                      : ""}
-                  </p>
-                </div>
-                <div className="action-area">
-                  <div className="action-buttons">
-                    <button
-                      className="primary-button"
-                      disabled={
-                        !canClaim || !!busy || pendingFor("renew", ticket.id)
-                      }
-                      onClick={() =>
-                        void runWrite(
-                          "首次接用中",
-                          async () => {
-                            const result = await client.tickets.claim(
-                              ticket.id,
-                              {
-                                onPrepared: withPrepared(principal.consumerId),
-                              },
-                            );
-                            completeCommand(
-                              principal.consumerId,
-                              lastPreparedKey.current,
-                            );
-                            return result;
-                          },
-                          () => {
-                            setNotice("首次接用已确认，租约截止时间已更新。");
-                            void refreshDetail(ticket.id);
-                          },
-                        )
-                      }
-                    >
-                      {busy === "首次接用中" ? "确认中…" : "首次接用 / Claim"}
-                    </button>
-                    <button
-                      className="secondary-button"
-                      disabled={
-                        !canRenew || !!busy || pendingFor("renew", ticket.id)
-                      }
-                      onClick={() =>
-                        void runWrite(
-                          "续租确认中",
-                          async () => {
-                            const result = await client.tickets.renew(
-                              ticket.id,
-                              {},
-                              {
-                                onPrepared: withPrepared(principal.consumerId),
-                              },
-                            );
-                            completeCommand(
-                              principal.consumerId,
-                              lastPreparedKey.current,
-                            );
-                            return result;
-                          },
-                          () => {
-                            setNotice("续租已确认，详情中的期限将更新。");
-                            void refreshDetail(ticket.id);
-                          },
-                        )
-                      }
-                    >
-                      手动续租
-                    </button>
-                    <button
-                      className="secondary-button"
-                      disabled={
-                        !canAccess || !!busy || pendingFor("access", ticket.id)
-                      }
-                      onClick={() =>
-                        void runWrite(
-                          "获取访问材料中",
-                          async () => {
-                            const value = await client.tickets.getAccess(
-                              ticket.id,
-                              {
-                                onPrepared: withPrepared(principal.consumerId),
-                              },
-                            );
-                            completeCommand(
-                              principal.consumerId,
-                              lastPreparedKey.current,
-                            );
-                            return value;
-                          },
-                          (value) => {
-                            const auth = value.authentication;
-                            const secret =
-                              auth.kind === "ephemeral_password"
-                                ? auth.password
-                                : auth.kind === "ssh_certificate"
-                                  ? auth.certificate
-                                  : auth.kind === "ephemeral_private_key"
-                                    ? auth.privateKey
-                                    : auth.kind === "client_public_key"
-                                      ? auth.publicKeyFingerprint
-                                      : "";
-                            setGrant({
-                              host: value.access.host,
-                              port: value.access.port,
-                              username: value.access.username,
-                              secret,
-                              protocol: value.access.protocol,
-                              expiresAt: value.access.expiresAt,
-                            });
-                            if (accessTimer.current !== undefined)
-                              window.clearTimeout(accessTimer.current);
-                            accessTimer.current = window.setTimeout(
-                              () => setGrant(null),
-                              60_000,
-                            );
-                            setNotice(
-                              "访问材料仅在本页内存显示 60 秒；Simulator 不提供真实 SSH/RDP 连接能力。",
-                            );
-                          },
-                        )
-                      }
-                    >
-                      获取接用材料
-                    </button>
-                    <button
-                      className="danger-button"
-                      disabled={
-                        !canCancel || !!busy || pendingFor("cancel", ticket.id)
-                      }
-                      onClick={() => {
-                        if (
-                          window.confirm(
-                            "取消此 Ticket？如环境已创建，服务端会进入必要的清理流程。",
-                          )
-                        )
-                          void runWrite(
-                            "取消处理中",
-                            async () => {
-                              const result = await client.tickets.cancel(
-                                ticket.id,
-                                {},
-                                {
-                                  onPrepared: withPrepared(
-                                    principal.consumerId,
-                                  ),
-                                },
-                              );
-                              completeCommand(
-                                principal.consumerId,
-                                lastPreparedKey.current,
-                              );
-                              return result;
-                            },
-                            () => {
-                              setNotice("取消请求已受理；请等待清理状态确认。");
-                              void refreshDetail(ticket.id);
-                            },
-                          );
-                      }}
-                    >
-                      取消 Ticket
-                    </button>
-                    {ticket.phase === "releasing" ? (
-                      <button
-                        className="secondary-button"
-                        disabled={!!busy}
-                        onClick={() =>
-                          void runWrite(
-                            "等待清理完成",
-                            () =>
-                              waitForRelease(ticket.id, sessionEpoch.current),
-                            () => {
-                              setNotice(
-                                "服务端已确认环境释放，临时资源清理完成。",
-                              );
-                              void refreshDetail(ticket.id);
-                            },
-                          )
-                        }
-                      >
-                        等待回收完成
-                      </button>
-                    ) : null}
-                  </div>
-                  <div className="release-confirm">
-                    <label className="check-row">
-                      <input
-                        type="checkbox"
-                        checked={savedConfirmed}
-                        onChange={(e) => setSavedConfirmed(e.target.checked)}
-                      />
-                      我已保存需要保留的数据
-                    </label>
-                    <label className="check-row">
-                      <input
-                        type="checkbox"
-                        checked={reclaimConfirmed}
-                        onChange={(e) => setReclaimConfirmed(e.target.checked)}
-                      />
-                      我同意删除这个临时环境及其中未保存的数据
-                    </label>
-                    <button
-                      className="danger-button"
-                      disabled={
-                        !canRelease ||
-                        !savedConfirmed ||
-                        !reclaimConfirmed ||
-                        !!busy ||
-                        pendingFor("release", ticket.id)
-                      }
-                      onClick={() => {
-                        const actionEpoch = sessionEpoch.current;
-                        void runWrite(
-                          "归还并等待回收",
-                          async () => {
-                            await client.tickets.release(
-                              ticket.id,
-                              { reclaimable: true },
-                              {
-                                onPrepared: withPrepared(principal.consumerId),
-                              },
-                            );
-                            if (
-                              actionEpoch === sessionEpoch.current &&
-                              mounted.current
-                            )
-                              setNotice(
-                                "归还已请求，环境正在回收；容量释放须等服务端确认。",
-                              );
-                            const released = await waitForRelease(
-                              ticket.id,
-                              actionEpoch,
-                            );
-                            completeCommand(
-                              principal.consumerId,
-                              lastPreparedKey.current,
-                            );
-                            return released;
-                          },
-                          () => {
-                            setNotice(
-                              "服务端已确认环境释放，临时资源清理完成。",
-                            );
-                            void refreshDetail(ticket.id);
-                            void refreshList();
-                          },
-                        );
-                      }}
-                    >
-                      {busy === "归还并等待回收"
-                        ? "等待回收确认…"
-                        : "确认归还并删除临时环境"}
-                    </button>
-                  </div>
-                  {grant ? (
-                    <div className="access-card">
-                      <b>短期访问材料 · {grant.protocol}</b>
-                      <p>
-                        {grant.protocol} {grant.username}@{grant.host}:
-                        {grant.port}
-                      </p>
-                      <p>{grant.secret}</p>
-                      <small>
-                        有效至 {dateLabel(grant.expiresAt)} ·
-                        请妥善复制，关闭详情或 60 秒后自动隐藏。
-                      </small>
-                      <button
-                        className="secondary-button"
-                        onClick={() =>
-                          void navigator.clipboard?.writeText(
-                            `Protocol: ${grant.protocol}\nHost: ${grant.host}\nPort: ${grant.port}\nUsername: ${grant.username}\nExpires: ${grant.expiresAt}\nCredential: ${grant.secret}`,
-                          )
-                        }
-                      >
-                        复制访问材料
-                      </button>
+          ) : null}
+          {principal && canManage && view === "management" ? (
+            <ManagementConsole
+              key={`management:${principal.consumerId}`}
+              client={client}
+              principal={principal}
+              onCredentialIssued={setIssuedCredential}
+            />
+          ) : null}
+          {notice ? (
+            <div className="notice" role="status">
+              {notice}
+            </div>
+          ) : null}
+          {error && error !== healthError && error !== listError ? (
+            <div className="error-banner" role="alert">
+              {error}
+            </div>
+          ) : null}
+          {!sessionReady ? (
+            <LoginPanel
+              token={loginToken}
+              onToken={setLoginToken}
+              onSubmit={login}
+              loading
+            />
+          ) : !principal ? (
+            <LoginPanel
+              token={loginToken}
+              onToken={setLoginToken}
+              onSubmit={login}
+              loading={false}
+              submitting={loginBusy}
+            />
+          ) : (
+            <>
+              <RecoveryPanel
+                commands={commands}
+                busy={!!busy}
+                onResume={(command) => void resumeCommand(command)}
+              />
+              <div hidden={view !== "environments"}>
+                <TicketListPanel
+                  tickets={tickets}
+                  loading={listLoading}
+                  error={listError}
+                  phase={phase}
+                  cursorHistory={cursorHistory}
+                  nextCursor={nextCursor}
+                  selectedId={selectedId}
+                  onRefresh={() => void refreshList()}
+                  onPhase={(next) => {
+                    setPhase(next);
+                    setCursor(null);
+                    setCursorHistory([]);
+                    void refreshList(null, next);
+                  }}
+                  onPrevious={() => {
+                    const previous =
+                      cursorHistory[cursorHistory.length - 1] ?? null;
+                    setCursorHistory(cursorHistory.slice(0, -1));
+                    setCursor(previous);
+                    void refreshList(previous);
+                  }}
+                  onNext={() => {
+                    setCursorHistory([...cursorHistory, cursor]);
+                    setCursor(nextCursor);
+                    void refreshList(nextCursor);
+                  }}
+                  onSelect={setSelectedId}
+                  onAcquire={() => setView("acquire")}
+                />
+                {ticket ? (
+                  <section className="detail-section">
+                    <div className="section-title-row">
+                      <div>
+                        <div className="section-kicker">Ticket 详情</div>
+                        <h2>
+                          {ticket.phase === "ready" && lease?.claimedAt
+                            ? "使用中"
+                            : phaseLabel(ticket.phase)}{" "}
+                          <span className="version-tag">v{ticket.version}</span>
+                        </h2>
+                      </div>
                       <button
                         className="quiet-button"
-                        onClick={() => {
-                          if (accessTimer.current !== undefined)
-                            window.clearTimeout(accessTimer.current);
-                          setGrant(null);
-                        }}
+                        onClick={() => void refreshDetail(ticket.id)}
                       >
-                        隐藏
+                        刷新详情 ↻
                       </button>
-                      <p className="muted">
-                        当前 Simulator 不提供真实 Docker/SSH
-                        连接；此材料只展示测试访问合同。
+                    </div>
+                    <div className="ticket-id">{ticket.id}</div>
+                    <ol className="lifecycle-steps" aria-label="环境生命周期">
+                      {(
+                        [
+                          "queued",
+                          "reserved",
+                          "provisioning",
+                          "ready",
+                          "releasing",
+                          "released",
+                        ] as const
+                      ).map((step) => (
+                        <li
+                          key={step}
+                          aria-current={
+                            ticket.phase === step ? "step" : undefined
+                          }
+                        >
+                          {step === "ready" && lease?.claimedAt
+                            ? "使用中"
+                            : phaseLabel(step)}
+                        </li>
+                      ))}
+                    </ol>
+                    <div className="next-step">
+                      <b>下一步</b>
+                      <p>{nextStep}</p>
+                      {lease && ticket.phase === "ready" ? (
+                        <p>
+                          <strong>
+                            {lease.claimedAt ? "当前到期" : "首次接用截止"}：
+                            {dateLabel(
+                              lease.claimedAt ? lease.expiresAt : lease.claimBy,
+                            )}
+                          </strong>
+                        </p>
+                      ) : null}
+                    </div>
+                    <details className="technical-details">
+                      <summary>资源、放置与租约明细</summary>
+                      <div className="detail-grid">
+                        <div>
+                          <small>镜像版本</small>
+                          <b>{ticket.acceptedRequest.image.versionId}</b>
+                        </div>
+                        <div>
+                          <small>资源合同 · request / limit</small>
+                          <b>
+                            {ticket.acceptedRequest.resources.request.cpuMillis}{" "}
+                            / {ticket.acceptedRequest.resources.limit.cpuMillis}
+                            m CPU ·{" "}
+                            {ticket.acceptedRequest.resources.request.memoryMiB}{" "}
+                            / {ticket.acceptedRequest.resources.limit.memoryMiB}{" "}
+                            MiB 内存 ·{" "}
+                            {
+                              ticket.acceptedRequest.resources.request
+                                .scratchMiB
+                            }{" "}
+                            /{" "}
+                            {ticket.acceptedRequest.resources.limit.scratchMiB}{" "}
+                            MiB 临时盘
+                          </b>
+                          <span>
+                            {ticket.acceptedRequest.resources
+                              .scratchEnforcement === "required"
+                              ? "要求硬限额"
+                              : "空间预算，不保证硬限额"}
+                          </span>
+                        </div>
+                        <div>
+                          <small>放置</small>
+                          <b>
+                            {ticket.placement
+                              ? `${ticket.placement.provider} · ${ticket.placement.architecture}`
+                              : "尚未分配"}
+                          </b>
+                          <span>
+                            {ticket.placement
+                              ? `Node ${ticket.placement.nodeId}`
+                              : "等待调度"}
+                          </span>
+                        </div>
+                        <div>
+                          <small>Lease generation / version</small>
+                          <b>
+                            {lease
+                              ? `${lease.generation} / ${lease.version}`
+                              : "尚未建立"}
+                          </b>
+                          <span>
+                            接用：
+                            {lease?.claimedAt
+                              ? dateLabel(lease.claimedAt)
+                              : "尚未接用"}
+                          </span>
+                        </div>
+                        <div>
+                          <small>首次接用截止</small>
+                          <b>{dateLabel(lease?.claimBy ?? null)}</b>
+                        </div>
+                        <div>
+                          <small>当前到期 / 总寿命截止</small>
+                          <b>{dateLabel(lease?.expiresAt ?? null)}</b>
+                          <span>
+                            续租上限：{dateLabel(lease?.renewUntil ?? null)}
+                          </span>
+                        </div>
+                      </div>
+                    </details>
+                    <div className="explain-box">
+                      <b>
+                        环境状态：
+                        {
+                          (
+                            {
+                              unknown: "尚未查实",
+                              preparing: "准备中",
+                              healthy: "正常",
+                              degraded: "异常",
+                              lost: "已失联",
+                            } as const
+                          )[ticket.health.state]
+                        }
+                      </b>
+                      <p>
+                        技术健康只说明执行环境的观测结果，不代表你的业务任务成功或数据已保存。
+                      </p>
+                      {ticket.scheduling.reasonCodes.length ? (
+                        <p>
+                          等待原因：
+                          {ticket.scheduling.reasonCodes
+                            .map(reasonLabel)
+                            .join("、")}
+                        </p>
+                      ) : null}
+                      {ticket.cleanupBlockedResources.length ? (
+                        <p className="error-inline">
+                          回收阻塞：
+                          {ticket.cleanupBlockedResources
+                            .flatMap((r) => r.reasonCodes)
+                            .map(reasonLabel)
+                            .join("、") || "资源仍未查实"}
+                        </p>
+                      ) : null}
+                      <p>
+                        终止原因：{terminalLabel(ticket.terminalReason)} ·
+                        清理：
+                        {cleanupLabel(ticket.cleanupStatus)}
+                        {ticket.releasedAt
+                          ? `（${dateLabel(ticket.releasedAt)}）`
+                          : ""}
                       </p>
                     </div>
-                  ) : null}
-                </div>
-              </section>
-            ) : null}
-            <AcquirePanel
-              images={images}
-              canOperate={canOperate}
-              busy={!!busy}
-              blocked={pendingFor("acquire")}
-              onAcquire={(request) => void acquire(request)}
-              client={client}
-              onError={safeError}
-            />
-            <RecoveryPanel
-              commands={commands}
-              busy={!!busy}
-              onResume={(command) => void resumeCommand(command)}
-            />
-            <section className="catalog-section">
-              <div className="section-title-row">
-                <div>
-                  <div className="section-kicker">只读授权目录</div>
-                  <h2>可用镜像</h2>
-                </div>
+                    <div className="action-area">
+                      <div className="action-buttons">
+                        <button
+                          className="primary-button"
+                          disabled={
+                            !canClaim ||
+                            !!busy ||
+                            pendingFor("renew", ticket.id)
+                          }
+                          onClick={() =>
+                            void runWrite(
+                              "首次接用中",
+                              async () => {
+                                const result = await client.tickets.claim(
+                                  ticket.id,
+                                  {
+                                    onPrepared: withPrepared(
+                                      principal.consumerId,
+                                    ),
+                                  },
+                                );
+                                completeCommand(
+                                  principal.consumerId,
+                                  lastPreparedKey.current,
+                                );
+                                return result;
+                              },
+                              () => {
+                                setNotice(
+                                  "首次接用已确认，租约截止时间已更新。",
+                                );
+                                void refreshDetail(ticket.id);
+                              },
+                            )
+                          }
+                        >
+                          {busy === "首次接用中"
+                            ? "确认中…"
+                            : "首次接用 / Claim"}
+                        </button>
+                        <button
+                          className="secondary-button"
+                          disabled={
+                            !canRenew ||
+                            !!busy ||
+                            pendingFor("renew", ticket.id)
+                          }
+                          onClick={() =>
+                            void runWrite(
+                              "续租确认中",
+                              async () => {
+                                const result = await client.tickets.renew(
+                                  ticket.id,
+                                  {},
+                                  {
+                                    onPrepared: withPrepared(
+                                      principal.consumerId,
+                                    ),
+                                  },
+                                );
+                                completeCommand(
+                                  principal.consumerId,
+                                  lastPreparedKey.current,
+                                );
+                                return result;
+                              },
+                              () => {
+                                setNotice("续租已确认，详情中的期限将更新。");
+                                void refreshDetail(ticket.id);
+                              },
+                            )
+                          }
+                        >
+                          手动续租
+                        </button>
+                        <button
+                          className="secondary-button"
+                          disabled={
+                            !canAccess ||
+                            !!busy ||
+                            pendingFor("access", ticket.id)
+                          }
+                          onClick={() =>
+                            void runWrite(
+                              "获取访问材料中",
+                              async () => {
+                                const value = await client.tickets.getAccess(
+                                  ticket.id,
+                                  {
+                                    onPrepared: withPrepared(
+                                      principal.consumerId,
+                                    ),
+                                  },
+                                );
+                                completeCommand(
+                                  principal.consumerId,
+                                  lastPreparedKey.current,
+                                );
+                                return value;
+                              },
+                              (value) => {
+                                const auth = value.authentication;
+                                const secret =
+                                  auth.kind === "ephemeral_password"
+                                    ? auth.password
+                                    : auth.kind === "ssh_certificate"
+                                      ? auth.certificate
+                                      : auth.kind === "ephemeral_private_key"
+                                        ? auth.privateKey
+                                        : auth.kind === "client_public_key"
+                                          ? auth.publicKeyFingerprint
+                                          : "";
+                                setGrant({
+                                  host: value.access.host,
+                                  port: value.access.port,
+                                  username: value.access.username,
+                                  secret,
+                                  protocol: value.access.protocol,
+                                  expiresAt: value.access.expiresAt,
+                                });
+                                if (accessTimer.current !== undefined)
+                                  window.clearTimeout(accessTimer.current);
+                                accessTimer.current = window.setTimeout(
+                                  () => setGrant(null),
+                                  60_000,
+                                );
+                                setNotice(
+                                  health?.executionMode === "simulator"
+                                    ? "访问材料仅在本页内存显示 60 秒；Simulator 不提供真实 SSH/RDP 连接能力。"
+                                    : "访问材料仅在本页内存显示 60 秒，请及时妥善保存。",
+                                );
+                              },
+                            )
+                          }
+                        >
+                          获取接用材料
+                        </button>
+                        <button
+                          className="danger-button"
+                          disabled={
+                            !canCancel ||
+                            !!busy ||
+                            pendingFor("cancel", ticket.id)
+                          }
+                          onClick={() => {
+                            if (
+                              window.confirm(
+                                "取消此 Ticket？如环境已创建，服务端会进入必要的清理流程。",
+                              )
+                            )
+                              void runWrite(
+                                "取消处理中",
+                                async () => {
+                                  const result = await client.tickets.cancel(
+                                    ticket.id,
+                                    {},
+                                    {
+                                      onPrepared: withPrepared(
+                                        principal.consumerId,
+                                      ),
+                                    },
+                                  );
+                                  completeCommand(
+                                    principal.consumerId,
+                                    lastPreparedKey.current,
+                                  );
+                                  return result;
+                                },
+                                () => {
+                                  setNotice(
+                                    "取消请求已受理；请等待清理状态确认。",
+                                  );
+                                  void refreshDetail(ticket.id);
+                                },
+                              );
+                          }}
+                        >
+                          取消 Ticket
+                        </button>
+                        {ticket.phase === "releasing" ? (
+                          <button
+                            className="secondary-button"
+                            disabled={!!busy}
+                            onClick={() =>
+                              void runWrite(
+                                "等待清理完成",
+                                () =>
+                                  waitForRelease(
+                                    ticket.id,
+                                    sessionEpoch.current,
+                                  ),
+                                () => {
+                                  setNotice(
+                                    "服务端已确认环境释放，临时资源清理完成。",
+                                  );
+                                  void refreshDetail(ticket.id);
+                                },
+                              )
+                            }
+                          >
+                            等待回收完成
+                          </button>
+                        ) : null}
+                      </div>
+                      <div className="release-confirm">
+                        <label className="check-row">
+                          <input
+                            type="checkbox"
+                            checked={savedConfirmed}
+                            onChange={(e) =>
+                              setSavedConfirmed(e.target.checked)
+                            }
+                          />
+                          我已保存需要保留的数据
+                        </label>
+                        <label className="check-row">
+                          <input
+                            type="checkbox"
+                            checked={reclaimConfirmed}
+                            onChange={(e) =>
+                              setReclaimConfirmed(e.target.checked)
+                            }
+                          />
+                          我同意删除这个临时环境及其中未保存的数据
+                        </label>
+                        <button
+                          className="danger-button"
+                          disabled={
+                            !canRelease ||
+                            !savedConfirmed ||
+                            !reclaimConfirmed ||
+                            !!busy ||
+                            pendingFor("release", ticket.id)
+                          }
+                          onClick={() => {
+                            const actionEpoch = sessionEpoch.current;
+                            void runWrite(
+                              "归还并等待回收",
+                              async () => {
+                                await client.tickets.release(
+                                  ticket.id,
+                                  { reclaimable: true },
+                                  {
+                                    onPrepared: withPrepared(
+                                      principal.consumerId,
+                                    ),
+                                  },
+                                );
+                                if (
+                                  actionEpoch === sessionEpoch.current &&
+                                  mounted.current
+                                )
+                                  setNotice(
+                                    "归还已请求，环境正在回收；容量释放须等服务端确认。",
+                                  );
+                                const released = await waitForRelease(
+                                  ticket.id,
+                                  actionEpoch,
+                                );
+                                completeCommand(
+                                  principal.consumerId,
+                                  lastPreparedKey.current,
+                                );
+                                return released;
+                              },
+                              () => {
+                                setNotice(
+                                  "服务端已确认环境释放，临时资源清理完成。",
+                                );
+                                void refreshDetail(ticket.id);
+                                void refreshList();
+                              },
+                            );
+                          }}
+                        >
+                          {busy === "归还并等待回收"
+                            ? "等待回收确认…"
+                            : "确认归还并删除临时环境"}
+                        </button>
+                      </div>
+                      {grant ? (
+                        <div className="access-card">
+                          <b>短期访问材料 · {grant.protocol}</b>
+                          <p>
+                            {grant.protocol} {grant.username}@{grant.host}:
+                            {grant.port}
+                          </p>
+                          <p>{grant.secret}</p>
+                          <small>
+                            有效至 {dateLabel(grant.expiresAt)} ·
+                            请妥善复制，关闭详情或 60 秒后自动隐藏。
+                          </small>
+                          <button
+                            className="secondary-button"
+                            onClick={() =>
+                              void navigator.clipboard?.writeText(
+                                `Protocol: ${grant.protocol}\nHost: ${grant.host}\nPort: ${grant.port}\nUsername: ${grant.username}\nExpires: ${grant.expiresAt}\nCredential: ${grant.secret}`,
+                              )
+                            }
+                          >
+                            复制访问材料
+                          </button>
+                          <button
+                            className="quiet-button"
+                            onClick={() => {
+                              if (accessTimer.current !== undefined)
+                                window.clearTimeout(accessTimer.current);
+                              setGrant(null);
+                            }}
+                          >
+                            隐藏
+                          </button>
+                          <p className="muted">
+                            {health?.executionMode === "simulator"
+                              ? "当前 Simulator 不提供真实 Docker/SSH 连接；此材料只展示测试访问合同。"
+                              : "使用上方短期材料连接环境；请勿将凭据分享给无关人员。"}
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                ) : null}
+                {selectedId && !ticket ? (
+                  <section className="detail-section" role="status">
+                    {error
+                      ? "环境详情暂不可用，请刷新列表后重新选择。"
+                      : "正在读取环境详情…"}
+                  </section>
+                ) : null}
               </div>
-              {images.length ? (
-                <div className="catalog-grid">
-                  {images.map((image) => (
-                    <article key={image.id}>
-                      <span className="image-glyph">▧</span>
-                      <b>{image.name}</b>
-                      <p>{image.description}</p>
-                      <small>{image.id}</small>
-                      <small>
-                        申请向导提供当前授权的不可变版本、网络和存储选择。
-                      </small>
-                    </article>
-                  ))}
-                </div>
-              ) : (
-                <p className="muted">没有已授权镜像。</p>
-              )}
-            </section>
-          </>
-        )}
-      </main>
-      <footer>
-        <span>Hitchlet · 凭票上车，用完下车</span>
-        <span>接口是状态权威 · 最近轮询约 5 秒</span>
-      </footer>
+              <div hidden={view !== "acquire"}>
+                <AcquirePanel
+                  images={images}
+                  canOperate={canOperate}
+                  busy={!!busy}
+                  blocked={pendingFor("acquire")}
+                  onAcquire={(request) => void acquire(request)}
+                  client={client}
+                  onError={safeError}
+                />
+                <section className="catalog-section">
+                  <div className="section-title-row">
+                    <div>
+                      <div className="section-kicker">只读授权目录</div>
+                      <h2>可用镜像</h2>
+                    </div>
+                  </div>
+                  {images.length ? (
+                    <div className="catalog-grid">
+                      {images.map((image) => (
+                        <article key={image.id}>
+                          <span className="image-glyph">▧</span>
+                          <b>{image.name}</b>
+                          <p>{image.description}</p>
+                          <small>{image.id}</small>
+                          <small>
+                            申请向导提供当前授权的不可变版本、网络和存储选择。
+                          </small>
+                        </article>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="muted">没有已授权镜像。</p>
+                  )}
+                </section>
+              </div>
+            </>
+          )}
+        </main>
+        <footer>
+          <span>Hitchlet · 凭票上车，用完下车</span>
+          <span>服务端状态为准 · 自动刷新中</span>
+        </footer>
+      </div>
     </div>
   );
 }

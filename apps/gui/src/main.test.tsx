@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { App } from "./App.js";
-import { HealthPanel } from "./Panels.js";
+import { HealthPanel, LoginPanel } from "./Panels.js";
 import { HitchletClient } from "@hitchlet/sdk";
 import type { AuthenticatedPrincipal } from "@hitchlet/sdk";
 
@@ -540,6 +540,55 @@ afterEach(async () => {
 });
 
 describe("consumer console", () => {
+  it("distinguishes initial connection and session loading from empty data and errors", async () => {
+    const element = document.createElement("div");
+    const root = createRoot(element);
+    roots.push(root);
+    await act(async () => {
+      root.render(
+        <>
+          <HealthPanel health={null} error="" />
+          <LoginPanel token="" onToken={() => {}} onSubmit={() => {}} loading />
+        </>,
+      );
+    });
+    expect(element.textContent).toContain("正在连接控制器");
+    expect(element.textContent).toContain("正在恢复会话");
+    expect(element.textContent).not.toContain("连接不可用");
+    expect(element.textContent).not.toContain("还没有环境");
+    expect(element.querySelector("input")).toBeNull();
+  });
+
+  it("defaults to environments, preserves an application draft across navigation and returns to the new ticket", async () => {
+    const h = harness();
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "local-test-only");
+    await submit(element, ".login-card form");
+    const active = () =>
+      element.querySelector("nav[aria-label='工作区导航'] [aria-current=page]")
+        ?.textContent;
+    expect(active()).toContain("我的环境");
+    expect(element.querySelector("nav[aria-label='管理页面']")).toBeNull();
+    expect(element.textContent).toContain("还没有环境");
+    await click(element, "申请第一个环境");
+    expect(active()).toContain("申请环境");
+    const form = element.querySelector(".acquire-form")!;
+    expect(form.closest("[hidden]")).toBeNull();
+    await click(element, "可行性预检");
+    await click(element, "我的环境");
+    expect(form.closest("[hidden]")).not.toBeNull();
+    await click(element, "申请环境");
+    expect(
+      (form.querySelector(".primary-button") as HTMLButtonElement).disabled,
+    ).toBe(false);
+    await submit(element, ".acquire-form");
+    expect(active()).toContain("我的环境");
+    expect(element.textContent).toContain("正在等待匹配与容量");
+    expect(
+      h.calls.filter((c) => c.url === "/v1/tickets" && c.method === "POST"),
+    ).toHaveLength(1);
+  });
+
   it("keeps one App event subscription through admin polling, events and tab changes, then aborts it before a consumer session", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const h = harness({
@@ -567,6 +616,7 @@ describe("consumer console", () => {
       expect(h.streams).toHaveLength(1);
     };
     singleSubscription();
+    await click(element, "管理工作台");
     const original = h.streams[0]!;
     for (let i = 1; i <= 4; i++) {
       await act(async () => {
@@ -578,7 +628,9 @@ describe("consumer console", () => {
         await vi.advanceTimersByTimeAsync(15000);
       });
       await click(element, i % 2 ? "Ticket 与操作" : "总览");
+      await click(element, "我的环境");
       await click(element, "刷新列表");
+      await click(element, "管理工作台");
       singleSubscription();
     }
     expect(
@@ -668,6 +720,7 @@ describe("consumer console", () => {
     const adminElement = await mount(admin.client);
     await enter(adminElement, "粘贴一次性显示的 token", "token");
     await submit(adminElement, ".login-card form");
+    await click(adminElement, "申请环境");
     await click(adminElement, "可行性预检");
     const adminAcquire = adminElement.querySelector(
       ".acquire-form .primary-button",
@@ -681,6 +734,7 @@ describe("consumer console", () => {
     const viewerElement = await mount(viewer.client);
     await enter(viewerElement, "粘贴一次性显示的 token", "token");
     await submit(viewerElement, ".login-card form");
+    await click(viewerElement, "申请环境");
     const viewerAcquire = viewerElement.querySelector(
       ".acquire-form .primary-button",
     ) as HTMLButtonElement;
@@ -730,6 +784,7 @@ describe("consumer console", () => {
     const element = await mount(h.client);
     await enter(element, "粘贴一次性显示的 token", "token");
     await submit(element, ".login-card form");
+    await click(element, "申请环境");
     await click(element, "可行性预检");
     await submit(element, ".acquire-form");
     const call = h.calls.find(
@@ -769,6 +824,7 @@ describe("consumer console", () => {
     const element = await mount(h.client);
     await enter(element, "粘贴一次性显示的 token", "token");
     await submit(element, ".login-card form");
+    await click(element, "申请环境");
     await click(element, "可行性预检");
     await submit(element, ".acquire-form");
     expect(
@@ -789,7 +845,7 @@ describe("consumer console", () => {
     const element = await mount(h.client);
     await enter(element, "粘贴一次性显示的 token", "token");
     await submit(element, ".login-card form");
-    await click(element, "可接用");
+    await click(element, "环境就绪");
     expect(element.textContent).toContain("技术健康只说明");
     await click(element, "首次接用 / Claim");
     expect(element.textContent).toContain("首次接用已确认");

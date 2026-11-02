@@ -106,11 +106,16 @@ export function AuthorizedAcquire({
       <h2>申请计算环境</h2>
       <Observation at={catalog.at} error={catalog.error} />
       <button onClick={() => void catalog.refresh()}>刷新授权目录</button>
-      <p>
-        Docker CPU 为配额，共享宿主内核；临时盘默认 best_effort。当前 offline
-        lease enforcement
-        unsupported；离线后只能承诺恢复对账后的最终清理。浏览器关闭不会释放环境。
+      <p className="muted">
+        按授权镜像选择资源和租期；预检不会占用资源，提交后才生成票据。
       </p>
+      <details className="technical-details">
+        <summary>资源限制与归还规则</summary>
+        <p>
+          Docker CPU 为配额，共享宿主内核；临时盘默认
+          best_effort。离线后只能承诺恢复对账后的最终清理。浏览器关闭不会释放环境。
+        </p>
+      </details>
       <form
         className="acquire-form"
         onSubmit={(e) => {

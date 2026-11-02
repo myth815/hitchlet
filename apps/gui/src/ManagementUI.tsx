@@ -16,10 +16,15 @@ export type ManagementUI = {
     recovery?: PreparedManagementRevoke,
   ) => Promise<boolean>;
 };
-export const managementError = (e: unknown) =>
-  e instanceof ComputeClientError
-    ? `${e.code} · ${e.message}${[409, 412].includes(e.statusCode ?? 0) ? "；重新读取最新版本后再确认修改。" : ""}`
-    : "读取或输入校验失败，请检查字段并刷新。";
+export const managementError = (e: unknown) => {
+  if (!(e instanceof ComputeClientError))
+    return "读取或输入校验失败，请检查字段并刷新。";
+  if (e.code === "NETWORK_RESULT_UNKNOWN")
+    return e.recovery.idempotencyKey
+      ? "连接中断，原命令结果未确认。请检查原回执，不要重复提交。"
+      : "暂时无法读取控制器，请检查连接后刷新。";
+  return `${e.code} · ${e.message}${[409, 412].includes(e.statusCode ?? 0) ? "；重新读取最新版本后再确认修改。" : ""}`;
+};
 
 /** Cancels stale page updates and retains the last snapshot as historical on read failure. */
 export function useManagementRead<T>(load: () => Promise<T>) {

@@ -31,6 +31,7 @@ export function reasonLabel(code: string) {
   return (
     (
       {
+        awaiting_scheduler: "等待调度器分配",
         no_matching_node: "没有匹配的节点",
         insufficient_capacity: "可用资源不足",
         image_unavailable: "镜像暂不可用",

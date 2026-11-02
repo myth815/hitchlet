@@ -94,13 +94,6 @@ button:disabled {
   margin: 0 auto;
   padding: 42px 28px 90px;
 }
-.hero {
-  min-height: 194px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 0 32px;
-}
 .eyebrow,
 .section-kicker {
   font:
@@ -110,38 +103,10 @@ button:disabled {
   color: #798475;
   text-transform: uppercase;
 }
-.hero h1 {
-  font:
-    700 clamp(34px, 5vw, 58px) / 1.12 Inter,
-    -apple-system,
-    sans-serif;
-  letter-spacing: -0.065em;
-  margin: 13px 0 12px;
-  color: #222a20;
-}
-.hero p,
 .muted {
   color: var(--muted);
   font-size: 14px;
   line-height: 1.65;
-}
-.hero p {
-  margin: 0;
-}
-.hero-ornament {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  color: #a8b39e;
-  font: 500 11px "DM Mono";
-  padding: 20px;
-}
-.hero-ornament i {
-  font-style: normal;
-  color: #c5cbbb;
-}
-.mobile-break {
-  display: none;
 }
 .health-panel,
 .login-card,
@@ -192,23 +157,9 @@ button:disabled {
   color: #8b643a;
   background: #fbf1e7;
 }
-.health-facts {
-  display: flex;
-  gap: 38px;
-  margin-top: 20px;
-}
-.health-facts div {
-  display: grid;
-  gap: 5px;
-}
-.health-facts small,
 .detail-grid small {
   font-size: 11px;
   color: #8b9087;
-}
-.health-facts b {
-  font-size: 13px;
-  font-weight: 600;
 }
 .simulator-banner,
 .muted-banner {
@@ -700,23 +651,6 @@ footer {
   .app-shell main {
     padding: 27px 16px 60px;
   }
-  .hero {
-    min-height: 0;
-    padding: 9px 0 24px;
-  }
-  .hero h1 {
-    font-size: 37px;
-  }
-  .hero p {
-    font-size: 12px;
-    max-width: 380px;
-  }
-  .hero-ornament {
-    display: none;
-  }
-  .mobile-break {
-    display: block;
-  }
   .health-panel,
   .login-card,
   .ticket-section,
@@ -726,16 +660,6 @@ footer {
   .catalog-section {
     padding: 19px 17px;
     margin: 13px 0;
-  }
-  .health-facts {
-    gap: 20px;
-    justify-content: space-between;
-  }
-  .health-facts small {
-    font-size: 10px;
-  }
-  .health-facts b {
-    font-size: 11px;
   }
   .section-title-row h2,
   .health-head h2 {
@@ -797,9 +721,6 @@ footer {
   }
 }
 @media (max-width: 420px) {
-  .hero h1 {
-    font-size: 33px;
-  }
   .detail-grid {
     grid-template-columns: 1fr;
   }
@@ -811,12 +732,6 @@ footer {
   }
   .catalog-grid {
     grid-template-columns: 1fr;
-  }
-  .health-facts {
-    gap: 9px;
-  }
-  .health-facts b {
-    font-size: 10px;
   }
   .ticket-main small {
     max-width: 135px;
@@ -940,5 +855,451 @@ footer {
   }
   .management-tabs button {
     flex: 1 1 40%;
+  }
+}
+
+/* Compact workspace: status and the next action stay ahead of technical detail. */
+:root {
+  --surface-muted: #f7f9f7;
+}
+[hidden] {
+  display: none !important;
+}
+button:focus-visible,
+summary:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--green);
+  outline-offset: 3px;
+}
+.console-shell {
+  display: grid;
+  grid-template-columns: 212px minmax(0, 1fr);
+}
+.workspace {
+  min-width: 0;
+}
+.console-sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  padding: 24px 14px;
+  display: flex;
+  flex-direction: column;
+  background: #263a2d;
+  color: #eff5ed;
+}
+.console-sidebar .brand {
+  color: #eff5ed;
+  padding: 0 10px 24px;
+}
+.console-sidebar .brand-mark {
+  background: #496550;
+}
+.console-sidebar .brand small {
+  color: #b4c1b4;
+  letter-spacing: 0.02em;
+  font-size: 10px;
+}
+.nav-label {
+  color: #b4c1b4;
+  font-size: 11px;
+  padding: 12px 10px;
+}
+.console-nav {
+  display: grid;
+  gap: 5px;
+}
+.console-nav button {
+  border: 1px solid transparent;
+  border-radius: 6px;
+  padding: 11px 12px;
+  background: transparent;
+  color: #c9d5c9;
+  text-align: left;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.console-nav button:hover {
+  background: #314936;
+  color: #fff;
+}
+.console-nav button[aria-current="page"] {
+  background: #e6eee3;
+  color: #263a2d;
+  font-weight: 700;
+}
+.sidebar-note {
+  margin: auto 10px 0;
+  padding-top: 28px;
+  color: #b4c1b4;
+  font-size: 11px;
+  line-height: 1.7;
+}
+.topbar {
+  height: auto;
+  min-height: 80px;
+  padding: 18px 28px;
+  gap: 16px;
+  background: #fff;
+}
+.workspace-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.workspace-title h1 {
+  font-size: 21px;
+  letter-spacing: -0.025em;
+  margin: 0;
+  line-height: 1.35;
+}
+.workspace-title p {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 5px 0 0;
+}
+.app-shell main {
+  max-width: 1440px;
+  padding: 20px 28px 36px;
+}
+.health-panel {
+  margin: 0 0 18px;
+  padding: 13px 16px;
+  border-radius: 7px;
+  box-shadow: none;
+}
+.health-head {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.health-head h2 {
+  font-size: 12px;
+  margin: 0;
+  letter-spacing: 0;
+}
+.status-pill {
+  padding: 4px 8px;
+  font-size: 11px;
+}
+.connection-mode {
+  font-size: 12px;
+  color: var(--muted);
+}
+.health-head .secondary-button {
+  margin-left: auto;
+  padding: 6px 10px;
+}
+.connection-error p {
+  font-size: 12px;
+  line-height: 1.6;
+  margin: 10px 0;
+}
+.connection-error details {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.simulator-banner,
+.muted-banner {
+  margin-top: 10px;
+  padding: 8px 10px;
+}
+.mode-details {
+  margin-top: 9px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.mode-details p {
+  margin-bottom: 0;
+}
+summary {
+  cursor: pointer;
+}
+.ticket-section,
+.detail-section,
+.acquire-section,
+.recovery-section,
+.catalog-section {
+  padding: 20px;
+  margin: 0 0 18px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+.section-title-row h2,
+.acquire-section h2,
+.recovery-section h2 {
+  font-size: 18px;
+}
+.ticket-list {
+  margin-top: 10px;
+}
+.ticket-row {
+  padding: 13px 12px;
+}
+.ticket-meta {
+  min-width: 0;
+}
+.row-arrow {
+  font-size: 11px;
+  white-space: nowrap;
+}
+.empty-state {
+  padding: 24px 12px;
+}
+.empty-state b {
+  margin-top: 0;
+}
+.empty-state p {
+  max-width: none;
+  margin: 8px 0 14px;
+}
+.empty-state .primary-button {
+  font-size: 12px;
+}
+.count {
+  font-size: 11px;
+}
+.lifecycle-steps {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  padding: 0;
+  margin: 0 0 16px;
+  gap: 6px;
+}
+.lifecycle-steps li {
+  color: #7a8277;
+  font-size: 12px;
+  padding: 6px 10px;
+  background: #f1f3ef;
+  border-radius: 4px;
+}
+.lifecycle-steps li[aria-current="step"] {
+  background: #dfeada;
+  color: #334d31;
+  font-weight: 700;
+  box-shadow: inset 0 -2px #486948;
+}
+.next-step {
+  border-left: 3px solid #708b67;
+  padding: 10px 14px;
+  background: #f2f6ef;
+  margin-bottom: 16px;
+  font-size: 12px;
+}
+.next-step b {
+  font-size: 11px;
+  color: #5b6d54;
+}
+.next-step p {
+  margin: 5px 0;
+  line-height: 1.6;
+}
+.technical-details {
+  margin: 12px 0;
+  font-size: 12px;
+  color: #596753;
+}
+.technical-details summary {
+  padding: 8px 0;
+}
+.technical-details .detail-grid {
+  margin-top: 6px;
+}
+.acquire-form {
+  display: block;
+}
+.acquire-form fieldset {
+  min-width: 0;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 14px;
+}
+.acquire-form fieldset > button {
+  justify-self: start;
+}
+.acquire-form fieldset > p {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--muted);
+  margin: 0;
+}
+.acquire-form h3 {
+  margin: 8px 0 0;
+  font-size: 14px;
+}
+.admin-section {
+  border-radius: 8px;
+  padding: 20px;
+  gap: 12px;
+}
+.admin-section > h2 {
+  font-size: 18px;
+  margin: 0;
+}
+.admin-section > p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.admin-card {
+  border-radius: 6px;
+  padding: 12px;
+  font-size: 12px;
+}
+.admin-section input,
+.admin-section select {
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: #fff;
+}
+.login-shell .topbar {
+  padding-left: max(24px, calc((100vw - 920px) / 2));
+}
+.login-shell main {
+  max-width: 976px;
+}
+.login-card {
+  max-width: 520px;
+  margin: 32px auto;
+  padding: 24px;
+  border-radius: 8px;
+  box-shadow: none;
+}
+.login-card h2 {
+  font-size: 20px;
+}
+.login-card .section-kicker {
+  display: none;
+}
+.login-card form {
+  display: grid;
+  gap: 16px;
+}
+footer {
+  padding: 16px 28px;
+  margin: 0;
+  gap: 12px;
+  font-size: 10px;
+}
+@media (max-width: 800px) {
+  .console-shell {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .console-sidebar {
+    position: static;
+    height: auto;
+    padding: 12px 16px;
+  }
+  .console-sidebar .brand {
+    padding: 0 0 12px;
+  }
+  .nav-label,
+  .sidebar-note {
+    display: none;
+  }
+  .console-nav {
+    display: flex;
+    gap: 6px;
+  }
+  .console-nav button {
+    flex: 1;
+    justify-content: center;
+    gap: 10px;
+    padding: 9px;
+  }
+  .topbar {
+    padding: 16px;
+    min-height: 74px;
+    align-items: flex-start;
+  }
+  .identity {
+    gap: 8px;
+    font-size: 10px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .app-shell main {
+    padding: 16px;
+  }
+  .workspace-title h1 {
+    font-size: 19px;
+  }
+  .ticket-section,
+  .detail-section,
+  .acquire-section,
+  .recovery-section,
+  .catalog-section,
+  .admin-section {
+    padding: 14px;
+  }
+  .ticket-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .ticket-main {
+    flex: 1;
+    min-width: 0;
+  }
+  .ticket-meta {
+    width: 100%;
+    margin-left: 20px;
+    text-align: left;
+  }
+  .row-arrow {
+    margin-left: auto;
+  }
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+    gap: 14px;
+  }
+  .release-confirm {
+    display: grid;
+    gap: 12px;
+  }
+  .release-confirm .danger-button {
+    margin-left: 0;
+  }
+  .admin-grid,
+  .catalog-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .login-card {
+    margin: 20px auto;
+    padding: 20px;
+  }
+  footer {
+    padding: 12px 16px;
+    flex-wrap: wrap;
+  }
+}
+@media (max-width: 800px) {
+  .ticket-row {
+    display: grid;
+    grid-template-columns: 10px minmax(0, 1fr) auto;
+    align-items: center;
+  }
+  .ticket-main {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .ticket-meta {
+    grid-column: 2 / -1;
+    grid-row: 2;
+    margin: 0;
+    width: auto;
+  }
+  .row-arrow {
+    grid-column: 3;
+    grid-row: 1;
+    margin: 0;
   }
 }

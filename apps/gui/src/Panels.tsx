@@ -17,23 +17,21 @@ import { preparedHint, type SavedCommand } from "./prepared.js";
 export function HealthPanel({
   health,
   error,
+  onRetry,
 }: {
   health: Awaited<ReturnType<HitchletClient["health"]>> | null;
   error: string;
+  onRetry?: () => void;
 }) {
+  const ready = !error && health?.recoveryState === "ready";
   return (
-    <section className="health-panel">
+    <section className="health-panel" aria-label="控制面状态">
       <div className="health-head">
-        <div>
-          <div className="section-kicker">控制面状态</div>
-          <h2>服务健康</h2>
-        </div>
-        <span
-          className={`status-pill ${!error && health?.recoveryState === "ready" ? "good" : "warn"}`}
-        >
+        <h2>控制面</h2>
+        <span className={`status-pill ${ready ? "good" : "warn"}`}>
           {error
             ? "连接不可用"
-            : health?.recoveryState === "ready"
+            : ready
               ? "运行正常"
               : health?.recoveryState === "recovering"
                 ? "恢复中"
@@ -41,42 +39,43 @@ export function HealthPanel({
                   ? "不可用"
                   : "读取中"}
         </span>
+        <span className="connection-mode">
+          {error
+            ? "观测未知"
+            : !health
+              ? "正在连接控制器…"
+              : health.executionMode === "simulator"
+                ? "Simulator · 本机模拟"
+                : health.executionMode === "disabled"
+                  ? "执行器未启用"
+                  : "Portainer Docker"}
+        </span>
+        {error && onRetry ? (
+          <button className="secondary-button" onClick={onRetry}>
+            重试连接
+          </button>
+        ) : null}
       </div>
-      <div className="health-facts">
-        <div>
-          <small>执行模式</small>
-          <b>
-            {error
-              ? "未知"
-              : health?.executionMode === "simulator"
-                ? "Simulator"
-                : health?.executionMode === "disabled"
-                  ? "Disabled"
-                  : health?.executionMode === "portainer"
-                    ? "Portainer"
-                    : "未知"}
-          </b>
+      {error ? (
+        <div className="connection-error">
+          <p>暂时无法读取控制器，当前状态未知。恢复连接前不能提交环境操作。</p>
+          <details>
+            <summary>错误详情</summary>
+            <p>{error}</p>
+          </details>
         </div>
-        <div>
-          <small>账本恢复</small>
-          <b>{error ? "观测未知" : (health?.recoveryState ?? "读取中")}</b>
-        </div>
-      </div>
-      {!error && health?.executionMode === "simulator" ? (
+      ) : health?.executionMode === "simulator" ? (
         <p className="simulator-banner">
           模拟环境，未连接真实 Docker/SSH；离线租约强制执行不受支持。
         </p>
-      ) : !error && health?.executionMode === "disabled" ? (
-        <p className="muted-banner">
-          执行器未启用。Ticket 可查询，但环境执行不可用。
-        </p>
-      ) : !error && health?.executionMode === "portainer" ? (
-        <p className="muted-banner">
-          Portainer Docker
-          执行模式；节点状态单独显示，离线租约强制执行不受支持。
-        </p>
+      ) : health?.executionMode === "disabled" ? (
+        <p className="muted-banner">Ticket 可查询，但环境执行不可用。</p>
+      ) : health?.executionMode === "portainer" ? (
+        <details className="mode-details">
+          <summary>执行范围与限制</summary>
+          <p>节点状态单独显示，离线租约强制执行不受支持。</p>
+        </details>
       ) : null}
-      {error ? <p className="error-inline">健康状态读取失败：{error}</p> : null}
     </section>
   );
 }
@@ -86,11 +85,13 @@ export function LoginPanel({
   onToken,
   onSubmit,
   loading,
+  submitting = false,
 }: {
   token: string;
   onToken: (value: string) => void;
   onSubmit: (event: FormEvent) => void;
   loading: boolean;
+  submitting?: boolean;
 }) {
   return (
     <section className="login-card">
@@ -101,12 +102,11 @@ export function LoginPanel({
           <div className="section-kicker">安全登录</div>
           <h2>登录 Hitchlet</h2>
           <p className="muted">
-            粘贴部署时领取的 Consumer token。token
-            仅用于换取短期会话，不会保存在浏览器存储中。
+            使用部署时领取的访问令牌登录。令牌不会保存在浏览器存储中。
           </p>
           <form onSubmit={onSubmit}>
             <label>
-              Consumer token
+              访问令牌
               <input
                 autoComplete="off"
                 type="password"
@@ -116,8 +116,11 @@ export function LoginPanel({
                 required
               />
             </label>
-            <button className="primary-button" disabled={!token.trim()}>
-              创建安全会话 <span>→</span>
+            <button
+              className="primary-button"
+              disabled={!token.trim() || submitting}
+            >
+              {submitting ? "正在登录…" : "创建安全会话"} <span>→</span>
             </button>
           </form>
         </>
@@ -139,6 +142,7 @@ export function TicketListPanel({
   onPrevious,
   onNext,
   onSelect,
+  onAcquire,
 }: {
   tickets: readonly TicketSummary[];
   loading: boolean;
@@ -152,14 +156,15 @@ export function TicketListPanel({
   onPrevious: () => void;
   onNext: () => void;
   onSelect: (id: string) => void;
+  onAcquire: () => void;
 }) {
   return (
     <section className="ticket-section">
       <div className="section-title-row">
         <div>
-          <div className="section-kicker">你的资源</div>
+          <div className="section-kicker">环境与票据</div>
           <h2>
-            我的 Ticket <span className="count">{tickets.length}</span>
+            我的环境 <span className="count">本页 {tickets.length}</span>
           </h2>
         </div>
         <button className="secondary-button" onClick={onRefresh}>
@@ -191,10 +196,17 @@ export function TicketListPanel({
           </button>
         </div>
       </div>
+      {error && tickets.length ? (
+        <p role="alert" className="error-inline">
+          刷新失败，以下为上次结果；请重新读取后判断状态。
+        </p>
+      ) : null}
       {loading && !tickets.length ? (
         <div className="skeleton">正在读取 Ticket…</div>
       ) : error && !tickets.length ? (
-        <div className="error-inline">列表读取失败：{error}</div>
+        <div className="error-inline" role="alert">
+          列表读取失败：{error}。请重试刷新列表。
+        </div>
       ) : tickets.length ? (
         <div className="ticket-list">
           {tickets.map((item) => (
@@ -205,11 +217,13 @@ export function TicketListPanel({
             >
               <span className={`phase-dot phase-${item.phase}`} />
               <span className="ticket-main">
-                <b>{phaseLabel(item.phase)}</b>
+                <b>
+                  {item.phase === "ready" ? "环境就绪" : phaseLabel(item.phase)}
+                </b>
                 <small>{item.id}</small>
               </span>
               <span className="ticket-meta">
-                <small>创建于 {dateLabel(item.createdAt)}</small>
+                <small>更新于 {dateLabel(item.updatedAt)}</small>
                 <small>
                   {item.terminalReason
                     ? `终止：${terminalLabel(item.terminalReason)}`
@@ -217,15 +231,23 @@ export function TicketListPanel({
                   · {cleanupLabel(item.cleanupStatus)}
                 </small>
               </span>
-              <span className="row-arrow">↗</span>
+              <span className="row-arrow">查看详情 →</span>
             </button>
           ))}
         </div>
       ) : (
         <div className="empty-state">
-          <span>◌</span>
-          <b>还没有 Ticket</b>
-          <p>从下方申请表选择授权镜像，提交后会在这里跟踪准备和回收状态。</p>
+          <b>{phase ? "当前筛选下没有环境" : "还没有环境"}</b>
+          <p>
+            {phase
+              ? "切换阶段筛选可查看其他票据。"
+              : "选择镜像并申请，随后在这里接用、续租和归还。"}
+          </p>
+          {!phase ? (
+            <button className="primary-button" onClick={onAcquire}>
+              申请第一个环境
+            </button>
+          ) : null}
         </div>
       )}
     </section>
