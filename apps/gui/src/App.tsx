@@ -114,7 +114,8 @@ export function App({ client: injected }: { client?: HitchletClient }) {
     port: number;
     username: string;
     secret: string;
-    protocol: string;
+    protocol: "ssh" | "rdp";
+    hostKeyFingerprint: string | null;
     expiresAt: string;
   } | null>(null);
   const [savedConfirmed, setSavedConfirmed] = React.useState(false);
@@ -498,12 +499,14 @@ export function App({ client: injected }: { client?: HitchletClient }) {
     canOperate &&
     ticket?.phase === "ready" &&
     lease?.state === "active" &&
-    !lease.claimedAt;
+    !lease.claimedAt &&
+    !ticket.renewalPending;
   const canRenew =
     canOperate &&
     ticket?.phase === "ready" &&
     lease?.state === "active" &&
-    !!lease.claimedAt;
+    !!lease.claimedAt &&
+    !ticket.renewalPending;
   const canAccess =
     canOperate &&
     ticket?.phase === "ready" &&
@@ -534,15 +537,17 @@ export function App({ client: injected }: { client?: HitchletClient }) {
       ? "回收受阻，容量仍被占用。查看下方原因并联系管理员查实。"
       : ticket.phase === "queued"
         ? "正在等待匹配与容量；可查看阻断原因，或取消申请。"
-        : ticket.phase === "reserved" || ticket.phase === "provisioning"
-          ? "资源已预留，正在准备环境。准备完成后才能接用。"
-          : ticket.phase === "ready" && !lease?.claimedAt
-            ? "环境已就绪，请在首次接用截止前接用。"
-            : ticket.phase === "ready"
-              ? "环境已接用。可获取连接材料、续租，或保存数据后归还。"
-              : ticket.phase === "releasing"
-                ? "正在查实回收。完成前仍占用容量，请等待确认。"
-                : "环境已释放。需要继续工作时，请重新申请环境。";
+        : ticket.renewalPending
+          ? "续租提案仍在裁决；原租期截止仍有效。等待原提案裁决后刷新详情。"
+          : ticket.phase === "reserved" || ticket.phase === "provisioning"
+            ? "资源已预留，正在准备环境。准备完成后才能接用。"
+            : ticket.phase === "ready" && !lease?.claimedAt
+              ? "环境已就绪，请在首次接用截止前接用。"
+              : ticket.phase === "ready"
+                ? "环境已接用。可获取连接材料、续租，或保存数据后归还。"
+                : ticket.phase === "releasing"
+                  ? "正在查实回收。完成前仍占用容量，请等待确认。"
+                  : "环境已释放。需要继续工作时，请重新申请环境。";
 
   return (
     <div className={`app-shell ${principal ? "console-shell" : "login-shell"}`}>
@@ -888,6 +893,30 @@ export function App({ client: injected }: { client?: HitchletClient }) {
                           : ""}
                       </p>
                     </div>
+                    {ticket.renewalPending ? (
+                      <div className="explain-box" role="status">
+                        <b>续租待裁决 · 尚未延期</b>
+                        <p>
+                          候选 Lease 版本：v
+                          {ticket.renewalPending.proposedLeaseVersion}
+                        </p>
+                        <p>
+                          当前已确认截止：
+                          {dateLabel(
+                            ticket.renewalPending.lastConfirmedExpiresAt,
+                          )}
+                        </p>
+                        <p>
+                          候选截止（尚未生效）：
+                          {dateLabel(ticket.renewalPending.proposedExpiresAt)}
+                        </p>
+                        <p>
+                          最后确认期限仍以当前租约到期时间为准；服务端须在
+                          {dateLabel(ticket.renewalPending.decisionDeadline)}
+                          前完成裁决。
+                        </p>
+                      </div>
+                    ) : null}
                     <div className="action-area">
                       <div className="action-buttons">
                         <button
@@ -1006,6 +1035,8 @@ export function App({ client: injected }: { client?: HitchletClient }) {
                                   username: value.access.username,
                                   secret,
                                   protocol: value.access.protocol,
+                                  hostKeyFingerprint:
+                                    value.access.hostKeyFingerprint,
                                   expiresAt: value.access.expiresAt,
                                 });
                                 if (accessTimer.current !== undefined)
@@ -1175,6 +1206,15 @@ export function App({ client: injected }: { client?: HitchletClient }) {
                             {grant.protocol} {grant.username}@{grant.host}:
                             {grant.port}
                           </p>
+                          {grant.protocol === "ssh" ? (
+                            <p>
+                              SSH 主机指纹：
+                              {grant.hostKeyFingerprint ??
+                                "服务未提供（不可据此验证主机身份）"}
+                            </p>
+                          ) : (
+                            <p>主机指纹：不适用于 RDP</p>
+                          )}
                           <p>{grant.secret}</p>
                           <small>
                             有效至 {dateLabel(grant.expiresAt)} ·
@@ -1184,7 +1224,19 @@ export function App({ client: injected }: { client?: HitchletClient }) {
                             className="secondary-button"
                             onClick={() =>
                               void navigator.clipboard?.writeText(
-                                `Protocol: ${grant.protocol}\nHost: ${grant.host}\nPort: ${grant.port}\nUsername: ${grant.username}\nExpires: ${grant.expiresAt}\nCredential: ${grant.secret}`,
+                                [
+                                  `Protocol: ${grant.protocol}`,
+                                  `Host: ${grant.host}`,
+                                  `Port: ${grant.port}`,
+                                  `Username: ${grant.username}`,
+                                  `Expires: ${grant.expiresAt}`,
+                                  `Credential: ${grant.secret}`,
+                                  ...(grant.protocol === "ssh"
+                                    ? [
+                                        `Host key fingerprint: ${grant.hostKeyFingerprint ?? "not provided"}`,
+                                      ]
+                                    : []),
+                                ].join("\n"),
                               )
                             }
                           >

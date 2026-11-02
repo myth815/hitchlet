@@ -5,7 +5,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { App } from "./App.js";
 import { HealthPanel, LoginPanel } from "./Panels.js";
 import { HitchletClient } from "@hitchlet/sdk";
-import type { AuthenticatedPrincipal } from "@hitchlet/sdk";
+import type { AuthenticatedPrincipal, TicketView } from "@hitchlet/sdk";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -28,10 +28,10 @@ const principal: AuthenticatedPrincipal = {
   scopes: ["tickets:write"],
   source: "session",
 };
-
 function ticket(
   phase: "queued" | "ready" | "releasing" | "released" = "ready",
   claimedAt: string | null = at,
+  renewalPending: TicketView["renewalPending"] = null,
 ) {
   return {
     id: ids.ticket,
@@ -116,7 +116,7 @@ function ticket(
       matchingNodeCount: 1,
       nextCheckAt: null,
     },
-    renewalPending: null,
+    renewalPending,
     cleanupBlockedResources: [],
   };
 }
@@ -131,14 +131,23 @@ function response(body: unknown, status = 200, headers?: HeadersInit) {
 function harness(
   options: {
     initialTicket?: boolean;
+    claimedAt?: string | null;
     prepared?: unknown;
     authPrincipal?: AuthenticatedPrincipal;
+    renewalPending?: TicketView["renewalPending"];
+    accessFingerprint?: string | null;
   } = {},
 ) {
   let authPrincipal = options.authPrincipal ?? principal;
   let authenticated = false;
   let force401 = false;
-  let currentTicket = options.initialTicket ? ticket("ready", null) : ticket();
+  let currentTicket = options.initialTicket
+    ? ticket(
+        "ready",
+        options.claimedAt === undefined ? null : options.claimedAt,
+        options.renewalPending ?? null,
+      )
+    : ticket("ready", at, options.renewalPending ?? null);
   let releasingPolls = 0;
   const calls: {
     url: string;
@@ -430,7 +439,10 @@ function harness(
           host: "simulator.invalid",
           port: 2222,
           username: "guest",
-          hostKeyFingerprint: null,
+          hostKeyFingerprint:
+            options.accessFingerprint === undefined
+              ? "SHA256:fixtureHostKeyFingerprint"
+              : options.accessFingerprint,
           expiresAt: "2026-10-19T00:10:00.000Z",
         },
         authentication: {
@@ -855,6 +867,30 @@ describe("consumer console", () => {
     expect(releaseButton.disabled).toBe(true);
     await click(element, "获取接用材料");
     expect(element.textContent).toContain("short-secret");
+    expect(element.textContent).toContain(
+      "SSH 主机指纹：SHA256:fixtureHostKeyFingerprint",
+    );
+    const originalClipboard = Object.getOwnPropertyDescriptor(
+      navigator,
+      "clipboard",
+    );
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    try {
+      await click(element, "复制访问材料");
+      expect(writeText).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "Host key fingerprint: SHA256:fixtureHostKeyFingerprint",
+        ),
+      );
+    } finally {
+      if (originalClipboard)
+        Object.defineProperty(navigator, "clipboard", originalClipboard);
+      else Reflect.deleteProperty(navigator, "clipboard");
+    }
     expect(
       JSON.parse(
         sessionStorage.getItem(`hitchlet.prepared.v1.${ids.consumer}`) ?? "[]",
@@ -885,6 +921,83 @@ describe("consumer console", () => {
     expect(element.textContent).toContain("已释放");
     expect(element.querySelector(".access-card")).toBeNull();
     expect(element.textContent).not.toContain("short-secret");
+    expect(element.textContent).not.toContain("fixtureHostKeyFingerprint");
+  });
+
+  it("shows an unavailable SSH host fingerprint explicitly and renders pending renewal deadlines without claiming success", async () => {
+    const pending = {
+      renewalId: "00000000-0000-4000-8000-000000000010",
+      proposedLeaseVersion: 2,
+      proposedExpiresAt: "2026-10-19T02:00:00.000Z",
+      lastConfirmedExpiresAt: "2026-10-19T01:00:00.000Z",
+      decisionDeadline: "2026-10-19T00:05:00.000Z",
+    };
+    const h = harness({
+      initialTicket: true,
+      claimedAt: at,
+      renewalPending: pending,
+      accessFingerprint: null,
+    });
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "token");
+    await submit(element, ".login-card form");
+    await click(element, "环境就绪");
+
+    expect(element.textContent).toContain("续租待裁决 · 尚未延期");
+    expect(element.textContent).toContain(
+      "续租提案仍在裁决；原租期截止仍有效。等待原提案裁决后刷新详情。",
+    );
+    expect(element.textContent).toContain("候选 Lease 版本：v2");
+    expect(element.textContent).toContain("当前已确认截止");
+    expect(element.textContent).toContain("候选截止（尚未生效）");
+    expect(element.textContent).toContain(
+      "最后确认期限仍以当前租约到期时间为准",
+    );
+    expect(element.textContent).toContain(
+      new Date(pending.lastConfirmedExpiresAt).toLocaleString("zh-CN"),
+    );
+    expect(element.textContent).toContain(
+      new Date(pending.proposedExpiresAt).toLocaleString("zh-CN"),
+    );
+    expect(element.textContent).toContain(
+      new Date(pending.decisionDeadline).toLocaleString("zh-CN"),
+    );
+    const renewButton = [...element.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes("手动续租"),
+    ) as HTMLButtonElement;
+    expect(renewButton.disabled).toBe(true);
+
+    await click(element, "获取接用材料");
+    expect(element.textContent).toContain(
+      "SSH 主机指纹：服务未提供（不可据此验证主机身份）",
+    );
+    expect(h.calls.some((item) => item.url.endsWith("/renew"))).toBe(false);
+  });
+
+  it("does not allow initial claim while its renewal proposal is pending", async () => {
+    const pending: NonNullable<TicketView["renewalPending"]> = {
+      renewalId: "00000000-0000-4000-8000-000000000010",
+      proposedLeaseVersion: 2,
+      proposedExpiresAt: "2026-10-19T02:00:00.000Z",
+      lastConfirmedExpiresAt: "2026-10-19T01:00:00.000Z",
+      decisionDeadline: "2026-10-19T00:05:00.000Z",
+    };
+    const h = harness({ initialTicket: true, renewalPending: pending });
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "token");
+    await submit(element, ".login-card form");
+    await click(element, "环境就绪");
+
+    expect(element.textContent).toContain("续租提案仍在裁决；原租期截止仍有效");
+    const claimButton = [...element.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes("首次接用 / Claim"),
+    ) as HTMLButtonElement;
+    expect(claimButton.disabled).toBe(true);
+    expect(
+      h.calls.some(
+        (item) => item.url.endsWith("/claim") || item.url.endsWith("/renew"),
+      ),
+    ).toBe(false);
   });
 
   it("resumes a saved command with its exact original key and body", async () => {
