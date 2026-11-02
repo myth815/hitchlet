@@ -1,6 +1,6 @@
 # Tart 接入：管理接线与受控验证阶段
 
-Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。当前已补可信 Runtime 通道、固定 guest 初始化、真实 SSH 探针源码，以及正常管理 API/SDK 的发现、注册、资格登记、验证与发布。**尚不能在正式 server 启用真实 Tart 租用**：原生 VM 网络执行/取证适配器与 server 最终组合仍缺源码，`EXECUTION_MODE=tart` 明确拒绝启动，默认仍为 `disabled`。不能将配置枚举或合成测试当作已有可租 VM。
+Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。当前已补可信 Runtime 通道、固定 guest 初始化、真实 SSH 探针源码，以及正常管理 API/SDK 的发现、注册、资格登记、验证与发布。本批继续补了冻结网络计划、Softnet 控制 FD/策略读回、显式网络回收和正式 server composition 的受控接线。**尚不能在正式 server 启用真实 Tart 租用**：实机网络资格与受控部署未完成，`EXECUTION_MODE=tart` 仍明确拒绝启动，默认仍为 `disabled`。不能将配置枚举或合成测试当作已有可租 VM。
 
 影音和 Vesta 的业务属于各自租客工程。Linux guest、Windows 原生、Hyper-V、快照池、Orchard 和云扩容均不是本批交付。
 
@@ -14,11 +14,11 @@ Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。�
 | Controller     | 精确冻结 Operation/Node/revision/native namespace，可信 facts/template 校验，bootstrap RPC 后读回 applied receipt，SSH 指纹及账户/OS/arch 检查 | 同账本生命周期、HTTP client、mock ssh2；没有真实 VM 握手                          |
 | 管理发布       | 发现→禁用/unknown 注册→配置→独立资格报告→草稿→持久验证和回收→重新核模板→发布                                                                   | 真实服务/SQLite/worker/provider 配合合成 native 端口；没有 SQL 直接伪造已发布状态 |
 | 租客 UI        | 目录可含 `kind: vm`，VM 请求用整 vCPU、virtual_machine、best_effort，无挂载                                                                    | GUI 测试；没有浏览器操作真实 VM                                                   |
-| 网络与正式启动 | 现有 contract/证据检查端口保留；尚无 Tart 原生执行与正反探针实现                                                                               | 未通过；启动 guard 保持关闭                                                       |
+| 网络与正式启动 | 冻结 CIDR/访问/拒绝计划，Softnet 编译/控制 FD/策略读回，显式 revoke 后回收，共用 worker/lease 的 server composition                            | 假 CLI/自有子进程/合成账本；无真实流量资格，启动 guard 保持关闭                   |
 
 ## Runtime 入口与模板
 
-`HITCHLET_TART_RUNTIME_CONFIG` 指向显式配置文件。字段见 `apps/runtime-agent/src/tart-main.ts`：`enabled: true`、监听地址/端口、installation/runtime identity、官方 app 内 executable、独立 `tartHome`、manifest/registry/journal/namespace 路径，以及已有模型的 token/CA/cert/key 文件引用。配置不接受任意 guest 命令或 Controller 提供的成功回执。
+`HITCHLET_TART_RUNTIME_CONFIG` 指向显式配置文件。字段见 `apps/runtime-agent/src/tart-main.ts`：`enabled: true`、监听地址/端口、installation/runtime identity、官方 app 内 executable、独立 `tartHome`、manifest/registry/journal/namespace 路径，以及已有模型的 token/CA/cert/key 文件引用。新增 `networkEnabled` 默认 false；显式开启还需固定的绝对 `softnetExecutable` 路径。配置不接受任意 guest 命令或 Controller 提供的成功回执；Controller 的真实执行 guard 独立保留。
 
 以下是**完成工具、模板、网络和认证准备后的入口**，本轮未对真实环境执行：
 
@@ -60,8 +60,8 @@ Controller 验证双方公钥指纹、精确回执与身份、冻结规格、网
 
 ```sh
 pnpm --filter @hitchlet/contracts exec vitest run test/tart-runtime.test.ts test/tart-transport.test.ts
-pnpm --filter @hitchlet/runtime-agent exec vitest run test/tart-driver.test.ts test/tart-main.test.ts test/tart-server.test.ts test/tart-guest-bootstrap.test.ts
+pnpm --filter @hitchlet/runtime-agent exec vitest run test/tart-network.test.ts test/tart-driver.test.ts test/tart-main.test.ts test/tart-server.test.ts test/tart-guest-bootstrap.test.ts
 pnpm --filter @hitchlet/controller exec vitest run test/tart-provider.test.ts test/tart-runtime-client.test.ts test/tart-ssh-readiness.test.ts test/tart-admin-publication.test.ts test/validation-lifecycle.test.ts
 ```
 
-实际执行结果见当前批交接；测试是受控源码验证，不是安装或 VM 验收。下一段最小源码工作是 VM 网络 contract 到 native 规则、效果读回/正反探针及 server composition；需先固定实际后端和来源地址映射，不能注入合成成功或只删启动 guard。具体 Studio 工具、模板、权限和单票预算见 [实机验收方案](TART-STUDIO-ACCEPTANCE-PLAN.md)。
+实际执行结果见当前批交接；测试是受控源码验证，不是安装或 VM 验收。本批网络源码、证据含义与恢复限制见 [Tart 网络接线](TART-NETWORK.md)。真实资格仍需固定工具/模板和正反流量验收，不能注入合成成功或只删启动 guard。具体 Studio 工具、模板、权限和单票预算见 [实机验收方案](TART-STUDIO-ACCEPTANCE-PLAN.md)。

@@ -26,6 +26,8 @@ import type {
   TartGuestBootstrapReceipt,
   TartGuestBootstrapRequest,
   TartInspection,
+  TartNetworkCleanupReceipt,
+  TartNetworkPlan,
   TartReconcileRequest,
 } from "@hitchlet/contracts/internal";
 import ssh2 from "ssh2";
@@ -42,6 +44,75 @@ afterEach(async () => {
   vi.unstubAllGlobals();
   for (const close of cleanup.splice(0).reverse()) await close();
 });
+
+function syntheticTartNetworkObservation(
+  identity: TartAllocationIdentity,
+  network: TartNetworkPlan,
+  vmName: string,
+  now: number,
+) {
+  const readback = {
+    allow: ["in proto tcp 192.0.2.0/24 port 22"],
+    block: ["in 0.0.0.0/0", "out 0.0.0.0/0"],
+    ruleCount: 99,
+  };
+  return {
+    backend: "softnet" as const,
+    status: "policy_match" as const,
+    identity,
+    revisionId: network.revisionId,
+    contractHash: network.contractHash,
+    policyHash: `sha256:${createHash("sha256")
+      .update(
+        JSON.stringify({
+          allow: [...readback.allow].sort(),
+          block: [...readback.block].sort(),
+        }),
+      )
+      .digest("hex")}`,
+    vm: {
+      vmName,
+      device: "51",
+      inode: "1024",
+      macAddress: "02:00:00:00:00:51",
+    },
+    process: { pid: 451, startedAt: new Date(now - 1000).toISOString() },
+    control: { transport: "unix_stream_fd" as const, connected: true as const },
+    readback,
+    observedAt: new Date(now).toISOString(),
+  };
+}
+
+function syntheticTartNetworkCleanup(
+  identity: TartAllocationIdentity,
+  network: TartNetworkPlan,
+  vmName: string,
+  now: number,
+): TartNetworkCleanupReceipt {
+  return {
+    backend: "softnet",
+    status: "removed",
+    identity,
+    revisionId: network.revisionId,
+    contractHash: network.contractHash,
+    policyHash: `sha256:${"c".repeat(64)}`,
+    vm: {
+      vmName,
+      device: "51",
+      inode: "1024",
+      macAddress: "02:00:00:00:00:51",
+    },
+    process: { pid: 451, startedAt: new Date(now - 1000).toISOString() },
+    processExitObserved: true,
+    readback: {
+      allow: [],
+      block: ["in 0.0.0.0/0", "out 0.0.0.0/0"],
+      ruleCount: 4,
+    },
+    observedAt: new Date(now).toISOString(),
+  };
+}
+
 type ProcessMessage = {
   phase: string;
   snapshot?: {
@@ -750,6 +821,8 @@ describe("Tart artifact draft persistence", () => {
       createHash("sha256").update(JSON.stringify(value)).digest("hex");
     let vmInspection: TartInspection | undefined;
     let bootstrapIntent: TartGuestBootstrapRequest | undefined;
+    let tartNetworkPlan: TartNetworkPlan | undefined;
+    let networkCleanupReceipt: TartNetworkCleanupReceipt | undefined;
     let createCount = 0;
     const vmNameFor = (identity: TartAllocationIdentity) =>
       `hitchlet-${createHash("sha256")
@@ -767,6 +840,14 @@ describe("Tart artifact draft persistence", () => {
         .slice(0, 32)}`;
     const runtime = {
       async inspect(identity: TartAllocationIdentity): Promise<TartInspection> {
+        if (vmInspection?.presence === "present")
+          vmInspection = {
+            ...vmInspection,
+            network: {
+              ...vmInspection.network,
+              observedAt: new Date(f.now()).toISOString(),
+            },
+          };
         return structuredClone(
           vmInspection ?? {
             presence: "absent",
@@ -777,6 +858,7 @@ describe("Tart artifact draft persistence", () => {
       },
       async reconcile(request: TartReconcileRequest): Promise<TartInspection> {
         bootstrapIntent = request.bootstrap ?? bootstrapIntent;
+        tartNetworkPlan = request.network;
         if (!vmInspection || vmInspection.presence === "absent") createCount++;
         vmInspection = {
           presence: "present",
@@ -785,6 +867,13 @@ describe("Tart artifact draft persistence", () => {
           state: "running",
           resources: request.resources,
           bootstrapStatus: bootstrapIntent ? "pending" : "not_requested",
+          network: syntheticTartNetworkObservation(
+            request.identity,
+            request.network,
+            vmNameFor(request.identity),
+            f.now(),
+          ),
+          ...(networkCleanupReceipt ? { networkCleanupReceipt } : {}),
           ipAddress: "192.0.2.44",
         };
         return structuredClone(vmInspection);
@@ -806,6 +895,7 @@ describe("Tart artifact draft persistence", () => {
           networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
           observedAt: new Date(f.now()).toISOString(),
         };
+        if (!tartNetworkPlan) throw new Error("Tart network plan is missing");
         vmInspection = {
           presence: "present",
           identity,
@@ -813,16 +903,58 @@ describe("Tart artifact draft persistence", () => {
           state: "running",
           resources: { cpus: 2, memoryMiB: 2048 },
           bootstrapStatus: "applied",
+          network: syntheticTartNetworkObservation(
+            identity,
+            tartNetworkPlan,
+            vmNameFor(identity),
+            f.now(),
+          ),
           bootstrapReceipt: receipt,
           ipAddress: "192.0.2.44",
         };
         return structuredClone(vmInspection);
+      },
+      async revokeNetwork(
+        identity: TartAllocationIdentity,
+        network: TartNetworkPlan,
+      ): Promise<TartInspection> {
+        if (network.contractHash !== tartNetworkPlan?.contractHash)
+          throw new Error("Tart network plan mismatch");
+        networkCleanupReceipt = syntheticTartNetworkCleanup(
+          identity,
+          network,
+          vmNameFor(identity),
+          f.now(),
+        );
+        if (vmInspection?.presence === "present")
+          vmInspection = {
+            ...vmInspection,
+            network: {
+              backend: "softnet",
+              status: "unknown",
+              identity,
+              revisionId: network.revisionId,
+              contractHash: network.contractHash,
+              reason: "synthetic_control_closed",
+              observedAt: new Date(f.now()).toISOString(),
+            },
+            networkCleanupReceipt,
+          };
+        return structuredClone(
+          vmInspection ?? {
+            presence: "absent",
+            identity,
+            inventoryCompleteness: "complete",
+            networkCleanupReceipt,
+          },
+        );
       },
       async destroy(identity: TartAllocationIdentity): Promise<TartInspection> {
         vmInspection = {
           presence: "absent",
           identity,
           inventoryCompleteness: "complete",
+          ...(networkCleanupReceipt ? { networkCleanupReceipt } : {}),
         };
         return structuredClone(vmInspection);
       },
@@ -839,35 +971,6 @@ describe("Tart artifact draft persistence", () => {
         runtime,
       }),
       accessMaterials,
-      network: {
-        async verify(plan) {
-          return {
-            runtimeIdentityId: plan.identity.runtimeIdentityId,
-            allocationId: plan.identity.allocationId,
-            generation: plan.identity.generation,
-            revisionId: plan.resolved.network.revisionId,
-            contractHash: hash(plan.resolved.network),
-            reference: `synthetic-network-${plan.identity.allocationId}`,
-            verifiedAt: new Date(f.now()).toISOString(),
-            expiresAt: new Date(
-              Math.min(f.now() + 600_000, plan.deadlineMs - 1),
-            ).toISOString(),
-          };
-        },
-      },
-      guestBootstrap: {
-        async apply(request) {
-          const persisted = await runtime.bootstrapApply(
-            request.identity,
-            request,
-          );
-          if (persisted.presence !== "present")
-            throw new Error("Synthetic bootstrap receipt was not persisted");
-          if (persisted.bootstrapReceipt?.status !== "applied")
-            throw new Error("Synthetic bootstrap receipt readback failed");
-          return persisted.bootstrapReceipt;
-        },
-      },
       ssh: {
         async verify(input) {
           return {
@@ -903,6 +1006,12 @@ describe("Tart artifact draft persistence", () => {
     expect(validation.operationId).toBeTruthy();
     expect(await f.worker(execution).run(validation.operationId!)).toBe(true);
     expect(createCount).toBe(1);
+    expect(tartNetworkPlan).toMatchObject({
+      mode: "isolated_vm",
+      enforcement: "tart_agent",
+      accessPorts: [22],
+    });
+    expect(tartNetworkPlan?.accessSourceCidrs.length).toBeGreaterThan(0);
     const cleanupOperation = await f.db.get<{ id: string }>(
       "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
       [validation.allocationId],

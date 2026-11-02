@@ -1,47 +1,23 @@
 import { TartNodeRuntimeConfigSchema } from "@hitchlet/contracts/admin";
-import {
-  tartInspectionSchema,
-  type TartGuestBootstrapRequest,
-  type TartRuntimeFacts,
-} from "@hitchlet/contracts/internal";
+import type { TartRuntimeFacts } from "@hitchlet/contracts/internal";
 import {
   tartRuntimeFactsForNode,
   createTartRuntimeClient,
 } from "./runtime-credentials.js";
 import type { ResolvedTartRuntime } from "./tart-provider.js";
 import type { ProvisionPlan } from "./port.js";
-import {
-  type TartExecutionProviderOptions,
-  type TartRuntimePort,
-} from "./tart-provider.js";
+import type { TartExecutionProviderOptions } from "./tart-provider.js";
 import { probeTartSsh } from "./tart-ssh-readiness.js";
 import type { LocalSecretStore } from "../storage/secret-store.js";
 import type { Storage } from "../storage/index.js";
 
 const TART_FACTS_TIMEOUT_MS = 30_000;
 
-export function createTartReadinessPorts(
-  runtime: TartRuntimePort,
-): Pick<TartExecutionProviderOptions, "guestBootstrap" | "ssh"> {
-  return {
-    guestBootstrap: {
-      async apply(request: TartGuestBootstrapRequest) {
-        const result = tartInspectionSchema.parse(
-          await runtime.bootstrapApply(request.identity, request),
-        );
-        if (
-          result.presence !== "present" ||
-          result.bootstrapStatus !== "applied" ||
-          result.bootstrapReceipt?.status !== "applied"
-        )
-          throw new Error(
-            "Tart guest bootstrap did not return an applied receipt",
-          );
-        return result.bootstrapReceipt;
-      },
-    },
-    ssh: { verify: probeTartSsh },
-  };
+export function createTartReadinessPorts(): Pick<
+  TartExecutionProviderOptions,
+  "ssh"
+> {
+  return { ssh: { verify: probeTartSsh } };
 }
 
 export type TartRuntimeBinding = Readonly<{

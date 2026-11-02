@@ -4,12 +4,16 @@ import { expect, it } from "vitest";
 import type {
   TartAllocationIdentity,
   TartGuestBootstrapReceipt,
+  TartGuestBootstrapRequest,
   TartInspection,
+  TartNetworkCleanupReceipt,
+  TartNetworkPlan,
 } from "@hitchlet/contracts/internal";
 import { tartAllocationOwnerTuple } from "@hitchlet/contracts/internal";
 import type { ProvisionPlan, ResourceJournal } from "../src/providers/port.js";
 import {
   TartExecutionProvider,
+  tartNetworkPlanFor,
   type TartExecutionProviderOptions,
 } from "../src/providers/tart-provider.js";
 import { assertFactsMatchPlan } from "../src/providers/tart-runtime-resolver.js";
@@ -30,11 +34,88 @@ function generatedKey() {
   };
 }
 
+function networkObservation(
+  identity: TartAllocationIdentity,
+  network: TartNetworkPlan,
+  vmName: string,
+  at = Date.now(),
+) {
+  const readback = {
+    allow: ["allow guest ssh"],
+    block: ["block other"],
+    // Native ruleCount is a compiled diagnostic and need not equal these arrays.
+    ruleCount: 97,
+  };
+  return {
+    backend: "softnet" as const,
+    status: "policy_match" as const,
+    identity,
+    revisionId: network.revisionId,
+    contractHash: network.contractHash,
+    policyHash: softnetPolicyHash(readback),
+    vm: {
+      vmName,
+      device: "41",
+      inode: "2048",
+      macAddress: "02:00:00:00:00:41",
+    },
+    process: { pid: 321, startedAt: new Date(at - 1000).toISOString() },
+    control: { transport: "unix_stream_fd" as const, connected: true as const },
+    readback,
+    observedAt: new Date(at).toISOString(),
+  };
+}
+
+function softnetPolicyHash(readback: {
+  allow: readonly string[];
+  block: readonly string[];
+}) {
+  return `sha256:${createHash("sha256")
+    .update(
+      JSON.stringify({
+        allow: [...readback.allow].sort(),
+        block: [...readback.block].sort(),
+      }),
+    )
+    .digest("hex")}`;
+}
+
+function removedNetworkReceipt(
+  identity: TartAllocationIdentity,
+  network: TartNetworkPlan,
+  vmName: string,
+  at = Date.now(),
+): TartNetworkCleanupReceipt {
+  return {
+    backend: "softnet",
+    status: "removed",
+    identity,
+    revisionId: network.revisionId,
+    contractHash: network.contractHash,
+    policyHash: `sha256:${"c".repeat(64)}`,
+    vm: {
+      vmName,
+      device: "41",
+      inode: "2048",
+      macAddress: "02:00:00:00:00:41",
+    },
+    process: { pid: 321, startedAt: new Date(at - 1000).toISOString() },
+    processExitObserved: true,
+    readback: {
+      allow: [],
+      block: ["in 0.0.0.0/0", "out 0.0.0.0/0"],
+      ruleCount: 2,
+    },
+    observedAt: new Date(at).toISOString(),
+  };
+}
+
 it("resumes one owned VM after guest apply failure and readies it with the same receipt nonce", async () => {
   const client = generatedKey();
   const host = generatedKey();
+  let fakeNow = Date.now();
   const plan: ProvisionPlan = {
-    deadlineMs: Date.now() + 60_000,
+    deadlineMs: fakeNow + 60_000,
     identity: {
       installationId: "install-tart",
       runtimeIdentityId: "runtime-tart",
@@ -160,23 +241,33 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
   };
   const ownerKey = JSON.stringify(tartAllocationOwnerTuple(owner));
   const vmName = `hitchlet-${createHash("sha256").update(ownerKey).digest("hex").slice(0, 32)}`;
+  let cloneCount = 0;
+  let guestApplyAttempts = 0;
+  let bootstrapRequest: TartGuestBootstrapRequest | undefined;
+  let currentNetwork: TartNetworkPlan | undefined;
+  let cleanupReceipt: TartNetworkCleanupReceipt | undefined;
   let observation: TartInspection = {
     presence: "absent",
     identity: owner,
     inventoryCompleteness: "complete",
   };
-  let cloneCount = 0;
-  let bootstrapRequest:
-    | import("@hitchlet/contracts/internal").TartGuestBootstrapRequest
-    | undefined;
   const runtime = {
     async inspect() {
+      if (observation.presence === "present")
+        observation = {
+          ...observation,
+          network: {
+            ...observation.network,
+            observedAt: new Date(fakeNow).toISOString(),
+          },
+        };
       return structuredClone(observation);
     },
     async reconcile(
       request: import("@hitchlet/contracts/internal").TartReconcileRequest,
     ) {
       if (observation.presence === "absent") cloneCount += 1;
+      currentNetwork = request.network;
       bootstrapRequest = request.bootstrap ?? bootstrapRequest;
       observation = {
         presence: "present",
@@ -185,8 +276,77 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
         state: "running",
         resources: request.resources,
         bootstrapStatus: bootstrapRequest ? "pending" : "not_requested",
+        network: networkObservation(
+          request.identity,
+          request.network,
+          vmName,
+          fakeNow,
+        ),
+        ...(cleanupReceipt ? { networkCleanupReceipt: cleanupReceipt } : {}),
         ipAddress: "192.0.2.44",
       };
+      return structuredClone(observation);
+    },
+    async bootstrapApply(
+      identity: TartAllocationIdentity,
+      request: TartGuestBootstrapRequest,
+    ) {
+      guestApplyAttempts += 1;
+      if (guestApplyAttempts === 1)
+        throw new Error("synthetic guest hook failure");
+      expect(request).toEqual(bootstrapRequest);
+      const receipt: TartGuestBootstrapReceipt = {
+        status: "applied",
+        identity,
+        nonce: request.nonce,
+        account: request.account,
+        clientPublicKeyFingerprint: request.clientPublicKeyFingerprint,
+        hostPublicKey: host.publicKey,
+        hostKeyFingerprint: host.fingerprint,
+        networkEvidenceReference: request.networkEvidence.reference,
+        networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
+        observedAt: new Date(fakeNow).toISOString(),
+      };
+      if (!currentNetwork) throw new Error("network plan unavailable");
+      observation = {
+        presence: "present",
+        identity,
+        vmName,
+        state: "running",
+        resources: { cpus: 2, memoryMiB: 2048 },
+        bootstrapStatus: "applied",
+        network: networkObservation(identity, currentNetwork, vmName, fakeNow),
+        bootstrapReceipt: receipt,
+        ipAddress: "192.0.2.44",
+      };
+      return structuredClone(observation);
+    },
+    async revokeNetwork(
+      identity: TartAllocationIdentity,
+      network: TartNetworkPlan,
+    ) {
+      if (network.contractHash !== currentNetwork?.contractHash)
+        throw new Error("wrong network plan");
+      cleanupReceipt = removedNetworkReceipt(
+        identity,
+        network,
+        vmName,
+        fakeNow,
+      );
+      if (observation.presence === "present")
+        observation = {
+          ...observation,
+          network: {
+            backend: "softnet",
+            status: "unknown",
+            identity,
+            revisionId: network.revisionId,
+            contractHash: network.contractHash,
+            reason: "network_control_closed",
+            observedAt: new Date(fakeNow).toISOString(),
+          },
+          networkCleanupReceipt: cleanupReceipt,
+        };
       return structuredClone(observation);
     },
     async destroy(identity: TartAllocationIdentity) {
@@ -194,12 +354,12 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
         presence: "absent",
         identity,
         inventoryCompleteness: "complete",
+        ...(cleanupReceipt ? { networkCleanupReceipt: cleanupReceipt } : {}),
       };
       return structuredClone(observation);
     },
   };
-  let guestApplyAttempts = 0;
-  const evidenceExpiry = new Date(plan.deadlineMs - 1_000).toISOString();
+
   const options: TartExecutionProviderOptions = {
     resolveRuntime: async () => ({
       runtimeIdentityId: plan.identity.runtimeIdentityId,
@@ -217,51 +377,7 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
     accessMaterials: {
       getOrCreate: async () => ({ ...client, secretRef: "secret:test-only" }),
     },
-    network: {
-      verify: async () => ({
-        runtimeIdentityId: plan.identity.runtimeIdentityId,
-        allocationId: plan.identity.allocationId,
-        generation: plan.identity.generation,
-        revisionId: plan.resolved.network.revisionId,
-        contractHash: createHash("sha256")
-          .update(JSON.stringify(plan.resolved.network))
-          .digest("hex"),
-        reference: "network-proof-1",
-        verifiedAt: new Date().toISOString(),
-        expiresAt: evidenceExpiry,
-      }),
-    },
-    guestBootstrap: {
-      async apply(request) {
-        guestApplyAttempts += 1;
-        if (guestApplyAttempts === 1)
-          throw new Error("synthetic guest hook failure");
-        expect(request).toEqual(bootstrapRequest);
-        const receipt: TartGuestBootstrapReceipt = {
-          status: "applied",
-          identity: request.identity,
-          nonce: request.nonce,
-          account: request.account,
-          clientPublicKeyFingerprint: request.clientPublicKeyFingerprint,
-          hostPublicKey: host.publicKey,
-          hostKeyFingerprint: host.fingerprint,
-          networkEvidenceReference: request.networkEvidence.reference,
-          networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
-          observedAt: new Date().toISOString(),
-        };
-        observation = {
-          presence: "present",
-          identity: request.identity,
-          vmName,
-          state: "running",
-          resources: { cpus: 2, memoryMiB: 2048 },
-          bootstrapStatus: "applied",
-          bootstrapReceipt: receipt,
-          ipAddress: "192.0.2.44",
-        };
-        return receipt;
-      },
-    },
+    now: () => fakeNow,
     ssh: {
       verify: async (input) => ({
         authenticated: true,
@@ -330,10 +446,23 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
     "synthetic guest hook failure",
   );
 
-  await provider.create(plan, journal);
+  const ownedResources = await provider.create(plan, journal);
+  expect(currentNetwork).toMatchObject({
+    allowedIngressSourceCidrs: ["192.0.2.0/24"],
+    accessSourceCidrs: ["192.0.2.0/24"],
+    accessPorts: [22],
+  });
+  const persistedBootstrap = bootstrapRequest;
+  const firstObservedAt =
+    observation.presence === "present" ? observation.network.observedAt : "";
+  fakeNow += 1_000;
   inventory = await provider.inspect(plan);
   if (inventory.presence !== "present") throw new Error("expected present VM");
+  expect(
+    observation.presence === "present" && observation.network.observedAt,
+  ).not.toBe(firstObservedAt);
   const receipt = await provider.ready(plan, inventory.evidence);
+  expect(bootstrapRequest).toEqual(persistedBootstrap);
 
   expect(cloneCount).toBe(1);
   expect(guestApplyAttempts).toBe(2);
@@ -350,6 +479,26 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
     hostKeyFingerprint: host.fingerprint,
     clientPublicKeyFingerprint: client.fingerprint,
   });
+  if (observation.presence !== "present")
+    throw new Error("expected present VM");
+  const verifiedNetwork = observation.network;
+  observation = {
+    ...observation,
+    network: {
+      ...verifiedNetwork,
+      readback: {
+        ...verifiedNetwork.readback,
+        allow: [...verifiedNetwork.readback.allow, "allow tampered rule"],
+      },
+    },
+  };
+  await expect(provider.ready(plan, inventory.evidence)).rejects.toThrow(
+    "Tart network verification is stale or mismatched",
+  );
+  observation = { ...observation, network: verifiedNetwork };
   expect(journalState.effects).toHaveLength(1);
   expect(journalState.resources.length).toBeGreaterThanOrEqual(4);
+  await provider.revokeStop(plan);
+  const cleanup = await provider.destroy(plan, ownedResources[0]!);
+  expect(cleanup.networkRules).toBe("removed");
 });

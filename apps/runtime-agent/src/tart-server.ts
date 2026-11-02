@@ -26,7 +26,7 @@ export type TartRuntimeServerConfig = ServerConfig &
 
 type TartActions = Pick<
   TartLocalDriver,
-  "inspect" | "reconcile" | "bootstrapApply" | "destroy"
+  "inspect" | "reconcile" | "bootstrapApply" | "destroy" | "revokeNetwork"
 >;
 
 export async function createTartRuntimeServer(
@@ -160,6 +160,11 @@ export async function createTartRuntimeServer(
                     return driver.bootstrapApply(
                       action.identity,
                       action.request,
+                    );
+                  case "network.revoke":
+                    return driver.revokeNetwork(
+                      action.identity,
+                      action.network,
                     );
                   case "destroy":
                     return driver.destroy(action.identity);

@@ -22,6 +22,7 @@ import { PersistentSimulator } from "./providers/simulator.js";
 import { LocalSecretStore } from "./storage/secret-store.js";
 import { SQLiteAccessMaterialStore } from "./storage/access-material-store.js";
 import { PortainerExecutionProvider } from "./providers/portainer-provider.js";
+import { createTartExecutionComposition } from "./providers/tart-runtime-composition.js";
 import { NodeRuntimeConfigSchema } from "./http/admin-protocol.js";
 import { AdminService } from "./application/admin.js";
 import { probePortainer } from "./providers/portainer-probe.js";
@@ -389,6 +390,83 @@ try {
               : kind === "lease"
                 ? "Portainer lease and expiry reconciliation failed"
                 : "Portainer reconciliation failed",
+        );
+      },
+    });
+  } else if (config.EXECUTION_MODE === "tart" && controlsReady) {
+    // Tart execution stays behind the startup guard until real Tart/Softnet
+    // qualification and controlled deployment have been verified and enabled.
+    recoveryState = "recovering";
+    if (!secrets)
+      throw new Error("Tart mode requires the encrypted secret store");
+    const installation = await storage.get<{
+      installation_id: string;
+      controller_epoch: bigint;
+    }>(
+      "SELECT installation_id,controller_epoch FROM installations WHERE singleton=1",
+    );
+    if (!installation)
+      throw new Error(
+        "Installation is not initialized. Initialize the control ledger before Tart mode.",
+      );
+    const epoch = Number(installation.controller_epoch);
+    const composition = createTartExecutionComposition({
+      storage,
+      secrets,
+      installationId: installation.installation_id,
+      controllerEpoch: epoch,
+    });
+    const { worker, tickets, leases } = composition;
+    await worker.reconcileBeforeScheduling();
+    await leases.reconcilePending();
+    let reconciling = false;
+    const tick = async () => {
+      if (reconciling) return;
+      reconciling = true;
+      try {
+        await worker.reconcileScheduledWork();
+        for (let index = 0; index < 32; index++)
+          if (!(await tickets.reserveNext())) break;
+        await worker.reconcile();
+      } finally {
+        reconciling = false;
+      }
+    };
+    await tick();
+    recoveryState = "ready";
+    let mainWorkHealthy = true;
+    let intentWorkHealthy = true;
+    const refreshTartRecovery = () => {
+      recoveryState =
+        mainWorkHealthy && intentWorkHealthy ? "ready" : "unavailable";
+    };
+    backgroundLoops = new ControllerBackgroundLoops({
+      // Tart host pressure/session observations remain unknown until a trusted
+      // host observation source is composed; this loop fabricates none.
+      refreshObservations: async () => undefined,
+      reconcile: tick,
+      reconcileLeaseIntents: () =>
+        reconcileLeaseAndExpiryIntents(leases, worker),
+      onReconcileSuccess: () => {
+        mainWorkHealthy = true;
+        refreshTartRecovery();
+      },
+      onLeaseSuccess: () => {
+        intentWorkHealthy = true;
+        refreshTartRecovery();
+      },
+      onFailure: (kind, error) => {
+        if (kind === "reconcile") mainWorkHealthy = false;
+        if (kind === "lease") intentWorkHealthy = false;
+        refreshTartRecovery();
+        app?.log.error(
+          {
+            kind,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          },
+          kind === "lease"
+            ? "Tart lease and expiry reconciliation failed"
+            : "Tart operation reconciliation failed",
         );
       },
     });

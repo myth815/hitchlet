@@ -11,7 +11,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, expect, it } from "vitest";
+import { spawn, type ChildProcess } from "node:child_process";
 import { TartLocalDriver } from "../src/drivers/tart.js";
+import {
+  canonicalTartNetworkPlan,
+  type TartNetworkPlan,
+} from "@hitchlet/contracts/internal";
+import type { TartNetworkAdapter } from "../src/drivers/tart-network.js";
 import { withCommandDeadline } from "../src/command-exec.js";
 import type {
   TartAllocationIdentity,
@@ -70,7 +76,16 @@ it.skipIf(!supportsTartHost)(
       bootstrapStatus: "not_requested",
       ipAddress: "192.0.2.10",
     });
-    expect(b).toEqual(a);
+    expect(b).toMatchObject({
+      presence: "present",
+      identity,
+      network: {
+        backend: "softnet",
+        status: "policy_match",
+        revisionId: request.network.revisionId,
+        contractHash: request.network.contractHash,
+      },
+    });
     const events = await readEvents(root);
     expect(events.filter((e) => e.args[0] === "clone")).toHaveLength(1);
     const cloneIndex = events.findIndex((e) => e.args[0] === "clone");
@@ -92,12 +107,11 @@ it.skipIf(!supportsTartHost)(
           e.env.TART_NO_AUTO_PRUNE === "1",
       ),
     ).toBe(true);
-    await driver.close();
-
-    const recovered = makeDriver(root);
+    let recovered = makeDriver(root);
     expect(await recovered.inspect(identity)).toMatchObject({
       presence: "present",
       bootstrapStatus: "not_requested",
+      network: { status: "unknown", reason: "network_process_untracked" },
     });
     expect(
       (await readEvents(root)).filter((e) => e.args[0] === "clone"),
@@ -107,6 +121,18 @@ it.skipIf(!supportsTartHost)(
       operationId: "cleanup-1",
       controlVersion: 2,
     };
+    expect(
+      await recovered.revokeNetwork(cleanup, (await makeRequest(root)).network),
+    ).toMatchObject({ presence: "unknown" });
+    expect(
+      await driver.revokeNetwork(cleanup, (await makeRequest(root)).network),
+    ).toMatchObject({
+      presence: "present",
+      networkCleanupReceipt: { status: "removed", processExitObserved: true },
+    });
+    await driver.close();
+    await recovered.close();
+    recovered = makeDriver(root);
     expect(await recovered.destroy(cleanup)).toMatchObject({
       presence: "absent",
       inventoryCompleteness: "complete",
@@ -170,8 +196,6 @@ it.skipIf(!supportsTartHost)(
         await readFile(join(root, "tart-home", "bootstrap-input.json")),
       ),
     ).toMatchObject({ nonce: request.bootstrap!.nonce, identity });
-    await driver.close();
-
     const resumed = makeDriver(root);
     expect(await resumed.inspect(identity)).toMatchObject({
       presence: "present",
@@ -183,6 +207,12 @@ it.skipIf(!supportsTartHost)(
       operationId: "cleanup-2",
       controlVersion: 2,
     };
+    expect(await driver.revokeNetwork(cleanup, request.network)).toMatchObject({
+      presence: "present",
+      networkCleanupReceipt: { status: "removed" },
+    });
+    expect(await driver.destroy(cleanup)).toMatchObject({ presence: "absent" });
+    await driver.close();
     expect(await resumed.destroy(cleanup)).toMatchObject({
       presence: "absent",
     });
@@ -401,26 +431,52 @@ it.skipIf(!supportsTartHost)(
     await driver.reconcile(await makeRequest(root));
     const home = join(root, "tart-home");
     await writeFile(join(home, "keep-run-marker"), "keep");
-    await writeFile(join(home, "ignore-stop-marker"), "ignore");
     const cleanup = { ...identity, operationId: "cleanup", controlVersion: 2 };
-    expect(await driver.destroy(cleanup)).toMatchObject({
+    expect(
+      await driver.revokeNetwork(cleanup, (await makeRequest(root)).network),
+    ).toMatchObject({
       presence: "unknown",
       reason: "vm_stop_not_verified",
+    });
+    expect(await driver.destroy(cleanup)).toMatchObject({
+      presence: "unknown",
+      reason: "network_cleanup_not_verified",
     });
     expect(
       (await readEvents(root)).some((event) => event.args[0] === "delete"),
     ).toBe(false);
     await driver.close();
 
-    const next = makeDriver(root);
-    await writeFile(join(home, "hide-owned-vm-marker"), "hide");
-    expect(await next.destroy(cleanup)).toMatchObject({
+    const verifiedRoot = await setupFixture();
+    const verifiedDriver = makeDriver(verifiedRoot);
+    await verifiedDriver.reconcile(await makeRequest(verifiedRoot));
+    const verifiedCleanup = {
+      ...identity,
+      operationId: "cleanup-verified",
+      controlVersion: 2,
+    };
+    expect(
+      await verifiedDriver.revokeNetwork(
+        verifiedCleanup,
+        (await makeRequest(verifiedRoot)).network,
+      ),
+    ).toMatchObject({
+      presence: "present",
+      networkCleanupReceipt: { status: "removed", processExitObserved: true },
+    });
+    const verifiedHome = join(verifiedRoot, "tart-home");
+    await writeFile(join(verifiedHome, "hide-owned-vm-marker"), "hide");
+    const next = makeDriver(verifiedRoot);
+    expect(await next.destroy(verifiedCleanup)).toMatchObject({
       presence: "unknown",
       reason: "inventory_incomplete",
     });
     expect(
-      (await readEvents(root)).some((event) => event.args[0] === "delete"),
+      (await readEvents(verifiedRoot)).some(
+        (event) => event.args[0] === "delete",
+      ),
     ).toBe(false);
+    await verifiedDriver.close();
     await next.close();
   },
 );
@@ -466,8 +522,47 @@ function makeDriver(
     tartHome,
     manifestDirectory: join(root, "manifests"),
     executable: join(root, "fake-tart"),
+    networkAdapter: syntheticNetworkAdapter,
   });
 }
+
+const syntheticNetworkAdapter: TartNetworkAdapter = {
+  async launch({ executable, home, env, vmName, policy }) {
+    const child: ChildProcess = spawn(
+      executable,
+      ["run", "--no-graphics", vmName],
+      { cwd: home, env, shell: false, stdio: "ignore" },
+    );
+    const exit = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve) => {
+      child.once("close", (code, signal) => resolve({ code, signal }));
+      child.once("error", () => resolve({ code: null, signal: null }));
+    });
+    let current = {
+      allow: [...policy.allow],
+      block: [...policy.block],
+      ruleCount: policy.allow.length + policy.block.length,
+    };
+    return {
+      child,
+      exit,
+      startedAt: new Date().toISOString(),
+      async getPolicy() {
+        return current;
+      },
+      async setPolicy(allow, block) {
+        current = {
+          allow: [...allow],
+          block: [...block],
+          ruleCount: allow.length + block.length,
+        };
+        return current;
+      },
+    };
+  },
+};
 
 async function makeRequest(
   root: string,
@@ -500,7 +595,31 @@ async function makeRequest(
       configSha256: createHash("sha256").update(templateText).digest("hex"),
     },
     resources: { cpus: 4, memoryMiB: 4096 },
+    network: networkPlan(),
     ...(includeBootstrap ? { bootstrap } : {}),
+  };
+}
+
+function networkPlan(): TartNetworkPlan {
+  const raw = {
+    grantId: "grant-1",
+    revisionId: "network-revision-1",
+    frozenPlatformDenyRevisionId: "frozen-deny-1",
+    platformDenyRevisionId: "effective-deny-1",
+    mode: "isolated_vm" as const,
+    enforcement: "tart_agent" as const,
+    ipv6: "disabled" as const,
+    allowedEgress: [],
+    allowedIngressSourceCidrs: ["0.0.0.0/0"],
+    accessSourceCidrs: ["0.0.0.0/0"],
+    accessPorts: [22],
+    managementDenyRules: [],
+  };
+  return {
+    ...raw,
+    contractHash:
+      "sha256:" +
+      createHash("sha256").update(canonicalTartNetworkPlan(raw)).digest("hex"),
   };
 }
 

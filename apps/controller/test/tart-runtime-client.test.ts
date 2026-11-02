@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import type {
   TartAllocationIdentity,
+  TartNetworkPlan,
   TartRuntimeActionRequest,
 } from "@hitchlet/contracts/internal";
 import type { RuntimeAgentJsonTransport } from "../src/providers/runtime-network-client.js";
@@ -15,6 +16,22 @@ const identity: TartAllocationIdentity = {
   operationId: "operation-tart-client",
   controlVersion: 1,
   purpose: "validation",
+};
+
+const networkPlan: TartNetworkPlan = {
+  grantId: "grant-tart-client",
+  revisionId: "network-revision-client",
+  frozenPlatformDenyRevisionId: "deny-frozen-client",
+  platformDenyRevisionId: "deny-current-client",
+  mode: "isolated_vm",
+  enforcement: "tart_agent",
+  ipv6: "disabled",
+  allowedEgress: [],
+  allowedIngressSourceCidrs: ["192.0.2.0/24"],
+  accessSourceCidrs: ["192.0.2.0/24"],
+  accessPorts: [22],
+  managementDenyRules: [],
+  contractHash: `sha256:${"a".repeat(64)}`,
 };
 
 it("binds Tart actions and facts to the configured identity and nonce", async () => {
@@ -69,17 +86,27 @@ it("binds Tart actions and facts to the configured identity and nonce", async ()
     presence: "absent",
     inventoryCompleteness: "complete",
   });
+  await expect(
+    client.revokeNetwork(identity, networkPlan),
+  ).resolves.toMatchObject({
+    presence: "absent",
+  });
   await expect(client.facts()).resolves.toMatchObject({
     hostOS: "macos",
     hostArch: "arm64",
   });
-  expect(seen).toHaveLength(1);
+  expect(seen).toHaveLength(2);
   expect(seen[0]).toMatchObject({
     controllerEpoch: 7,
     deadline: expect.any(String),
     installationId: identity.installationId,
     runtimeIdentityId: identity.runtimeIdentityId,
     action: { kind: "inspect", identity },
+  });
+  expect(seen[1]?.action).toEqual({
+    kind: "network.revoke",
+    identity,
+    network: networkPlan,
   });
   expect(seen[0]?.requestNonce).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,

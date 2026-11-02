@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { tartNetworkPlanSchema } from "./tart-network.js";
 
 const id = z.string().min(1).max(200);
 const fingerprint = z.string().regex(/^SHA256:[A-Za-z0-9+/]{20,44}={0,2}$/);
@@ -96,6 +97,7 @@ export const tartReconcileRequestSchema = z
     identity: tartAllocationIdentitySchema,
     template: tartLocalTemplateRefSchema,
     resources: tartResourceSpecSchema,
+    network: tartNetworkPlanSchema,
     bootstrap: tartGuestBootstrapRequestSchema.optional(),
   })
   .strict()
@@ -107,6 +109,107 @@ export const tartReconcileRequestSchema = z
   );
 
 const tartInspectionIdentity = tartAllocationIdentitySchema;
+const tartNetworkVMIdentity = z
+  .object({
+    vmName: z.string().min(1).max(200),
+    device: z.string().min(1).max(64),
+    inode: z.string().min(1).max(64),
+    macAddress: z.string().regex(/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i),
+  })
+  .strict();
+const tartNetworkPolicyReadback = z
+  .object({
+    allow: z.array(z.string().max(4096)).max(4096),
+    block: z.array(z.string().max(4096)).max(4096),
+    ruleCount: z.number().int().min(0).max(8192),
+  })
+  .strict();
+const tartNetworkProcessIdentity = z
+  .object({
+    pid: z.number().int().positive().safe(),
+    startedAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+export const tartNetworkObservationSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      backend: z.literal("softnet"),
+      status: z.literal("policy_match"),
+      identity: tartAllocationIdentitySchema,
+      revisionId: id,
+      contractHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      policyHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      vm: tartNetworkVMIdentity,
+      process: tartNetworkProcessIdentity,
+      control: z
+        .object({
+          transport: z.literal("unix_stream_fd"),
+          connected: z.literal(true),
+        })
+        .strict(),
+      readback: tartNetworkPolicyReadback,
+      observedAt: z.string().datetime({ offset: true }),
+    })
+    .strict(),
+  z
+    .object({
+      backend: z.literal("softnet"),
+      status: z.literal("unknown"),
+      identity: tartAllocationIdentitySchema,
+      revisionId: id.optional(),
+      contractHash: z
+        .string()
+        .regex(/^sha256:[a-f0-9]{64}$/)
+        .optional(),
+      reason: z.string().min(1).max(200),
+      observedAt: z.string().datetime({ offset: true }),
+    })
+    .strict(),
+]);
+export const tartNetworkCleanupReceiptSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      backend: z.literal("softnet"),
+      status: z.literal("removed"),
+      identity: tartAllocationIdentitySchema,
+      revisionId: id,
+      contractHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      policyHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      vm: tartNetworkVMIdentity,
+      process: tartNetworkProcessIdentity,
+      processExitObserved: z.literal(true),
+      readback: tartNetworkPolicyReadback,
+      observedAt: z.string().datetime({ offset: true }),
+    })
+    .strict(),
+  z
+    .object({
+      backend: z.literal("softnet"),
+      status: z.literal("not_started"),
+      identity: tartAllocationIdentitySchema,
+      revisionId: id,
+      contractHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      vmName: z.string().min(1).max(200),
+      observedAt: z.string().datetime({ offset: true }),
+    })
+    .strict(),
+  z
+    .object({
+      backend: z.literal("softnet"),
+      status: z.literal("unknown"),
+      identity: tartAllocationIdentitySchema,
+      revisionId: id.optional(),
+      contractHash: z
+        .string()
+        .regex(/^sha256:[a-f0-9]{64}$/)
+        .optional(),
+      vmName: z.string().min(1).max(200).optional(),
+      reason: z.string().min(1).max(200),
+      observedAt: z.string().datetime({ offset: true }),
+    })
+    .strict(),
+]);
+
 export const tartInspectionSchema = z.discriminatedUnion("presence", [
   z
     .object({
@@ -121,6 +224,8 @@ export const tartInspectionSchema = z.discriminatedUnion("presence", [
         "applied",
         "unknown",
       ]),
+      network: tartNetworkObservationSchema,
+      networkCleanupReceipt: tartNetworkCleanupReceiptSchema.optional(),
       ipAddress: z
         .string()
         .regex(/^(?:\d{1,3}\.){3}\d{1,3}$/)
@@ -133,6 +238,7 @@ export const tartInspectionSchema = z.discriminatedUnion("presence", [
       presence: z.literal("absent"),
       identity: tartInspectionIdentity,
       inventoryCompleteness: z.literal("complete"),
+      networkCleanupReceipt: tartNetworkCleanupReceiptSchema.optional(),
     })
     .strict(),
   z
@@ -156,6 +262,12 @@ export type TartGuestBootstrapReceipt = z.infer<
   typeof tartGuestBootstrapReceiptSchema
 >;
 export type TartReconcileRequest = z.infer<typeof tartReconcileRequestSchema>;
+export type TartNetworkObservation = z.infer<
+  typeof tartNetworkObservationSchema
+>;
+export type TartNetworkCleanupReceipt = z.infer<
+  typeof tartNetworkCleanupReceiptSchema
+>;
 export type TartInspection = z.infer<typeof tartInspectionSchema>;
 
 /** Stable owner-key components shared by the Tart provider and local driver. */

@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { z } from "zod";
 import { FileJournal } from "./journal.js";
 import { TartLocalDriver } from "./drivers/tart.js";
+import { TartSoftnetNetworkAdapter } from "./drivers/tart-network.js";
 import {
   createTartRuntimeServer,
   type TartRuntimeServerConfig,
@@ -20,6 +21,8 @@ const configSchema = z
     installationId: z.string().min(1).max(200),
     runtimeIdentityId: z.string().min(1).max(200),
     executable: z.string().startsWith("/"),
+    networkEnabled: z.boolean().default(false),
+    softnetExecutable: z.string().startsWith("/").optional(),
     tartHome: z.string().startsWith("/"),
     manifestDirectory: z.string().startsWith("/"),
     templateRegistryDirectory: z.string().startsWith("/"),
@@ -30,7 +33,12 @@ const configSchema = z
     certFile: z.string().startsWith("/"),
     keyFile: z.string().startsWith("/"),
   })
-  .strict();
+  .strict()
+  .refine(
+    (config) =>
+      !config.networkEnabled || config.softnetExecutable !== undefined,
+    "networkEnabled requires a fixed Softnet executable",
+  );
 
 const namespaceSchema = z
   .object({
@@ -107,6 +115,14 @@ export async function readTartNamespace(rawConfig: unknown): Promise<string> {
   return marker.nativeRuntimeNamespaceId;
 }
 
+export function networkAdapterFromConfig(rawConfig: unknown) {
+  const config = configSchema.parse(rawConfig);
+  if (!config.networkEnabled) return undefined;
+  if (!config.softnetExecutable)
+    throw new Error("tart_softnet_executable_required");
+  return new TartSoftnetNetworkAdapter(config.softnetExecutable);
+}
+
 async function start(): Promise<void> {
   const configPath = process.env.HITCHLET_TART_RUNTIME_CONFIG;
   if (!configPath) throw new Error("tart_runtime_config_required");
@@ -114,7 +130,11 @@ async function start(): Promise<void> {
     JSON.parse(await readFile(configPath, "utf8")),
   );
   const namespaceId = await readTartNamespace(config);
-  const driver = new TartLocalDriver(config);
+  const networkAdapter = networkAdapterFromConfig(config);
+  const driver = new TartLocalDriver({
+    ...config,
+    ...(networkAdapter ? { networkAdapter } : {}),
+  });
   const journal = new FileJournal(config.journalFile);
   await journal.initialize();
   const serverConfig: TartRuntimeServerConfig = {

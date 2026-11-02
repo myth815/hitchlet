@@ -36,7 +36,7 @@ describe("configuration", () => {
       }).EXECUTION_MODE,
     ).toBe("tart");
     expect(() => assertTartExecutionAdaptersConfigured("tart")).toThrow(
-      "Tart execution is not configured: native VM network enforcement/verification adapter and production server composition are not configured",
+      "Tart execution remains closed: real Tart/Softnet qualification and controlled deployment have not been verified and enabled",
     );
     expect(() =>
       assertTartExecutionAdaptersConfigured("disabled"),

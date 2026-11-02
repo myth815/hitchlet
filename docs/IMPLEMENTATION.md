@@ -1,6 +1,6 @@
 # Hitchlet 实施与验收记录
 
-2026-11-02 接续更新：review 四修及相邻收尾已完成于 `c7d665a`；用户随后选择优先 Tart。Tart 同账本生命周期、可信 Runtime 通道、固定 guest 初始化/SSH、管理发现/资格/验证发布与租客 VM 选择已进入源码/受控验证阶段；原生 VM 网络执行/取证适配器与 server 最终组合仍缺，生产 Tart 启动保持关闭，真实 VM 未验收，当前范围与未验证项见 [Tart 驱动说明](TART-DRIVER.md)。下文 D00–D25 的 Docker 批次与后置 VM 描述保留为该阶段历史，不能据此将 Tart 标为已可租用。
+2026-11-02 接续更新：review 四修及相邻收尾已完成于 `c7d665a`；用户随后选择优先 Tart。Tart 同账本生命周期、可信 Runtime 通道、固定 guest 初始化/SSH、管理发现/资格/验证发布与租客 VM 选择已进入源码/受控验证阶段；原生 VM 网络计划/Softnet 读回回收及 server composition 已有受控源码；真实资格、观测与恢复边界尚未验收，生产 Tart 启动保持关闭，当前范围与未验证项见 [Tart 驱动说明](TART-DRIVER.md)。下文 D00–D25 的 Docker 批次与后置 VM 描述保留为该阶段历史，不能据此将 Tart 标为已可租用。
 
 实现基线：[设计 v1.3](design/README.md)。当前目标保持 M2（Docker 正式交付）；Hyper-V、Tart 和云扩容不在本轮实现范围。模拟器通过不代表真实 Docker 或宿主通过。
 

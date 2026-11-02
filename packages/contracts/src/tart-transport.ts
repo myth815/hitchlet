@@ -6,6 +6,7 @@ import {
   tartLocalTemplateRefSchema,
   tartReconcileRequestSchema,
 } from "./tart-runtime.js";
+import { tartNetworkPlanSchema } from "./tart-network.js";
 
 const nonce = z.string().uuid();
 const artifactDigest = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -40,6 +41,13 @@ export const tartRuntimeActionSchema = z.discriminatedUnion("kind", [
       kind: z.literal("bootstrap.apply"),
       identity: tartAllocationIdentitySchema,
       request: tartGuestBootstrapRequestSchema,
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal("network.revoke"),
+      identity: tartAllocationIdentitySchema,
+      network: tartNetworkPlanSchema,
     })
     .strict(),
   z

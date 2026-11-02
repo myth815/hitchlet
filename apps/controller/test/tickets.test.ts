@@ -13,7 +13,6 @@ import { PersistentSimulator } from "../dist/providers/simulator.js";
 import { LeaseService } from "../src/application/leases.js";
 import { AccessService } from "../src/application/access.js";
 import { LocalSecretStore } from "../src/storage/secret-store.js";
-import { SQLiteAccessMaterialStore } from "../src/storage/access-material-store.js";
 import type { ProvisionPlan } from "../src/providers/port.js";
 import { createHash } from "node:crypto";
 import ssh2 from "ssh2";
@@ -22,12 +21,80 @@ import type {
   TartGuestBootstrapReceipt,
   TartGuestBootstrapRequest,
   TartInspection,
+  TartNetworkCleanupReceipt,
+  TartNetworkPlan,
   TartReconcileRequest,
 } from "@hitchlet/contracts/internal";
-import { TartExecutionProvider } from "../src/providers/tart-provider.js";
+import { createTartExecutionComposition } from "../src/providers/tart-runtime-composition.js";
 import { TicketService as SourceTicketService } from "../src/application/tickets.js";
-import { OperationWorker as SourceOperationWorker } from "../src/application/operations.js";
-import type { ProvisionPlan } from "../src/providers/port.js";
+
+function tartNetworkObservation(
+  identity: TartAllocationIdentity,
+  network: TartNetworkPlan,
+  vmName: string,
+  at: number,
+) {
+  const readback = {
+    allow: ["in proto tcp 192.0.2.0/24 port 22"],
+    block: ["out 0.0.0.0/0"],
+    ruleCount: 2,
+  };
+  return {
+    backend: "softnet" as const,
+    status: "policy_match" as const,
+    identity,
+    revisionId: network.revisionId,
+    contractHash: network.contractHash,
+    policyHash: `sha256:${createHash("sha256")
+      .update(
+        JSON.stringify({
+          allow: [...readback.allow].sort(),
+          block: [...readback.block].sort(),
+        }),
+      )
+      .digest("hex")}`,
+    vm: {
+      vmName,
+      device: "41",
+      inode: "2048",
+      macAddress: "02:00:00:00:00:41",
+    },
+    process: { pid: 321, startedAt: new Date(at - 1000).toISOString() },
+    control: { transport: "unix_stream_fd" as const, connected: true as const },
+    readback,
+    observedAt: new Date(at).toISOString(),
+  };
+}
+
+function tartNetworkCleanupReceipt(
+  identity: TartAllocationIdentity,
+  network: TartNetworkPlan,
+  vmName: string,
+  at: number,
+): TartNetworkCleanupReceipt {
+  return {
+    backend: "softnet",
+    status: "removed",
+    identity,
+    revisionId: network.revisionId,
+    contractHash: network.contractHash,
+    policyHash: `sha256:${"c".repeat(64)}`,
+    vm: {
+      vmName,
+      device: "41",
+      inode: "2048",
+      macAddress: "02:00:00:00:00:41",
+    },
+    process: { pid: 321, startedAt: new Date(at - 1000).toISOString() },
+    processExitObserved: true,
+    readback: {
+      allow: [],
+      block: ["in 0.0.0.0/0", "out 0.0.0.0/0"],
+      ruleCount: 2,
+    },
+    observedAt: new Date(at).toISOString(),
+  };
+}
 
 const dirs: string[] = [];
 const opened: Awaited<ReturnType<typeof openStorage>>[] = [];
@@ -2806,11 +2873,6 @@ describe("Tart VM ticket ledger integration", () => {
     const secretKeyPath = join(dir, "test-master.key");
     await writeFile(secretKeyPath, Buffer.alloc(32, 23), { mode: 0o600 });
     const secrets = await LocalSecretStore.open(dir, secretKeyPath);
-    const accessMaterials = new SQLiteAccessMaterialStore(
-      storage,
-      secrets,
-      () => clock,
-    );
     const { public: hostPublicKey, private: hostPrivateKey } =
       ssh2.utils.generateKeyPairSync("ed25519");
     const hostParsed = ssh2.utils.parseKey(hostPrivateKey);
@@ -2831,6 +2893,8 @@ describe("Tart VM ticket ledger integration", () => {
     };
     let observation: TartInspection | undefined;
     let savedBootstrap: TartGuestBootstrapRequest | undefined;
+    let savedNetwork: TartNetworkPlan | undefined;
+    let networkCleanupReceipt: TartNetworkCleanupReceipt | undefined;
     let cloneCount = 0;
     let loseFirstBootstrapResponse = true;
     let cleanupInventoryUnknown = false;
@@ -2852,6 +2916,7 @@ describe("Tart VM ticket ledger integration", () => {
       },
       async reconcile(request: TartReconcileRequest): Promise<TartInspection> {
         savedBootstrap = request.bootstrap ?? savedBootstrap;
+        savedNetwork = request.network;
         if (!observation || observation.presence === "absent") cloneCount++;
         observation = {
           presence: "present",
@@ -2860,6 +2925,13 @@ describe("Tart VM ticket ledger integration", () => {
           state: "running",
           resources: request.resources,
           bootstrapStatus: savedBootstrap ? "pending" : "not_requested",
+          network: tartNetworkObservation(
+            request.identity,
+            request.network,
+            vmNameFor(request.identity),
+            clock,
+          ),
+          ...(networkCleanupReceipt ? { networkCleanupReceipt } : {}),
           ipAddress: "192.0.2.44",
         };
         if (request.bootstrap && loseFirstBootstrapResponse) {
@@ -2887,6 +2959,7 @@ describe("Tart VM ticket ledger integration", () => {
           networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
           observedAt: new Date(clock).toISOString(),
         };
+        if (!savedNetwork) throw new Error("network plan missing");
         observation = {
           presence: "present",
           identity,
@@ -2894,10 +2967,57 @@ describe("Tart VM ticket ledger integration", () => {
           state: "running",
           resources: { cpus: 2, memoryMiB: 2048 },
           bootstrapStatus: "applied",
+          network: tartNetworkObservation(
+            identity,
+            savedNetwork,
+            vmNameFor(identity),
+            clock,
+          ),
           bootstrapReceipt: receipt,
           ipAddress: "192.0.2.44",
         };
         return structuredClone(observation);
+      },
+      async revokeNetwork(
+        identity: TartAllocationIdentity,
+        network: TartNetworkPlan,
+      ): Promise<TartInspection> {
+        if (cleanupInventoryUnknown)
+          return {
+            presence: "unknown",
+            identity,
+            reason: "synthetic network removal outcome unknown",
+          };
+        if (network.contractHash !== savedNetwork?.contractHash)
+          throw new Error("synthetic network plan mismatch");
+        networkCleanupReceipt = tartNetworkCleanupReceipt(
+          identity,
+          network,
+          vmNameFor(identity),
+          clock,
+        );
+        if (observation?.presence === "present")
+          observation = {
+            ...observation,
+            network: {
+              backend: "softnet",
+              status: "unknown",
+              identity,
+              revisionId: network.revisionId,
+              contractHash: network.contractHash,
+              reason: "synthetic_control_closed",
+              observedAt: new Date(clock).toISOString(),
+            },
+            networkCleanupReceipt,
+          };
+        return structuredClone(
+          observation ?? {
+            presence: "absent",
+            identity,
+            inventoryCompleteness: "complete",
+            networkCleanupReceipt,
+          },
+        );
       },
       async destroy(identity: TartAllocationIdentity): Promise<TartInspection> {
         if (cleanupInventoryUnknown)
@@ -2910,11 +3030,16 @@ describe("Tart VM ticket ledger integration", () => {
           presence: "absent",
           identity,
           inventoryCompleteness: "complete",
+          ...(networkCleanupReceipt ? { networkCleanupReceipt } : {}),
         };
         return structuredClone(observation);
       },
     };
-    const execution = new TartExecutionProvider({
+    const composition = createTartExecutionComposition({
+      storage,
+      secrets,
+      installationId: installId,
+      controllerEpoch: 1,
       now: () => clock,
       resolveRuntime: async (plan) => ({
         runtimeIdentityId: plan.identity.runtimeIdentityId,
@@ -2929,37 +3054,6 @@ describe("Tart VM ticket ledger integration", () => {
         },
         runtime,
       }),
-      accessMaterials,
-      network: {
-        async verify(plan) {
-          return {
-            runtimeIdentityId: plan.identity.runtimeIdentityId,
-            allocationId: plan.identity.allocationId,
-            generation: plan.identity.generation,
-            revisionId: plan.resolved.network.revisionId,
-            contractHash: hash(plan.resolved.network),
-            reference: `synthetic-network-${plan.identity.allocationId}`,
-            verifiedAt: new Date(clock).toISOString(),
-            expiresAt: new Date(
-              Math.min(clock + 600_000, plan.deadlineMs - 1),
-            ).toISOString(),
-          };
-        },
-      },
-      guestBootstrap: {
-        async apply(request) {
-          const persisted = await runtime.bootstrapApply(
-            request.identity,
-            request,
-          );
-          expect(persisted.presence).toBe("present");
-          if (persisted.presence !== "present")
-            throw new Error("synthetic bootstrap receipt was not persisted");
-          expect(persisted.bootstrapStatus).toBe("applied");
-          expect(persisted.bootstrapReceipt?.status).toBe("applied");
-          return persisted.bootstrapReceipt as TartGuestBootstrapReceipt;
-        },
-      },
       ssh: {
         async verify(input) {
           expect(input.host).toBe("192.0.2.44");
@@ -2981,13 +3075,7 @@ describe("Tart VM ticket ledger integration", () => {
         },
       },
     });
-    const worker = new SourceOperationWorker({
-      storage,
-      execution,
-      installationId: installId,
-      controllerEpoch: 1,
-      now: () => clock,
-    });
+    const { worker, leases } = composition;
     expect(await worker.run(operation?.id ?? "")).toBe(true);
     expect(cloneCount).toBe(1);
     clock += 3_000;
@@ -2999,7 +3087,6 @@ describe("Tart VM ticket ledger integration", () => {
       ]),
     ).toMatchObject({ phase: "ready" });
 
-    const leases = new LeaseService(storage, () => clock);
     const claim = await leases.renew(
       consumerId,
       ticket.ticketId,
@@ -3036,7 +3123,7 @@ describe("Tart VM ticket ledger integration", () => {
         ?.state,
     ).toBe("confirmed");
 
-    await service.cancel(ticket.ticketId, consumerId);
+    await composition.tickets.cancel(ticket.ticketId, consumerId);
     const cleanup = await storage.get<{ id: string }>(
       "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
       [allocation?.allocationId],

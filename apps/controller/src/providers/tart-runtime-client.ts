@@ -11,6 +11,7 @@ import {
   type TartGuestBootstrapReceipt,
   type TartGuestBootstrapRequest,
   type TartInspection,
+  type TartNetworkPlan,
   type TartReconcileRequest,
   type TartRuntimeAction,
   type TartRuntimeFacts,
@@ -63,6 +64,13 @@ export class TartRuntimeHttpClient {
       identity,
       request,
     });
+  }
+
+  revokeNetwork(
+    identity: TartAllocationIdentity,
+    network: TartNetworkPlan,
+  ): Promise<TartInspection> {
+    return this.action({ kind: "network.revoke", identity, network });
   }
 
   destroy(identity: TartAllocationIdentity): Promise<TartInspection> {

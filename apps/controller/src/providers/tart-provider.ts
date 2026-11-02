@@ -2,10 +2,14 @@ import { createHash } from "node:crypto";
 import { isIPv4 } from "node:net";
 import ssh2 from "ssh2";
 import {
+  canonicalTartNetworkPlan,
   tartGuestBootstrapReceiptSchema,
   tartGuestBootstrapRequestSchema,
   tartInspectionSchema,
   tartLocalTemplateRefSchema,
+  tartNetworkCleanupReceiptSchema,
+  tartNetworkObservationSchema,
+  tartNetworkPlanSchema,
   tartAllocationOwnerTuple,
   type EffectiveResources,
   type TartAllocationIdentity,
@@ -13,6 +17,8 @@ import {
   type TartGuestBootstrapRequest,
   type TartInspection,
   type TartLocalTemplateRef,
+  type TartNetworkCleanupReceipt,
+  type TartNetworkPlan,
   type TartReconcileRequest,
 } from "@hitchlet/contracts/internal";
 import { resourceManifest } from "../domain/resource-manifest.js";
@@ -38,6 +44,10 @@ export type TartRuntimePort = Readonly<{
   bootstrapApply(
     identity: TartAllocationIdentity,
     request: TartGuestBootstrapRequest,
+  ): Promise<TartInspection>;
+  revokeNetwork(
+    identity: TartAllocationIdentity,
+    network: TartNetworkPlan,
   ): Promise<TartInspection>;
   destroy(identity: TartAllocationIdentity): Promise<TartInspection>;
 }>;
@@ -76,20 +86,6 @@ export type TartSshProbeEvidence = Readonly<{
 export type TartExecutionProviderOptions = Readonly<{
   resolveRuntime(plan: ProvisionPlan): Promise<ResolvedTartRuntime>;
   accessMaterials: Pick<SQLiteAccessMaterialStore, "getOrCreate">;
-  guestBootstrap: Readonly<{
-    /** Must return the original receipt for the same immutable identity and nonce. */
-    apply(
-      request: TartGuestBootstrapRequest,
-      observedVM: Extract<TartInspection, { presence: "present" }>,
-    ): Promise<TartGuestBootstrapReceipt>;
-  }>;
-  network: Readonly<{
-    /** Return stable reference/expiry for the same frozen plan and VM, bounded by its deadline. */
-    verify(
-      plan: ProvisionPlan,
-      observedVM: Extract<TartInspection, { presence: "present" }>,
-    ): Promise<TartNetworkEvidence>;
-  }>;
   ssh: Readonly<{
     /** Resolves only after host-key confirmation and public-key authentication. */
     verify(
@@ -125,6 +121,7 @@ export class TartExecutionProvider implements ExecutionPort {
     assertSupportedPlan(plan);
     const resolved = await this.runtime(plan);
     const identity = tartIdentity(plan);
+    const networkPlan = tartNetworkPlanFor(plan);
     let observed = tartInspectionSchema.parse(
       await resolved.runtime.inspect(identity),
     );
@@ -140,6 +137,7 @@ export class TartExecutionProvider implements ExecutionPort {
         artifactDigest: plan.artifact.digest,
         template: resolved.template,
         resources: tartResources(plan),
+        network: networkPlan,
       }),
     };
     requireJournal(journal);
@@ -156,6 +154,7 @@ export class TartExecutionProvider implements ExecutionPort {
         identity,
         template: resolved.template,
         resources: tartResources(plan),
+        network: networkPlan,
       }),
     );
     assertInspectionOwner(reconciled, identity);
@@ -188,6 +187,7 @@ export class TartExecutionProvider implements ExecutionPort {
         identity,
         template: resolved.template,
         resources: tartResources(plan),
+        network: networkPlan,
         bootstrap: request,
       }),
     );
@@ -282,11 +282,19 @@ export class TartExecutionProvider implements ExecutionPort {
       materials.publicKey,
       materials.fingerprint,
     );
-    const rawReceipt = await this.options.guestBootstrap.apply(
-      request,
-      observed,
+    const bootstrapResult = tartInspectionSchema.parse(
+      await resolved.runtime.bootstrapApply(identity, request),
     );
-    const receipt = tartGuestBootstrapReceiptSchema.parse(rawReceipt);
+    assertInspectionOwner(bootstrapResult, identity);
+    if (
+      bootstrapResult.presence !== "present" ||
+      bootstrapResult.bootstrapStatus !== "applied" ||
+      !bootstrapResult.bootstrapReceipt
+    )
+      throw new Error("Tart guest bootstrap did not return an applied receipt");
+    const receipt = tartGuestBootstrapReceiptSchema.parse(
+      bootstrapResult.bootstrapReceipt,
+    );
     assertBootstrapReceipt(receipt, request, plan, this.now());
 
     const persisted = tartInspectionSchema.parse(
@@ -389,20 +397,31 @@ export class TartExecutionProvider implements ExecutionPort {
   async revokeStop(plan: ProvisionPlan): Promise<void> {
     const resolved = await this.runtime(plan);
     const identity = tartIdentity(plan);
+    const network = tartNetworkPlanFor(plan);
     const result = tartInspectionSchema.parse(
-      await resolved.runtime.destroy(identity),
+      await resolved.runtime.revokeNetwork(identity, network),
     );
     assertInspectionOwner(result, identity);
-    if (result.presence === "unknown")
-      throw new Error("Tart VM deletion outcome is unknown");
-    if (result.presence !== "absent")
-      throw new Error("Tart VM remains after deletion request");
+    const resultRules = assertNetworkCleanupReceipt(
+      plan,
+      network,
+      "networkCleanupReceipt" in result
+        ? result.networkCleanupReceipt
+        : undefined,
+    );
     const confirmed = tartInspectionSchema.parse(
       await resolved.runtime.inspect(identity),
     );
     assertInspectionOwner(confirmed, identity);
-    if (confirmed.presence !== "absent")
-      throw new Error("Tart VM absence is not verified");
+    const confirmedRules = assertNetworkCleanupReceipt(
+      plan,
+      network,
+      "networkCleanupReceipt" in confirmed
+        ? confirmed.networkCleanupReceipt
+        : undefined,
+    );
+    if (resultRules !== confirmedRules)
+      throw new Error("Tart network cleanup receipt changed on readback");
   }
 
   async destroy(
@@ -433,13 +452,29 @@ export class TartExecutionProvider implements ExecutionPort {
     assertInspectionOwner(confirmed, identity);
     if (confirmed.presence !== "absent")
       throw new Error("Tart VM absence is not verified");
+    const network = tartNetworkPlanFor(plan);
+    const resultRules = assertNetworkCleanupReceipt(
+      plan,
+      network,
+      result.networkCleanupReceipt,
+    );
+    const confirmedRules = assertNetworkCleanupReceipt(
+      plan,
+      network,
+      confirmed.networkCleanupReceipt,
+    );
+    if (
+      resultRules !== confirmedRules ||
+      !sameJson(result.networkCleanupReceipt, confirmed.networkCleanupReceipt)
+    )
+      throw new Error("Tart network cleanup receipt changed on readback");
     return {
       resourceId: resource.id,
       kind: "vm",
       runtime: runtimeBinding(plan),
       identity: plan.identity,
       presence: "absent",
-      networkRules: "not_applicable",
+      networkRules: resultRules,
       verifiedAtMs: this.now(),
     };
   }
@@ -466,26 +501,47 @@ export class TartExecutionProvider implements ExecutionPort {
     plan: ProvisionPlan,
     observed: Extract<TartInspection, { presence: "present" }>,
   ): Promise<TartNetworkEvidence> {
-    const evidence = await this.options.network.verify(plan, observed);
+    const networkPlan = tartNetworkPlanFor(plan);
+    const evidence = tartNetworkObservationSchema.parse(observed.network);
     const now = this.now();
-    const verifiedAt = Date.parse(evidence.verifiedAt);
-    const expiresAt = Date.parse(evidence.expiresAt);
+    const verifiedAt = Date.parse(evidence.observedAt);
+    const expiresAtMs = plan.deadlineMs;
     if (
-      evidence.runtimeIdentityId !== plan.identity.runtimeIdentityId ||
-      evidence.allocationId !== plan.identity.allocationId ||
-      evidence.generation !== plan.identity.generation ||
-      evidence.revisionId !== plan.resolved.network.revisionId ||
-      evidence.contractHash !== sha256(plan.resolved.network) ||
-      !evidence.reference ||
+      evidence.status !== "policy_match" ||
+      evidence.backend !== "softnet" ||
+      !sameProvisionIdentity(evidence.identity, plan.identity) ||
+      evidence.revisionId !== networkPlan.revisionId ||
+      evidence.contractHash !== networkPlan.contractHash ||
+      evidence.policyHash !== hashSoftnetReadback(evidence.readback) ||
+      evidence.vm.vmName !== tartVmName(tartIdentity(plan)) ||
+      evidence.vm.vmName !== observed.vmName ||
+      !evidence.vm.device ||
+      !evidence.vm.inode ||
+      !evidence.vm.macAddress ||
+      !Number.isSafeInteger(evidence.process.pid) ||
+      !Number.isFinite(Date.parse(evidence.process.startedAt)) ||
+      evidence.control.transport !== "unix_stream_fd" ||
+      evidence.control.connected !== true ||
+      !Number.isSafeInteger(evidence.readback.ruleCount) ||
+      evidence.readback.ruleCount < 0 ||
+      evidence.readback.ruleCount > 8192 ||
       !Number.isFinite(verifiedAt) ||
-      !Number.isFinite(expiresAt) ||
       verifiedAt > now ||
       now - verifiedAt > EVIDENCE_MAX_AGE_MS ||
-      expiresAt <= now ||
-      expiresAt > plan.deadlineMs
+      expiresAtMs <= now
     )
       throw new Error("Tart network verification is stale or mismatched");
-    return evidence;
+    return {
+      runtimeIdentityId: plan.identity.runtimeIdentityId,
+      allocationId: plan.identity.allocationId,
+      generation: plan.identity.generation,
+      revisionId: plan.resolved.network.revisionId,
+      // Keep the ledger's existing network hash distinct from the Tart policy-plan hash.
+      contractHash: sha256(plan.resolved.network),
+      reference: evidence.policyHash,
+      verifiedAt: evidence.observedAt,
+      expiresAt: new Date(expiresAtMs).toISOString(),
+    };
   }
 
   private ownedVm(
@@ -543,6 +599,7 @@ function assertSupportedPlan(plan: ProvisionPlan): void {
     plan.resolved.network.mode !== "isolated_vm" ||
     plan.resolved.network.enforcement !== "tart_agent" ||
     plan.resolved.network.verificationRequired !== true ||
+    plan.resolved.network.ipv6 !== "disabled" ||
     plan.bootstrap.mechanism !== "tart-guest-bootstrap-v1" ||
     plan.bootstrap.contractVersion !== "1" ||
     plan.bootstrap.identityReset !== true ||
@@ -565,6 +622,75 @@ function assertSupportedPlan(plan: ProvisionPlan): void {
     plan.resources.limit.cpuMillis % 1000 !== 0
   )
     throw new Error("Tart requires whole-CPU frozen resource limits");
+}
+
+export function tartNetworkPlanFor(plan: ProvisionPlan): TartNetworkPlan {
+  const network = plan.resolved.network;
+  const unhashed = {
+    grantId: network.grantId,
+    revisionId: network.revisionId,
+    frozenPlatformDenyRevisionId: network.frozenPlatformDenyRevisionId,
+    platformDenyRevisionId: network.platformDenyRevisionId,
+    mode: network.mode,
+    enforcement: network.enforcement,
+    ipv6: network.ipv6,
+    allowedEgress: network.allowedEgress.map((rule) => ({
+      cidr: rule.cidr,
+      protocol: rule.protocol,
+      ports: [...rule.ports],
+    })),
+    allowedIngressSourceCidrs: [...network.allowedIngressSourceCidrs],
+    accessSourceCidrs: [...plan.access.allowedSourceCidrs],
+    accessPorts: [...plan.access.ports],
+    managementDenyRules: network.managementDenyRules.map((rule) => ({
+      cidr: rule.cidr,
+      protocol: rule.protocol,
+      ports: rule.ports === "any" ? "any" : [...rule.ports],
+    })),
+  };
+  const contractHash = `sha256:${createHash("sha256")
+    .update(canonicalTartNetworkPlan(unhashed))
+    .digest("hex")}`;
+  return tartNetworkPlanSchema.parse({ ...unhashed, contractHash });
+}
+
+function assertNetworkCleanupReceipt(
+  plan: ProvisionPlan,
+  network: TartNetworkPlan,
+  rawReceipt: TartNetworkCleanupReceipt | undefined,
+): "removed" | "never_installed" {
+  if (!rawReceipt) throw new Error("Tart network removal outcome is unknown");
+  const receipt = tartNetworkCleanupReceiptSchema.parse(rawReceipt);
+  const identityMatches = sameProvisionIdentity(
+    receipt.identity,
+    plan.identity,
+  );
+  if (
+    receipt.backend !== "softnet" ||
+    !identityMatches ||
+    receipt.revisionId !== network.revisionId ||
+    receipt.contractHash !== network.contractHash
+  )
+    throw new Error("Tart network cleanup receipt does not match the plan");
+  if (receipt.status === "not_started") {
+    if (receipt.vmName !== tartVmName(tartIdentity(plan)))
+      throw new Error("Tart network never-started receipt is not owned");
+    return "never_installed";
+  }
+  if (
+    receipt.status !== "removed" ||
+    receipt.vm.vmName !== tartVmName(tartIdentity(plan)) ||
+    receipt.processExitObserved !== true ||
+    !receipt.readback ||
+    receipt.readback.allow.length !== 0 ||
+    !receipt.readback.block.includes("in 0.0.0.0/0") ||
+    !receipt.readback.block.includes("out 0.0.0.0/0") ||
+    !Number.isSafeInteger(receipt.readback.ruleCount) ||
+    receipt.readback.ruleCount < 0 ||
+    receipt.readback.ruleCount > 8192
+  )
+    throw new Error("Tart network removal is not verified");
+  return "removed";
 }
 
 function tartResources(plan: ProvisionPlan) {
@@ -788,6 +914,16 @@ function provisionHashes(plan: ProvisionPlan) {
 
 function sha256(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function hashSoftnetReadback(readback: {
+  allow: readonly string[];
+  block: readonly string[];
+}): string {
+  return `sha256:${sha256({
+    allow: [...readback.allow].sort(),
+    block: [...readback.block].sort(),
+  })}`;
 }
 
 function sameJson(left: unknown, right: unknown): boolean {

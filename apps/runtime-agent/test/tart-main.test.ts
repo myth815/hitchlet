@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   initializeTartNamespace,
+  networkAdapterFromConfig,
   readTartNamespace,
 } from "../src/tart-main.js";
+import { TartSoftnetNetworkAdapter } from "../src/drivers/tart-network.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -34,6 +36,21 @@ it("does not auto-initialize an empty namespace path during normal startup", asy
   await expect(readTartNamespace(config)).rejects.toMatchObject({
     code: "ENOENT",
   });
+});
+
+it("keeps Softnet disabled by default and requires a fixed absolute executable for opt-in", () => {
+  const config = configFor("/tmp/hitchlet-tart-main-config");
+  expect(networkAdapterFromConfig(config)).toBeUndefined();
+  expect(() =>
+    networkAdapterFromConfig({ ...config, networkEnabled: true }),
+  ).toThrow("fixed Softnet executable");
+  expect(
+    networkAdapterFromConfig({
+      ...config,
+      networkEnabled: true,
+      softnetExecutable: "/opt/hitchlet/softnet/softnet",
+    }),
+  ).toBeInstanceOf(TartSoftnetNetworkAdapter);
 });
 
 function configFor(root: string) {

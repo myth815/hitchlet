@@ -5,6 +5,11 @@ import {
   tartInspectionSchema,
   tartReconcileRequestSchema,
 } from "../src/tart-runtime.js";
+import { createHash } from "node:crypto";
+import {
+  canonicalTartNetworkPlan,
+  tartNetworkPlanSchema,
+} from "../src/tart-network.js";
 
 const identity = {
   installationId: "install-1",
@@ -19,6 +24,28 @@ const identity = {
 const key =
   "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const fingerprint = "SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+const networkWithoutHash = {
+  grantId: "grant-1",
+  revisionId: "network-revision-1",
+  frozenPlatformDenyRevisionId: "frozen-deny-1",
+  platformDenyRevisionId: "effective-deny-1",
+  mode: "isolated_vm" as const,
+  enforcement: "tart_agent" as const,
+  ipv6: "disabled" as const,
+  allowedEgress: [],
+  allowedIngressSourceCidrs: ["192.0.2.0/24"],
+  accessSourceCidrs: ["192.0.2.0/24"],
+  accessPorts: [22],
+  managementDenyRules: [],
+};
+const network = {
+  ...networkWithoutHash,
+  contractHash:
+    "sha256:" +
+    createHash("sha256")
+      .update(canonicalTartNetworkPlan(networkWithoutHash))
+      .digest("hex"),
+};
 
 describe("internal Tart contract", () => {
   it("keeps bootstrap requests public-key-only and binds them to the same immutable allocation", () => {
@@ -54,6 +81,7 @@ describe("internal Tart contract", () => {
           configSha256: "a".repeat(64),
         },
         resources: { cpus: 2, memoryMiB: 2048 },
+        network,
         bootstrap: {
           ...request,
           identity: { ...identity, allocationId: "other" },
@@ -71,6 +99,15 @@ describe("internal Tart contract", () => {
         state: "running",
         resources: { cpus: 2, memoryMiB: 2048 },
         bootstrapStatus: "pending",
+        network: {
+          backend: "softnet",
+          status: "unknown",
+          identity,
+          revisionId: "network-revision-1",
+          contractHash: network.contractHash,
+          reason: "network_process_untracked",
+          observedAt: "2029-01-01T00:00:00.000Z",
+        },
       }),
     ).toMatchObject({ presence: "present", bootstrapStatus: "pending" });
     expect(
