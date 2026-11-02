@@ -16,7 +16,7 @@ const ConfigSchema = z
     DATA_DIR: z.string().min(1),
     GUI_DIR: z.string().default("/app/gui"),
     EXECUTION_MODE: z
-      .enum(["disabled", "simulator", "portainer"])
+      .enum(["disabled", "simulator", "portainer", "tart"])
       .default("disabled"),
     SIMULATOR_DATA_DIR: z.string().min(1).optional(),
     HITCHLET_POWER_CONFIG: z.string().min(1).optional(),
@@ -44,13 +44,14 @@ const ConfigSchema = z
         message: "required when EXECUTION_MODE=simulator",
       });
     if (
-      config.EXECUTION_MODE === "portainer" &&
+      (config.EXECUTION_MODE === "portainer" ||
+        config.EXECUTION_MODE === "tart") &&
       !config.HITCHLET_SECRET_KEY_FILE
     )
       context.addIssue({
         code: "custom",
         path: ["HITCHLET_SECRET_KEY_FILE"],
-        message: "required when EXECUTION_MODE=portainer",
+        message: "required when EXECUTION_MODE=portainer or tart",
       });
     if (
       !config.COOKIE_SECURE &&
@@ -64,6 +65,17 @@ const ConfigSchema = z
   })
   .strict();
 export type Config = z.infer<typeof ConfigSchema>;
+
+/** Tart serving stays closed until native VM network enforcement and server composition are configured. */
+export function assertTartExecutionAdaptersConfigured(
+  mode: Config["EXECUTION_MODE"],
+): void {
+  if (mode === "tart")
+    throw new Error(
+      "Tart execution is not configured: native VM network enforcement/verification adapter and production server composition are not configured",
+    );
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const keys = [
     "HOST",

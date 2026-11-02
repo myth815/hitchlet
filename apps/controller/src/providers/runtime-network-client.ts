@@ -20,6 +20,21 @@ import type { RuntimeNetworkPort } from "./runtime-network-port.js";
 type PlanInput = Omit<RuntimeNetworkPlan, "expectedRulesetHash">;
 type CommandInput = Omit<RuntimeNetworkCommand, "contentHash">;
 
+/** Only fixed Runtime Agent POST routes may use the authenticated exchange. */
+export type RuntimeAgentJsonPath =
+  | "/v1/network-actions"
+  | "/v1/storage-facts"
+  | "/v1/tart/actions"
+  | "/v1/tart/facts";
+
+export type RuntimeAgentJsonTransport = Readonly<{
+  exchangeJson(
+    path: RuntimeAgentJsonPath,
+    payload: unknown,
+    timeoutMs?: number,
+  ): Promise<unknown>;
+}>;
+
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(canonicalRuntimeNetworkValue(value)).digest("hex")}`;
 }
@@ -57,6 +72,11 @@ export type RuntimeNetworkClientConfig = Readonly<{
   loadCredentials: () => Promise<RuntimeNetworkCredentials>;
   timeoutMs?: number;
 }>;
+export type RuntimeAgentHttpTransportConfig = Readonly<{
+  baseUrl: string;
+  loadCredentials: () => Promise<RuntimeNetworkCredentials>;
+  timeoutMs: number;
+}>;
 /** Authenticated, nonce-bound response plus a local receipt clock. The remote
  * observedAtMs is diagnostic only; capacity age is measured from receivedAtMs. */
 export type ReceivedRuntimeStorageFacts = RuntimeStorageResult &
@@ -92,15 +112,108 @@ export function readRuntimeNetworkCredentialFiles(
   };
 }
 
-/** HTTPS/mTLS adapter. Credentials are read from mounted files and never placed in URLs or logs. */
-export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
+/** Shared bounded HTTPS exchange; callers keep their own schema and deadlines. */
+export class RuntimeAgentHttpTransport implements RuntimeAgentJsonTransport {
   private readonly baseUrl: URL;
-  private readonly timeoutMs: number;
 
-  constructor(config: RuntimeNetworkClientConfig) {
+  constructor(private readonly config: RuntimeAgentHttpTransportConfig) {
     this.baseUrl = new URL(config.baseUrl);
     if (this.baseUrl.protocol !== "https:")
       throw new Error("Runtime Agent URL must use HTTPS");
+    assertTimeout(config.timeoutMs);
+  }
+
+  async exchangeJson(
+    path: RuntimeAgentJsonPath,
+    payload: unknown,
+    timeoutMs = this.config.timeoutMs,
+  ): Promise<unknown> {
+    if (
+      ![
+        "/v1/network-actions",
+        "/v1/storage-facts",
+        "/v1/tart/actions",
+        "/v1/tart/facts",
+      ].includes(path)
+    )
+      throw new Error("Runtime Agent route is unsupported");
+    assertTimeout(timeoutMs);
+    const exchangeDeadline = Date.now() + timeoutMs;
+    const credentials = await this.config.loadCredentials();
+    const remainingMs = exchangeDeadline - Date.now();
+    if (remainingMs < 1) throw new Error("Runtime Agent request timed out");
+    const body = Buffer.from(JSON.stringify(payload));
+    const target = new URL(path, this.baseUrl);
+    const response = await new Promise<{ status: number; body: Buffer }>(
+      (resolve, reject) => {
+        const request = https.request(
+          target,
+          {
+            method: "POST",
+            ca: credentials.ca,
+            cert: credentials.cert,
+            key: credentials.key,
+            headers: {
+              authorization: `Bearer ${credentials.token}`,
+              "content-type": "application/json",
+              "content-length": body.byteLength,
+            },
+            timeout: remainingMs,
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            let size = 0;
+            res.on("data", (chunk: Buffer) => {
+              size += chunk.byteLength;
+              if (size > 256 * 1024)
+                request.destroy(new Error("Runtime Agent response too large"));
+              else chunks.push(chunk);
+            });
+            res.on("end", () =>
+              resolve({
+                status: res.statusCode ?? 0,
+                body: Buffer.concat(chunks),
+              }),
+            );
+          },
+        );
+        const deadline = setTimeout(
+          () => request.destroy(new Error("Runtime Agent request timed out")),
+          remainingMs,
+        );
+        request.once("close", () => clearTimeout(deadline));
+        request.on("timeout", () =>
+          request.destroy(new Error("Runtime Agent request timed out")),
+        );
+        request.on("error", () =>
+          reject(new Error("Runtime Agent request failed")),
+        );
+        request.end(body);
+      },
+    );
+    if (response.status < 200 || response.status >= 300)
+      throw new Error(`Runtime Agent returned HTTP ${response.status}`);
+    try {
+      return JSON.parse(response.body.toString("utf8"));
+    } catch {
+      throw new Error("Runtime Agent returned invalid JSON");
+    }
+  }
+}
+
+function assertTimeout(timeoutMs: number): void {
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 240_000)
+    throw new RangeError(
+      "Runtime Agent timeout must be between 1 and 240000ms",
+    );
+}
+
+/** HTTPS/mTLS adapter. Credentials are read from mounted files and never placed in URLs or logs. */
+export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
+  private readonly timeoutMs: number;
+  private readonly transport: RuntimeAgentHttpTransport;
+
+  constructor(config: RuntimeNetworkClientConfig) {
     this.timeoutMs = config.timeoutMs ?? 10_000;
     if (
       !Number.isSafeInteger(this.timeoutMs) ||
@@ -110,10 +223,11 @@ export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
       throw new RangeError(
         "Runtime Agent timeout must be between 1 and 30000ms",
       );
-    this.loadCredentials = config.loadCredentials;
+    this.transport = new RuntimeAgentHttpTransport({
+      ...config,
+      timeoutMs: this.timeoutMs,
+    });
   }
-
-  private readonly loadCredentials: () => Promise<RuntimeNetworkCredentials>;
 
   ensure(
     command: Extract<RuntimeNetworkCommand, { kind: "network.ensure" }>,
@@ -141,7 +255,7 @@ export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
   ): Promise<ReceivedRuntimeStorageFacts> {
     const parsed = runtimeStorageRequestSchema.parse(request);
     const result = runtimeStorageResultSchema.parse(
-      await this.exchange("/v1/storage-facts", parsed),
+      await this.exchangeJson("/v1/storage-facts", parsed),
     );
     if (
       result.requestId !== parsed.requestId ||
@@ -163,67 +277,11 @@ export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
     // date a controller admission record. Preserve its timestamp for diagnosis.
     return { ...result, receivedAtMs: Date.now() };
   }
-  private async exchange(path: string, payload: unknown): Promise<unknown> {
-    const credentials = await this.loadCredentials();
-    const body = Buffer.from(JSON.stringify(payload));
-    const target = new URL(path, this.baseUrl);
-    const response = await new Promise<{ status: number; body: Buffer }>(
-      (resolve, reject) => {
-        const request = https.request(
-          target,
-          {
-            method: "POST",
-            ca: credentials.ca,
-            cert: credentials.cert,
-            key: credentials.key,
-            headers: {
-              authorization: `Bearer ${credentials.token}`,
-              "content-type": "application/json",
-              "content-length": body.byteLength,
-            },
-            timeout: this.timeoutMs,
-          },
-          (res) => {
-            const chunks: Buffer[] = [];
-            let size = 0;
-            res.on("data", (chunk: Buffer) => {
-              size += chunk.byteLength;
-              if (size > 256 * 1024)
-                request.destroy(new Error("Runtime Agent response too large"));
-              else chunks.push(chunk);
-            });
-            res.on("end", () =>
-              resolve({
-                status: res.statusCode ?? 0,
-                body: Buffer.concat(chunks),
-              }),
-            );
-          },
-        );
-        // Socket inactivity alone does not bound a peer that drips body bytes.
-        const deadline = setTimeout(
-          () => request.destroy(new Error("Runtime Agent request timed out")),
-          this.timeoutMs,
-        );
-        request.once("close", () => clearTimeout(deadline));
-        request.on("timeout", () =>
-          request.destroy(new Error("Runtime Agent request timed out")),
-        );
-        request.on("error", () =>
-          reject(new Error("Runtime Agent request failed")),
-        );
-        request.end(body);
-      },
-    );
-    if (response.status < 200 || response.status >= 300)
-      throw new Error(`Runtime Agent returned HTTP ${response.status}`);
-    let json: unknown;
-    try {
-      json = JSON.parse(response.body.toString("utf8"));
-    } catch {
-      throw new Error("Runtime Agent returned invalid JSON");
-    }
-    return json;
+  async exchangeJson(
+    path: RuntimeAgentJsonPath,
+    payload: unknown,
+  ): Promise<unknown> {
+    return this.transport.exchangeJson(path, payload, this.timeoutMs);
   }
 
   private async send(
@@ -233,7 +291,7 @@ export class RuntimeNetworkHttpClient implements RuntimeNetworkPort {
     const parsed = runtimeNetworkCommandSchema.parse(command);
     if (parsed.kind !== kind)
       throw new Error("Runtime Agent command/action mismatch");
-    const json = await this.exchange("/v1/network-actions", parsed);
+    const json = await this.exchangeJson("/v1/network-actions", parsed);
     const result = runtimeNetworkResultSchema.parse(json);
     assertRuntimeNetworkResponse(parsed, result);
     return result;

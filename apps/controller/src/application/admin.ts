@@ -15,6 +15,12 @@ import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { SQLiteAdminReadStore } from "../storage/admin-read-store.js";
 import { SQLiteImageCacheStore } from "../storage/image-cache-store.js";
 import { validAttestedCapability } from "../domain/attested-capability.js";
+import type { TartFactsForRevision } from "../providers/runtime-credentials.js";
+import type {
+  NodeCapabilityAttestationInput,
+  TartNodeRuntimeConfigInput,
+} from "@hitchlet/contracts/admin";
+import { tartTemplateProofMatches } from "./tart-facts.js";
 
 export type Probe = PortainerProbe;
 type ObservationSnapshot = Awaited<
@@ -40,10 +46,17 @@ export class AdminService {
     private readonly now = Date.now,
     allowLoopbackHttp = false,
     private readonly readSecret?: (versionRef: string) => Promise<string>,
+    private readonly tartFactsForRevision?: TartFactsForRevision,
   ) {
     this.reads = new SQLiteAdminReadStore(db);
     this.cacheReads = new SQLiteImageCacheStore(db, now);
-    this.publishing = new ImagePublishingService(db, probe, now, readSecret);
+    this.publishing = new ImagePublishingService(
+      db,
+      probe,
+      now,
+      readSecret,
+      tartFactsForRevision,
+    );
     this.connections = new SQLiteProviderConnectionStore(db, now);
     this.connectionUseCases = new PortainerConnectionService(
       this.connections,
@@ -51,6 +64,7 @@ export class AdminService {
       now,
       allowLoopbackHttp,
       readSecret,
+      tartFactsForRevision,
     );
     this.inventory = new SQLiteMachineNodeStore(db, now);
     this.revocations = new SQLiteProfileRevocationStore(db, now);
@@ -59,10 +73,16 @@ export class AdminService {
     this.validations = new ImageValidationService(
       new SQLiteValidationStore(db, now),
       now,
+      tartFactsForRevision,
     );
   }
   discover(input: Parameters<PortainerConnectionService["discover"]>[0]) {
     return this.connectionUseCases.discover(input);
+  }
+  discoverTart(
+    input: Parameters<PortainerConnectionService["discoverTart"]>[0],
+  ) {
+    return this.connectionUseCases.discoverTart(input);
   }
   listConnections() {
     return this.connections.listConnections();
@@ -123,10 +143,81 @@ export class AdminService {
       );
     return this.inventory.configureRuntime(input);
   }
+  async configureTartNodeRuntime(input: {
+    nodeId: string;
+    expectedVersion: number;
+    config: TartNodeRuntimeConfigInput;
+    operatorId: string;
+    requestId: string;
+  }) {
+    if (!this.readSecret)
+      throw new Error(
+        "Encrypted secret store is required for Runtime Agent registration",
+      );
+    for (const key of [
+      "tokenSecretRef",
+      "caSecretRef",
+      "clientCertSecretRef",
+      "clientKeySecretRef",
+    ] as const) {
+      const ref = input.config.runtimeAgent[key];
+      await this.readSecret(ref);
+    }
+    return this.inventory.configureTartRuntime(input);
+  }
   attestNodeCapabilities(
     input: Parameters<SQLiteMachineNodeStore["attestCapabilities"]>[0],
   ) {
     return this.inventory.attestCapabilities(input);
+  }
+  async attestTartNodeCapabilities(
+    input: {
+      nodeId: string;
+      expectedVersion: number;
+      operatorId: string;
+      requestId: string;
+    } & Extract<NodeCapabilityAttestationInput, { backendKind: "tart" }>,
+  ) {
+    const target = await this.inventory.tartAttestationTarget(input.nodeId);
+    if (
+      !target ||
+      Number(target.version) !== input.expectedVersion ||
+      typeof target.runtime_identity_id !== "string" ||
+      typeof target.current_revision_id !== "string" ||
+      typeof target.installation_id !== "string" ||
+      typeof target.config_json !== "string"
+    )
+      throw new Error("Tart node registration or connection revision changed");
+    if (!this.tartFactsForRevision)
+      throw new Error("Authenticated Tart Runtime facts probe is unavailable");
+    const rawConfig: unknown = JSON.parse(target.config_json);
+    if (!rawConfig || typeof rawConfig !== "object" || Array.isArray(rawConfig))
+      throw new RangeError("Tart node runtime config is invalid");
+    const facts = await this.tartFactsForRevision({
+      installationId: target.installation_id,
+      runtimeIdentityId: String(target.runtime_identity_id),
+      connectionRevisionId: String(target.current_revision_id),
+      nodeId: input.nodeId,
+      config: rawConfig as Record<string, unknown>,
+    });
+    if (
+      !tartTemplateProofMatches(facts, {
+        nativeRuntimeNamespaceId: String(target.native_id),
+        artifactRef: input.templateRef,
+        digest: input.templateDigest,
+        architecture: input.architecture,
+        guestOs: input.guestOs,
+      }) ||
+      facts.tartVersion !== input.expectedTartVersion
+    )
+      throw new RangeError(
+        "Fresh Tart Runtime facts do not match the submitted qualification target",
+      );
+    return this.inventory.attestTartCapabilities({
+      ...input,
+      expectedConnectionRevisionId: String(target.current_revision_id),
+      facts,
+    });
   }
   async refreshPortainerObservations() {
     const checkedAt = this.now();

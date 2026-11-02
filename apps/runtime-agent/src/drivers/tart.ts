@@ -1,7 +1,9 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import {
   mkdir,
+  lstat,
   readFile,
   readdir,
   rename,
@@ -10,7 +12,7 @@ import {
   open,
 } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { homedir } from "node:os";
+import { cpus, homedir, totalmem } from "node:os";
 import { promisify } from "node:util";
 import { z } from "zod";
 import {
@@ -21,6 +23,7 @@ import {
   tartLocalTemplateRefSchema,
   tartReconcileRequestSchema,
   tartResourceSpecSchema,
+  tartRuntimeFactsSchema,
   type TartAllocationIdentity,
   type TartGuestBootstrapReceipt,
   type TartGuestBootstrapRequest,
@@ -28,7 +31,11 @@ import {
   type TartLocalTemplateRef,
   type TartReconcileRequest,
   type TartResourceSpec,
+  type TartRuntimeFacts,
+  type TartRuntimeTemplateProof,
 } from "@hitchlet/contracts/internal";
+import { canonical } from "../canonical.js";
+import { currentCommandDeadlineMs } from "../command-exec.js";
 
 const execFileAsync = promisify(execFile);
 const SHORT_COMMAND_MS = 15_000;
@@ -37,6 +44,9 @@ const IP_DEADLINE_MS = 90_000;
 const IP_POLL_MS = 1_000;
 const RUN_EXIT_MS = 5_000;
 const MAX_OUTPUT = 1024 * 1024;
+const GUEST_BOOTSTRAP_TIMEOUT_MS = 120_000;
+const MAX_GUEST_BOOTSTRAP_OUTPUT = 256 * 1024;
+const TEMPLATE_BUNDLE_FILES = ["config.json", "disk.img", "nvram.bin"] as const;
 
 const manifestBase = {
   version: z.literal(2),
@@ -79,10 +89,50 @@ const releasedTombstoneSchema = z
   .object({ ...manifestBase, phase: z.literal("released") })
   .strict();
 const manifestSchema = z.union([ownedManifestSchema, releasedTombstoneSchema]);
+const templateFileProofSchema = z
+  .object({
+    name: z.enum(TEMPLATE_BUNDLE_FILES),
+    device: z.string(),
+    inode: z.string(),
+    size: z.string(),
+    mtimeNs: z.string(),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  })
+  .strict();
+const templateRegistrySchema = z
+  .object({
+    version: z.literal(1),
+    templateRef: tartLocalTemplateRefSchema,
+    artifactDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    proofKind: z.literal("sealed_local_bundle_v1"),
+    sealedAt: z.string().datetime({ offset: true }),
+    home: z
+      .object({ path: z.string(), device: z.string(), inode: z.string() })
+      .strict(),
+    files: z
+      .array(templateFileProofSchema)
+      .length(TEMPLATE_BUNDLE_FILES.length)
+      .superRefine((files, context) => {
+        if (
+          TEMPLATE_BUNDLE_FILES.some(
+            (name) => files.filter((file) => file.name === name).length !== 1,
+          )
+        )
+          context.addIssue({
+            code: "custom",
+            message: "invalid_bundle_file_set",
+          });
+      }),
+  })
+  .strict();
 
 type Manifest = z.infer<typeof ownedManifestSchema>;
 type ReleasedTombstone = z.infer<typeof releasedTombstoneSchema>;
 type StoredManifest = Manifest | ReleasedTombstone;
+type TemplateRegistryRecord = z.infer<typeof templateRegistrySchema>;
+type HomeBound = Readonly<{
+  home: Readonly<{ path: string; device: string; inode: string }>;
+}>;
 type InventoryRow = {
   Source: string;
   Name: string;
@@ -109,6 +159,7 @@ export type TartDriverOptions = Readonly<{
   manifestDirectory: string;
   /** Absolute executable path. Production callers fix this to their installed Tart binary. */
   executable: string;
+  templateRegistryDirectory?: string;
 }>;
 
 /**
@@ -120,6 +171,7 @@ export class TartLocalDriver {
   private readonly home: string;
   private readonly vmRoot: string;
   private readonly manifestRoot: string;
+  private readonly registryRoot: string;
   private readonly executable: string;
   private readonly env: NodeJS.ProcessEnv;
   private readonly children = new Map<string, RunningChild>();
@@ -149,6 +201,15 @@ export class TartLocalDriver {
       this.manifestRoot.startsWith(`${this.home}/`)
     )
       throw new Error("tart_manifest_must_be_outside_home");
+    this.registryRoot = resolve(
+      options.templateRegistryDirectory ??
+        join(this.manifestRoot, "template-registry"),
+    );
+    if (
+      this.registryRoot === this.home ||
+      this.registryRoot.startsWith(`${this.home}/`)
+    )
+      throw new Error("tart_template_registry_must_be_outside_home");
     this.executable = options.executable;
     this.env = {
       ...process.env,
@@ -180,17 +241,121 @@ export class TartLocalDriver {
     );
   }
 
-  recordBootstrapReceipt(
+  bootstrapApply(
     rawIdentity: unknown,
     rawRequest: unknown,
-    rawReceipt: unknown,
   ): Promise<TartInspection> {
     const identity = tartAllocationIdentitySchema.parse(rawIdentity);
     const request = tartGuestBootstrapRequestSchema.parse(rawRequest);
-    const receipt = tartGuestBootstrapReceiptSchema.parse(rawReceipt);
     return this.exclusive(ownerKey(identity), () =>
-      this.recordBootstrapReceiptOwned(identity, request, receipt),
+      this.bootstrapApplyOwned(identity, request),
     );
+  }
+
+  async facts(nativeRuntimeNamespaceId: string): Promise<TartRuntimeFacts> {
+    await this.prepareDirectories();
+    const namespaceId = z.string().uuid().parse(nativeRuntimeNamespaceId);
+    const inventory = await this.inventory();
+    if (inventory.status !== "complete")
+      throw new Error("tart_inventory_incomplete");
+    const templates: TartRuntimeTemplateProof[] = [];
+    const registryEntries = await readdir(this.registryRoot, {
+      withFileTypes: true,
+    });
+    for (const entry of registryEntries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const record = await this.readTemplateRegistryByPath(
+        join(this.registryRoot, entry.name),
+      );
+      if (!record) continue;
+      const expected = record.templateRef;
+      if (
+        entry.name !==
+        `${createHash("sha256").update(expected.name).digest("hex")}.json`
+      )
+        continue;
+      const row = inventory.rows.find((item) => item.Name === expected.name);
+      if (
+        !row ||
+        row.Source !== "local" ||
+        row.Running ||
+        row.State !== "stopped"
+      )
+        continue;
+      const actual = await this.readTemplateFacts(expected.name);
+      if (!actual || !sameTemplateRef(actual.ref, expected)) continue;
+      if (
+        record.artifactDigest !==
+          templateArtifactDigest(record.templateRef, record.files) ||
+        !(await this.matchesHome(record)) ||
+        !(await this.templateFilesUnchanged(record))
+      )
+        continue;
+      templates.push(templateProof(record));
+    }
+    const versionResult = await this.runShort(["--version"]);
+    const tartVersion = (versionResult.stdout || versionResult.stderr).trim();
+    return tartRuntimeFactsSchema.parse({
+      nativeRuntimeNamespaceId: namespaceId,
+      tartVersion,
+      hostOS: "macos",
+      hostArch: "arm64",
+      hostCpuCount: cpus().length,
+      hostMemoryBytes: totalmem(),
+      templates,
+    });
+  }
+
+  sealTemplate(rawName: unknown): Promise<TartRuntimeTemplateProof> {
+    const name = z
+      .string()
+      .regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/)
+      .parse(rawName);
+    return this.exclusive(`template:${name}`, () =>
+      this.sealTemplateOwned(name),
+    );
+  }
+
+  private async sealTemplateOwned(
+    name: string,
+  ): Promise<TartRuntimeTemplateProof> {
+    await this.prepareDirectories();
+    const inventory = await this.inventory();
+    if (inventory.status !== "complete")
+      throw new Error("tart_inventory_incomplete");
+    const row = inventory.rows.find((item) => item.Name === name);
+    if (
+      !row ||
+      row.Source !== "local" ||
+      row.Running ||
+      row.State !== "stopped"
+    )
+      throw new Error("tart_template_not_stopped");
+    const initial = await this.readTemplateFacts(name);
+    if (!initial) throw new Error("tart_template_configuration_unavailable");
+    const files: z.infer<typeof templateFileProofSchema>[] = [];
+    for (const fileName of TEMPLATE_BUNDLE_FILES)
+      files.push(
+        await hashTemplateFile(join(this.vmRoot, name, fileName), fileName),
+      );
+    const final = await this.readTemplateFacts(name);
+    if (
+      !final ||
+      !sameTemplateRef(initial.ref, final.ref) ||
+      !sameTemplateFacts(initial.ref, initial.identity, final)
+    )
+      throw new Error("tart_template_changed_while_sealing");
+    const record: TemplateRegistryRecord = templateRegistrySchema.parse({
+      version: 1,
+      templateRef: initial.ref,
+      artifactDigest: templateArtifactDigest(initial.ref, files),
+      proofKind: "sealed_local_bundle_v1",
+      sealedAt: new Date().toISOString(),
+      home: await this.homeIdentity(),
+      files,
+    });
+    await this.writeTemplateRegistry(name, record);
+    return templateProof(record);
   }
 
   /** Stop accepting work and wait for in-flight CLI state transitions. Running
@@ -471,6 +636,159 @@ export class TartLocalDriver {
     return this.inspectOwned(identity);
   }
 
+  private async bootstrapApplyOwned(
+    identity: TartAllocationIdentity,
+    request: TartGuestBootstrapRequest,
+  ): Promise<TartInspection> {
+    await this.prepareDirectories();
+    const manifestPath = this.manifestPath(identity);
+    const manifest = await this.readManifest(manifestPath);
+    if (!manifest || !sameOwner(manifest.identity, identity))
+      return unknown(identity, "bootstrap_manifest_missing");
+    if (!(await this.matchesHome(manifest)))
+      return unknown(identity, "tart_home_identity_changed");
+    if (
+      manifest.phase !== "owned" ||
+      !manifest.instance ||
+      manifest.highestControlVersion !== identity.controlVersion ||
+      !sameActionIdentity(manifest.identity, identity)
+    )
+      return unknown(identity, "bootstrap_receipt_fence_closed");
+    if (
+      !manifest.bootstrapRequest ||
+      JSON.stringify(manifest.bootstrapRequest) !== JSON.stringify(request) ||
+      !sameActionIdentity(request.identity, identity)
+    )
+      return unknown(identity, "bootstrap_request_receipt_mismatch");
+    if (Date.parse(request.networkEvidence.expiresAt) <= Date.now())
+      return unknown(identity, "bootstrap_network_evidence_expired");
+    if (!validBootstrapPublicKeyFingerprints(request))
+      return unknown(identity, "bootstrap_client_key_fingerprint_mismatch");
+    if (manifest.bootstrapReceipt?.status === "applied")
+      return this.inspectOwned(identity);
+    if ((await this.verifyOwned(manifest)) !== "present")
+      return unknown(identity, "owned_vm_identity_or_inventory_mismatch");
+    const inventory = await this.inventory();
+    if (inventory.status !== "complete")
+      return unknown(identity, "inventory_incomplete");
+    const row = inventory.rows.find((item) => item.Name === manifest.vmName);
+    if (!row || row.Source !== "local")
+      return unknown(identity, "owned_vm_missing_from_cli_inventory");
+    if (!row.Running) return unknown(identity, "bootstrap_vm_not_running");
+
+    let receipt: TartGuestBootstrapReceipt;
+    try {
+      receipt = await this.invokeGuestBootstrap(manifest.vmName, request);
+    } catch (error) {
+      const reason =
+        error instanceof Error && error.message === "guest_ssh_port_22_in_use"
+          ? error.message
+          : "guest_bootstrap_execution_unknown";
+      receipt = {
+        status: "unknown",
+        identity,
+        nonce: request.nonce,
+        reason,
+        observedAt: new Date().toISOString(),
+      };
+    }
+    return this.recordBootstrapReceiptOwned(identity, request, receipt);
+  }
+
+  private async invokeGuestBootstrap(
+    vmName: string,
+    request: TartGuestBootstrapRequest,
+  ): Promise<TartGuestBootstrapReceipt> {
+    const helperSource = await readFile(
+      new URL("./tart-guest-bootstrap.cjs", import.meta.url),
+      "utf8",
+    );
+    const script = `${helperSource}\n;let __input="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>__input+=c);process.stdin.on("end",()=>{try{const __result=module.exports.runGuestBootstrap(JSON.parse(__input));process.stdout.write(JSON.stringify(__result)+"\\n")}catch(__error){const __code=__error&&__error.code==="guest_ssh_port_22_in_use"?__error.code:"guest_bootstrap_failed";process.stderr.write(__code+"\\n");process.exitCode=1}});`;
+    const result = await this.runInteractive(
+      [
+        "exec",
+        "-i",
+        vmName,
+        "/usr/bin/sudo",
+        "-n",
+        "/opt/homebrew/bin/node",
+        "-e",
+        script,
+      ],
+      `${JSON.stringify(request)}\n`,
+    );
+    const output = result.stdout.trim();
+    const parsed = tartGuestBootstrapReceiptSchema.parse(JSON.parse(output));
+    if (
+      parsed.status !== "applied" ||
+      !sameActionIdentity(parsed.identity, request.identity) ||
+      parsed.nonce !== request.nonce
+    )
+      throw new Error("tart_guest_bootstrap_receipt_mismatch");
+    return parsed;
+  }
+
+  private async runInteractive(
+    args: readonly string[],
+    input: string,
+  ): Promise<{ stdout: string; stderr: string }> {
+    if (this.closed) throw new Error("tart_driver_closed");
+    const timeout = commandBudget(undefined, GUEST_BOOTSTRAP_TIMEOUT_MS);
+    if (timeout <= 0) throw new Error("tart_command_deadline_expired");
+    return new Promise((resolvePromise, reject) => {
+      const child = spawn(this.executable, [...args], {
+        cwd: this.home,
+        env: this.env,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let outputSize = 0;
+      let failed = false;
+      const timer = setTimeout(() => {
+        failed = true;
+        child.kill("SIGKILL");
+      }, timeout);
+      const append = (target: Buffer[], chunk: Buffer) => {
+        outputSize += chunk.byteLength;
+        if (outputSize > MAX_GUEST_BOOTSTRAP_OUTPUT) {
+          failed = true;
+          child.kill("SIGKILL");
+          return;
+        }
+        target.push(chunk);
+      };
+      child.stdout.on("data", (chunk: Buffer) => append(stdout, chunk));
+      child.stderr.on("data", (chunk: Buffer) => append(stderr, chunk));
+      child.once("error", () => {
+        failed = true;
+      });
+      child.once("close", (code) => {
+        clearTimeout(timer);
+        if (failed || code !== 0) {
+          const errorText = Buffer.concat(stderr).toString("utf8").trim();
+          reject(
+            new Error(
+              errorText === "guest_ssh_port_22_in_use"
+                ? errorText
+                : "tart_guest_bootstrap_command_failed",
+            ),
+          );
+          return;
+        }
+        resolvePromise({
+          stdout: Buffer.concat(stdout).toString("utf8"),
+          stderr: Buffer.concat(stderr).toString("utf8"),
+        });
+      });
+      child.stdin.once("error", () => {
+        failed = true;
+      });
+      child.stdin.end(input);
+    });
+  }
+
   private async inspectOwned(
     identity: TartAllocationIdentity,
   ): Promise<TartInspection> {
@@ -662,11 +980,17 @@ export class TartLocalDriver {
     await mkdir(this.home, { recursive: true, mode: 0o700 });
     await mkdir(this.manifestRoot, { recursive: true, mode: 0o700 });
     await mkdir(this.vmRoot, { recursive: true, mode: 0o700 });
-    const [homeStat, manifestStat] = await Promise.all([
+    await mkdir(this.registryRoot, { recursive: true, mode: 0o700 });
+    const [homeStat, manifestStat, registryStat] = await Promise.all([
       stat(this.home),
       stat(this.manifestRoot),
+      stat(this.registryRoot),
     ]);
-    if ((homeStat.mode & 0o077) !== 0 || (manifestStat.mode & 0o077) !== 0)
+    if (
+      (homeStat.mode & 0o077) !== 0 ||
+      (manifestStat.mode & 0o077) !== 0 ||
+      (registryStat.mode & 0o077) !== 0
+    )
       throw new Error("tart_private_directory_permissions_required");
   }
 
@@ -683,7 +1007,7 @@ export class TartLocalDriver {
     };
   }
 
-  private async matchesHome(manifest: StoredManifest): Promise<boolean> {
+  private async matchesHome(manifest: HomeBound): Promise<boolean> {
     const current = await this.homeIdentity();
     return (
       current.path === manifest.home.path &&
@@ -740,6 +1064,85 @@ export class TartLocalDriver {
       await rm(tmp, { force: true });
       throw error;
     }
+  }
+
+  private templateRegistryPath(name: string): string {
+    const filename = createHash("sha256").update(name).digest("hex");
+    return join(this.registryRoot, `${filename}.json`);
+  }
+
+  private async readTemplateRegistry(
+    name: string,
+  ): Promise<TemplateRegistryRecord | undefined> {
+    const record = await this.readTemplateRegistryByPath(
+      this.templateRegistryPath(name),
+    );
+    return record?.templateRef.name === name ? record : undefined;
+  }
+
+  private async readTemplateRegistryByPath(
+    path: string,
+  ): Promise<TemplateRegistryRecord | undefined> {
+    try {
+      const parsed = templateRegistrySchema.safeParse(
+        JSON.parse(await readFile(path, "utf8")),
+      );
+      return parsed.success ? parsed.data : undefined;
+    } catch (error) {
+      if (isMissing(error)) return undefined;
+      return undefined;
+    }
+  }
+
+  private async writeTemplateRegistry(
+    name: string,
+    record: TemplateRegistryRecord,
+  ): Promise<void> {
+    const path = this.templateRegistryPath(name);
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    const file = await open(temporary, "wx", 0o600);
+    try {
+      await file.writeFile(`${JSON.stringify(record)}\n`, "utf8");
+      await file.sync();
+    } finally {
+      await file.close();
+    }
+    try {
+      await rename(temporary, path);
+      const directory = await open(dirname(path), "r");
+      try {
+        await directory.sync();
+      } finally {
+        await directory.close();
+      }
+    } catch (error) {
+      await rm(temporary, { force: true });
+      throw error;
+    }
+  }
+
+  private async templateFilesUnchanged(
+    record: TemplateRegistryRecord,
+  ): Promise<boolean> {
+    if (record.files.length !== TEMPLATE_BUNDLE_FILES.length) return false;
+    for (const proof of record.files) {
+      try {
+        const filePath = join(this.vmRoot, record.templateRef.name, proof.name);
+        const link = await lstat(filePath, { bigint: true });
+        if (!link.isFile() || link.isSymbolicLink()) return false;
+        const current = await stat(filePath, { bigint: true });
+        if (
+          String(current.dev) !== proof.device ||
+          String(current.ino) !== proof.inode ||
+          String(current.size) !== proof.size ||
+          String(current.mtimeNs) !== proof.mtimeNs
+        )
+          return false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
   }
 
   private async inventory(
@@ -894,14 +1297,20 @@ export class TartLocalDriver {
     args: readonly string[],
     timeout = SHORT_COMMAND_MS,
   ): Promise<{ stdout: string; stderr: string }> {
-    if (!Number.isFinite(timeout) || timeout <= 0)
+    const boundedTimeout = Math.floor(
+      Math.min(
+        timeout,
+        (currentCommandDeadlineMs() ?? Number.POSITIVE_INFINITY) - Date.now(),
+      ),
+    );
+    if (!Number.isFinite(boundedTimeout) || boundedTimeout <= 0)
       throw new Error("tart_command_deadline_expired");
     try {
       return await execFileAsync(this.executable, [...args], {
         cwd: this.home,
         env: this.env,
         shell: false,
-        timeout,
+        timeout: boundedTimeout,
         killSignal: "SIGKILL",
         maxBuffer: MAX_OUTPUT,
         encoding: "utf8",
@@ -913,6 +1322,8 @@ export class TartLocalDriver {
 
   private async startRun(vmName: string): Promise<void> {
     if (this.children.has(vmName)) return;
+    if ((currentCommandDeadlineMs() ?? Number.POSITIVE_INFINITY) <= Date.now())
+      throw new Error("tart_command_deadline_expired");
     const child = spawn(this.executable, ["run", "--no-graphics", vmName], {
       cwd: this.home,
       env: this.env,
@@ -950,7 +1361,10 @@ export class TartLocalDriver {
   }
 
   private async discoverIp(vmName: string): Promise<string | undefined> {
-    const deadline = Date.now() + IP_DEADLINE_MS;
+    const deadline = Math.min(
+      Date.now() + IP_DEADLINE_MS,
+      currentCommandDeadlineMs() ?? Number.POSITIVE_INFINITY,
+    );
     while (Date.now() < deadline) {
       const current = await this.inventory(deadline);
       if (current.status !== "complete" || !current.names.has(vmName))
@@ -1129,6 +1543,59 @@ function unknown(
   return { presence: "unknown", identity, reason };
 }
 
+async function hashTemplateFile(
+  path: string,
+  name: (typeof TEMPLATE_BUNDLE_FILES)[number],
+): Promise<z.infer<typeof templateFileProofSchema>> {
+  const before = await lstat(path, { bigint: true });
+  if (!before.isFile() || before.isSymbolicLink())
+    throw new Error("tart_template_bundle_file_invalid");
+  const digest = createHash("sha256");
+  for await (const chunk of createReadStream(path)) digest.update(chunk);
+  const after = await lstat(path, { bigint: true });
+  if (
+    !after.isFile() ||
+    before.dev !== after.dev ||
+    before.ino !== after.ino ||
+    before.size !== after.size ||
+    before.mtimeNs !== after.mtimeNs
+  )
+    throw new Error("tart_template_bundle_file_changed_while_sealing");
+  return templateFileProofSchema.parse({
+    name,
+    device: String(after.dev),
+    inode: String(after.ino),
+    size: String(after.size),
+    mtimeNs: String(after.mtimeNs),
+    sha256: digest.digest("hex"),
+  });
+}
+
+function templateProof(
+  record: TemplateRegistryRecord,
+): TartRuntimeTemplateProof {
+  return {
+    templateRef: record.templateRef,
+    artifactDigest: record.artifactDigest,
+    proofKind: record.proofKind,
+    sealedAt: record.sealedAt,
+  };
+}
+
+function templateArtifactDigest(
+  templateRef: TartLocalTemplateRef,
+  files: readonly z.infer<typeof templateFileProofSchema>[],
+): string {
+  const bundleManifest = {
+    format: "hitchlet_tart_local_bundle_v1",
+    templateRef,
+    files: files
+      .map(({ name, size, sha256 }) => ({ name, size, sha256 }))
+      .sort((left, right) => left.name.localeCompare(right.name)),
+  };
+  return `sha256:${createHash("sha256").update(canonical(bundleManifest)).digest("hex")}`;
+}
+
 function isIPv4(value: string): boolean {
   return (
     /^(?:\d{1,3}\.){3}\d{1,3}$/.test(value) &&
@@ -1163,11 +1630,20 @@ function sshPublicKeyFingerprint(publicKey: string): string | undefined {
   return `SHA256:${digest}`;
 }
 
-function commandBudget(deadlineMs?: number): number {
+function commandBudget(
+  deadlineMs?: number,
+  nativeBudgetMs = SHORT_COMMAND_MS,
+): number {
+  const actionDeadline = currentCommandDeadlineMs();
   return Math.floor(
     Math.min(
-      SHORT_COMMAND_MS,
-      deadlineMs === undefined ? SHORT_COMMAND_MS : deadlineMs - Date.now(),
+      nativeBudgetMs,
+      deadlineMs === undefined
+        ? Number.POSITIVE_INFINITY
+        : deadlineMs - Date.now(),
+      actionDeadline === undefined
+        ? Number.POSITIVE_INFINITY
+        : actionDeadline - Date.now(),
     ),
   );
 }

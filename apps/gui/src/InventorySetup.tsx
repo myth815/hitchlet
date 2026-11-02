@@ -152,7 +152,12 @@ export function InventorySetup({ client, disabled, action }: ManagementUI) {
             <option value="">登记新的 Engine</option>
             {snapshot.data?.connections.map((c) => (
               <option value={c.id} key={c.id}>
-                {c.evidence?.engineId ?? c.runtimeIdentityId} · v{c.version}
+                {c.evidence && "nativeRuntimeNamespaceId" in c.evidence
+                  ? c.evidence.nativeRuntimeNamespaceId
+                  : c.evidence && "engineId" in c.evidence
+                    ? c.evidence.engineId
+                    : c.runtimeIdentityId}{" "}
+                · v{c.version}
               </option>
             ))}
           </select>
@@ -192,18 +197,50 @@ export function InventorySetup({ client, disabled, action }: ManagementUI) {
       </form>
       {selectedConnection ? (
         <article className="admin-card">
-          <b>真实身份 {selectedConnection.evidence?.engineId ?? "尚未验证"}</b>
+          <b>
+            真实身份{" "}
+            {selectedConnection.evidence &&
+            "nativeRuntimeNamespaceId" in selectedConnection.evidence
+              ? selectedConnection.evidence.nativeRuntimeNamespaceId
+              : selectedConnection.evidence &&
+                  "engineId" in selectedConnection.evidence
+                ? selectedConnection.evidence.engineId
+                : "尚未验证"}
+          </b>
           <span>
             runtime {selectedConnection.runtimeIdentityId} · 当前 revision{" "}
             {selectedConnection.currentRevisionId ?? "无"} · v
             {selectedConnection.version}
           </span>
           <span>
-            Docker {selectedConnection.evidence?.dockerVersion ?? "unknown"} ·
-            Portainer{" "}
-            {selectedConnection.evidence?.portainerVersion ?? "unknown"} ·{" "}
-            {selectedConnection.evidence?.os}/
-            {selectedConnection.evidence?.architecture} · 取证{" "}
+            {selectedConnection.evidence &&
+            "nativeRuntimeNamespaceId" in selectedConnection.evidence ? (
+              <>
+                Tart {selectedConnection.evidence.tartVersion} ·
+                {selectedConnection.evidence.hostOS}/
+                {selectedConnection.evidence.hostArch} · 本地模板{" "}
+                {selectedConnection.evidence.templates.length}
+              </>
+            ) : (
+              <>
+                Docker{" "}
+                {selectedConnection.evidence &&
+                "dockerVersion" in selectedConnection.evidence
+                  ? selectedConnection.evidence.dockerVersion
+                  : "unknown"}{" "}
+                · Portainer{" "}
+                {selectedConnection.evidence &&
+                "portainerVersion" in selectedConnection.evidence
+                  ? selectedConnection.evidence.portainerVersion
+                  : "unknown"}{" "}
+                ·{" "}
+                {selectedConnection.evidence &&
+                "os" in selectedConnection.evidence
+                  ? `${selectedConnection.evidence.os}/${selectedConnection.evidence.architecture}`
+                  : "unknown"}
+              </>
+            )}
+            · 取证{" "}
             {selectedConnection.verifiedAtMs === null
               ? "未知"
               : new Date(selectedConnection.verifiedAtMs).toLocaleString()}

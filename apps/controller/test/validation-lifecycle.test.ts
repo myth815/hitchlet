@@ -17,6 +17,18 @@ import {
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
 import { PersistentSimulator } from "../src/providers/simulator.js";
+import { TartExecutionProvider } from "../src/providers/tart-provider.js";
+import { SQLiteAccessMaterialStore } from "../src/storage/access-material-store.js";
+import { ManagementService } from "../src/application/management.js";
+import { NodeCapabilityAttestationSchema } from "@hitchlet/contracts/admin";
+import type {
+  TartAllocationIdentity,
+  TartGuestBootstrapReceipt,
+  TartGuestBootstrapRequest,
+  TartInspection,
+  TartReconcileRequest,
+} from "@hitchlet/contracts/internal";
+import ssh2 from "ssh2";
 import type {
   ExecutionPort,
   ReadyReceipt,
@@ -363,6 +375,588 @@ async function fixture(options: { blocked?: boolean; capacity?: number } = {}) {
     providerEvidence,
   };
 }
+
+describe("Tart artifact draft persistence", () => {
+  it("stores an arm64 local VM template as a Tart artifact without publishing it", async () => {
+    const f = await fixture();
+    const digest = `sha256:${"a".repeat(64)}`;
+    const draft = await f.admin.createDraft({
+      name: "Tart macOS test",
+      version: "1",
+      backendKind: "tart",
+      kind: "vm",
+      architecture: "arm64",
+      guestOs: "macos",
+      artifactRef: "sonoma-arm64",
+      digest,
+      minimumResources: { cpuMillis: 2000, memoryMiB: 4096, scratchMiB: 0 },
+      bootstrap: {
+        mechanism: "tart-guest-bootstrap-v1",
+        contractVersion: "1",
+        identityReset: true,
+      },
+      access: {
+        accessProtocols: ["ssh"],
+        ports: [22],
+        account: "workspace",
+        allowedSourceCidrs: ["10.0.0.0/8"],
+        discovery: "guest_ipv4",
+        readiness: "authenticated_ssh",
+      },
+      authorizedConsumerIds: [f.request.requestedBy],
+    });
+
+    expect(
+      await f.db.get(
+        "SELECT backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest FROM image_artifacts WHERE id=?",
+        [draft.artifactId],
+      ),
+    ).toEqual({
+      backend_kind: "tart",
+      environment_kind: "vm",
+      architecture: "arm64",
+      guest_os: "macos",
+      artifact_ref: "sonoma-arm64",
+      content_digest: digest,
+    });
+    expect(await f.admin.getDraftVersion(draft.versionId)).toMatchObject({
+      artifacts: [
+        {
+          provider: "tart",
+          kind: "vm",
+          architecture: "arm64",
+          guestOs: "macos",
+          artifactRef: "sonoma-arm64",
+          digest,
+        },
+      ],
+    });
+    expect(
+      await f.db.get("SELECT status FROM image_versions WHERE id=?", [
+        draft.versionId,
+      ]),
+    ).toEqual({ status: "draft" });
+    await expect(
+      f.admin.publishVersion(draft.versionId, 1),
+    ).rejects.toMatchObject({
+      code: "conflict",
+    });
+    expect(
+      await f.db.get("SELECT status FROM image_versions WHERE id=?", [
+        draft.versionId,
+      ]),
+    ).toEqual({ status: "draft" });
+  });
+
+  it("discovers, registers, qualifies, validates, cleans up, publishes and catalogs a Tart VM through normal services", async () => {
+    const f = await fixture();
+    const adminId = f.request.requestedBy;
+    const management = new ManagementService(f.db, f.now);
+    const lifecyclePolicy = await management.savePolicy(
+      "Synthetic catalog lifecycle",
+      adminId,
+      randomUUID(),
+    );
+    const consumer = await management.saveConsumer(
+      {
+        name: "Synthetic Tart catalog consumer",
+        kind: "service",
+        role: "consumer",
+        status: "active",
+        authorization: {
+          imageIds: "all",
+          nodeIds: "all",
+          networkProfileIds: "all",
+          storageProfileIds: "all",
+        },
+        quota: {
+          maxQueuedTickets: 5,
+          maxActiveTickets: 1,
+          maxLeaseTtlSeconds: 900,
+          maxLifetimeSeconds: 3600,
+          maxResources: {
+            cpuMillis: 8000,
+            memoryMiB: 16000,
+            scratchMiB: 100000,
+          },
+          defaultExpiryPolicyId: lifecyclePolicy.id,
+        },
+      },
+      adminId,
+      randomUUID(),
+    );
+    const runtimeIdentityId = randomUUID();
+    const nativeRuntimeNamespaceId = randomUUID();
+    const templateDigest = `sha256:${"c".repeat(64)}`;
+    const templateName = "sonoma-arm64";
+    const templateRef = {
+      source: "local" as const,
+      name: templateName,
+      guestOS: "darwin" as const,
+      guestArch: "arm64" as const,
+      configSha256: "d".repeat(64),
+    };
+    let freshTemplateDigest = templateDigest;
+    let factsReads = 0;
+    const facts = async () => {
+      factsReads++;
+      return {
+        nativeRuntimeNamespaceId,
+        tartVersion: "2.40.0",
+        hostOS: "macos" as const,
+        hostArch: "arm64" as const,
+        hostCpuCount: 8,
+        hostMemoryBytes: 16 * 1024 ** 3,
+        templates: [
+          {
+            templateRef,
+            artifactDigest: freshTemplateDigest,
+            proofKind: "sealed_local_bundle_v1" as const,
+            sealedAt: new Date(f.now()).toISOString(),
+          },
+        ],
+      };
+    };
+    const admin = new AdminService(
+      f.db,
+      async () => f.providerEvidence,
+      f.now,
+      false,
+      async () => "synthetic-runtime-secret",
+      facts,
+    );
+    const platformDeny = await f.db.get<{ id: string }>(
+      "SELECT id FROM platform_network_deny_revisions ORDER BY revision DESC LIMIT 1",
+    );
+    if (!platformDeny) throw new Error("Missing test platform deny revision");
+    const refs = `secret:${"f".repeat(32)}`;
+    const runtimeProfile = {
+      runtimeAgent: {
+        id: randomUUID(),
+        baseUrl: "https://tart-agent.synthetic.test",
+        tokenSecretRef: refs,
+        caSecretRef: refs,
+        clientCertSecretRef: refs,
+        clientKeySecretRef: refs,
+      },
+      managementDenyRevisionId: platformDeny.id,
+      managementDenyRules: [],
+    };
+    const discovery = await admin.discoverTart({
+      runtimeIdentityId,
+      runtimeProfile,
+    });
+    expect(discovery).toMatchObject({
+      state: "succeeded",
+      result: {
+        duplicateRuntime: false,
+      },
+    });
+    const discoveryResult = discovery.result as {
+      connectionId: string;
+      connectionRevisionId: string;
+    };
+    expect(
+      await f.db.get<{ runtime_identity_id: string; native_id: string }>(
+        "SELECT ri.id AS runtime_identity_id,ri.native_id FROM provider_connections pc JOIN runtime_identities ri ON ri.id=pc.runtime_identity_id WHERE pc.id=?",
+        [discoveryResult.connectionId],
+      ),
+    ).toEqual({
+      runtime_identity_id: runtimeIdentityId,
+      native_id: nativeRuntimeNamespaceId,
+    });
+    const machine = await admin.createMachine({
+      name: "Synthetic Tart admission host",
+      hostOs: "macos",
+      architecture: "arm64",
+      capacity: { cpuMillis: 4000, memoryMiB: 8192, scratchMiB: 0 },
+      operatorId: adminId,
+    });
+    const node = await admin.registerNode({
+      name: "Synthetic Tart node",
+      machineId: machine.id,
+      connectionId: discoveryResult.connectionId,
+      operatorId: adminId,
+    });
+    expect(node).toMatchObject({
+      admission: "disabled",
+      observedHealth: "unknown",
+      capabilities: { verified: false },
+    });
+    expect(
+      await f.db.get<{
+        admission: string;
+        observed_health: string;
+        capabilities_json: string;
+      }>(
+        "SELECT admission,observed_health,capabilities_json FROM nodes WHERE id=?",
+        [node.id],
+      ),
+    ).toEqual({
+      admission: "disabled",
+      observed_health: "unknown",
+      capabilities_json: "{}",
+    });
+    await expect(
+      admin
+        .createMachine({
+          name: "Oversized synthetic Tart host",
+          hostOs: "macos",
+          architecture: "arm64",
+          capacity: { cpuMillis: 9000, memoryMiB: 8192, scratchMiB: 0 },
+          operatorId: adminId,
+        })
+        .then((oversized) =>
+          admin.registerNode({
+            name: "Must not register",
+            machineId: oversized.id,
+            connectionId: discoveryResult.connectionId,
+            operatorId: adminId,
+          }),
+        ),
+    ).rejects.toThrow("authenticated macOS arm64 host capacity facts");
+
+    const configured = await admin.configureTartNodeRuntime({
+      nodeId: node.id,
+      expectedVersion: 1,
+      config: runtimeProfile,
+      operatorId: adminId,
+      requestId: randomUUID(),
+    });
+    expect(configured).toMatchObject({
+      runtimeConfigured: true,
+      admission: "disabled",
+      version: 2,
+    });
+    const draft = await admin.createDraft({
+      name: "Synthetic Tart macOS VM",
+      version: "1",
+      backendKind: "tart",
+      kind: "vm",
+      architecture: "arm64",
+      guestOs: "macos",
+      artifactRef: templateName,
+      digest: templateDigest,
+      minimumResources: { cpuMillis: 2000, memoryMiB: 2048, scratchMiB: 0 },
+      bootstrap: {
+        mechanism: "tart-guest-bootstrap-v1",
+        contractVersion: "1",
+        identityReset: true,
+      },
+      access: {
+        accessProtocols: ["ssh"],
+        ports: [22],
+        account: "workspace",
+        allowedSourceCidrs: ["10.0.0.0/8"],
+        discovery: "guest_ipv4",
+        readiness: "authenticated_ssh",
+      },
+      authorizedConsumerIds: [consumer.id],
+    });
+    expect(
+      NodeCapabilityAttestationSchema.safeParse({
+        backendKind: "tart",
+        expectedNamespaceId: runtimeIdentityId,
+        expectedTartVersion: "2.40.0",
+        templateRef: templateName,
+        templateDigest,
+        guestOs: "macos",
+        architecture: "arm64",
+        checkedAt: new Date(f.now()).toISOString(),
+      }).success,
+    ).toBe(false);
+    await expect(
+      admin.publishVersion(draft.versionId, 1),
+    ).rejects.toMatchObject({
+      code: "conflict",
+    });
+    expect(
+      await admin.scheduleValidation({
+        versionId: draft.versionId,
+        imageArtifactId: draft.artifactId,
+        nodeId: node.id,
+        networkProfileId: f.network.id,
+        storage: [],
+        resources: {
+          request: { cpuMillis: 2000, memoryMiB: 2048, scratchMiB: 0 },
+          limit: { cpuMillis: 2000, memoryMiB: 2048, scratchMiB: 0 },
+          scratchEnforcement: "best_effort",
+          isolation: "virtual_machine",
+          accelerators: [],
+        },
+        deadlineSeconds: 1800,
+        requestedBy: adminId,
+      }),
+    ).toMatchObject({ scheduler: "blocked" });
+
+    const scopes = Object.fromEntries(
+      [
+        "resourceLimits",
+        "firewallInput",
+        "firewallForward",
+        "ipv6",
+        "sshBootstrap",
+        "cleanupRecovery",
+      ].map((scope) => [
+        scope,
+        {
+          status: "passed" as const,
+          summary: `SYNTHETIC unit fixture only; no host qualification was run (${scope})`,
+          evidenceRef: `synthetic-test-only:${scope}`,
+        },
+      ]),
+    );
+    const attestation = await admin.attestTartNodeCapabilities({
+      backendKind: "tart",
+      nodeId: node.id,
+      expectedVersion: configured.version,
+      expectedNamespaceId: nativeRuntimeNamespaceId,
+      expectedTartVersion: "2.40.0",
+      templateRef: templateName,
+      templateDigest,
+      guestOs: "macos",
+      architecture: "arm64",
+      checkedAt: new Date(f.now()).toISOString(),
+      validForSeconds: 3600,
+      report: {
+        runId: "synthetic-test-only-run",
+        sha256: "e".repeat(64),
+        scopes,
+      },
+      networkProfileRevisionIds: [f.network.revisionId],
+      storageProfileRevisionIds: [],
+      operatorId: adminId,
+      requestId: randomUUID(),
+    });
+    expect(attestation).toMatchObject({
+      admission: "enabled",
+      observedHealth: "healthy",
+    });
+
+    const secretKeyPath = join(f.dir, "tart-test-master.key");
+    await writeFile(secretKeyPath, Buffer.alloc(32, 19), { mode: 0o600 });
+    const secretStore = await LocalSecretStore.open(f.dir, secretKeyPath);
+    const accessMaterials = new SQLiteAccessMaterialStore(
+      f.db,
+      secretStore,
+      f.now,
+    );
+    const { public: hostPublicKey, private: hostPrivateKey } =
+      ssh2.utils.generateKeyPairSync("ed25519");
+    const parsedHostKey = ssh2.utils.parseKey(hostPrivateKey);
+    if (parsedHostKey instanceof Error) throw parsedHostKey;
+    const hostKeyFingerprint = `SHA256:${createHash("sha256").update(parsedHostKey.getPublicSSH()).digest("base64").replace(/=+$/, "")}`;
+    const hash = (value: unknown) =>
+      createHash("sha256").update(JSON.stringify(value)).digest("hex");
+    let vmInspection: TartInspection | undefined;
+    let bootstrapIntent: TartGuestBootstrapRequest | undefined;
+    let createCount = 0;
+    const vmNameFor = (identity: TartAllocationIdentity) =>
+      `hitchlet-${createHash("sha256")
+        .update(
+          JSON.stringify([
+            identity.installationId,
+            identity.runtimeIdentityId,
+            identity.connectionRevisionId,
+            identity.allocationId,
+            identity.generation,
+            identity.purpose,
+          ]),
+        )
+        .digest("hex")
+        .slice(0, 32)}`;
+    const runtime = {
+      async inspect(identity: TartAllocationIdentity): Promise<TartInspection> {
+        return structuredClone(
+          vmInspection ?? {
+            presence: "absent",
+            identity,
+            inventoryCompleteness: "complete",
+          },
+        );
+      },
+      async reconcile(request: TartReconcileRequest): Promise<TartInspection> {
+        bootstrapIntent = request.bootstrap ?? bootstrapIntent;
+        if (!vmInspection || vmInspection.presence === "absent") createCount++;
+        vmInspection = {
+          presence: "present",
+          identity: request.identity,
+          vmName: vmNameFor(request.identity),
+          state: "running",
+          resources: request.resources,
+          bootstrapStatus: bootstrapIntent ? "pending" : "not_requested",
+          ipAddress: "192.0.2.44",
+        };
+        return structuredClone(vmInspection);
+      },
+      async bootstrapApply(
+        identity: TartAllocationIdentity,
+        request: TartGuestBootstrapRequest,
+      ): Promise<TartInspection> {
+        expect(request).toEqual(bootstrapIntent);
+        const receipt: TartGuestBootstrapReceipt = {
+          status: "applied",
+          identity,
+          nonce: request.nonce,
+          account: request.account,
+          clientPublicKeyFingerprint: request.clientPublicKeyFingerprint,
+          hostPublicKey,
+          hostKeyFingerprint,
+          networkEvidenceReference: request.networkEvidence.reference,
+          networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
+          observedAt: new Date(f.now()).toISOString(),
+        };
+        vmInspection = {
+          presence: "present",
+          identity,
+          vmName: vmNameFor(identity),
+          state: "running",
+          resources: { cpus: 2, memoryMiB: 2048 },
+          bootstrapStatus: "applied",
+          bootstrapReceipt: receipt,
+          ipAddress: "192.0.2.44",
+        };
+        return structuredClone(vmInspection);
+      },
+      async destroy(identity: TartAllocationIdentity): Promise<TartInspection> {
+        vmInspection = {
+          presence: "absent",
+          identity,
+          inventoryCompleteness: "complete",
+        };
+        return structuredClone(vmInspection);
+      },
+    };
+    const execution = new TartExecutionProvider({
+      now: f.now,
+      resolveRuntime: async (plan) => ({
+        runtimeIdentityId: plan.identity.runtimeIdentityId,
+        connectionRevisionId: plan.identity.connectionRevisionId,
+        artifactDigest: plan.artifact.digest,
+        template: {
+          ...templateRef,
+        },
+        runtime,
+      }),
+      accessMaterials,
+      network: {
+        async verify(plan) {
+          return {
+            runtimeIdentityId: plan.identity.runtimeIdentityId,
+            allocationId: plan.identity.allocationId,
+            generation: plan.identity.generation,
+            revisionId: plan.resolved.network.revisionId,
+            contractHash: hash(plan.resolved.network),
+            reference: `synthetic-network-${plan.identity.allocationId}`,
+            verifiedAt: new Date(f.now()).toISOString(),
+            expiresAt: new Date(
+              Math.min(f.now() + 600_000, plan.deadlineMs - 1),
+            ).toISOString(),
+          };
+        },
+      },
+      guestBootstrap: {
+        async apply(request) {
+          const persisted = await runtime.bootstrapApply(
+            request.identity,
+            request,
+          );
+          if (persisted.presence !== "present")
+            throw new Error("Synthetic bootstrap receipt was not persisted");
+          if (persisted.bootstrapReceipt?.status !== "applied")
+            throw new Error("Synthetic bootstrap receipt readback failed");
+          return persisted.bootstrapReceipt;
+        },
+      },
+      ssh: {
+        async verify(input) {
+          return {
+            authenticated: true,
+            username: input.username,
+            hostKeyFingerprint: input.hostKeyFingerprint,
+            clientPublicKeyFingerprint: input.clientPublicKeyFingerprint,
+            guestOS: input.guestOS,
+            architecture: input.architecture,
+            scratchWritable: true,
+          };
+        },
+      },
+    });
+    const request = {
+      versionId: draft.versionId,
+      imageArtifactId: draft.artifactId,
+      nodeId: node.id,
+      networkProfileId: f.network.id,
+      storage: [],
+      resources: {
+        request: { cpuMillis: 2000, memoryMiB: 2048, scratchMiB: 0 },
+        limit: { cpuMillis: 2000, memoryMiB: 2048, scratchMiB: 0 },
+        scratchEnforcement: "best_effort" as const,
+        isolation: "virtual_machine" as const,
+        accelerators: [],
+      },
+      deadlineSeconds: 1800,
+      requestedBy: adminId,
+    };
+    const validation = await admin.scheduleValidation(request);
+    expect(validation).toMatchObject({ scheduler: "queued", state: "queued" });
+    expect(validation.operationId).toBeTruthy();
+    expect(await f.worker(execution).run(validation.operationId!)).toBe(true);
+    expect(createCount).toBe(1);
+    const cleanupOperation = await f.db.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [validation.allocationId],
+    );
+    expect(cleanupOperation).toBeTruthy();
+    expect(await f.worker(execution).run(cleanupOperation!.id)).toBe(true);
+    expect(await admin.getValidation(validation.validationId)).toMatchObject({
+      state: "succeeded",
+      cleanupStatus: "complete",
+      testOutcome: "passed",
+    });
+    expect(vmInspection).toMatchObject({ presence: "absent" });
+
+    const beforePublicationFactsReads = factsReads;
+    freshTemplateDigest = `sha256:${"0".repeat(64)}`;
+    const tartVersionEntity = async () =>
+      Number(
+        (await f.db.get<{ entity_version: bigint }>(
+          "SELECT entity_version FROM image_versions WHERE id=?",
+          [draft.versionId],
+        ))!.entity_version,
+      );
+    await expect(
+      admin.publishVersion(draft.versionId, await tartVersionEntity()),
+    ).rejects.toMatchObject({ code: "conflict" });
+    expect(factsReads).toBeGreaterThan(beforePublicationFactsReads);
+    expect(
+      await f.db.get<{ status: string }>(
+        "SELECT status FROM image_versions WHERE id=?",
+        [draft.versionId],
+      ),
+    ).toEqual({ status: "validating" });
+    freshTemplateDigest = templateDigest;
+    const published = await admin.publishVersion(
+      draft.versionId,
+      await tartVersionEntity(),
+    );
+    expect(published.status).toBe("published");
+    const catalog = await management.catalog(consumer.id);
+    expect(catalog.versions).toEqual([
+      expect.objectContaining({
+        id: draft.versionId,
+        platforms: [
+          expect.objectContaining({
+            kind: "vm",
+            architecture: "arm64",
+            guestOs: "macos",
+            artifactId: draft.artifactId,
+          }),
+        ],
+      }),
+    ]);
+  });
+});
 
 describe("publication commit fences and grant revocation", () => {
   it("records persistent references without ever sending them to destroy during cleanup", async () => {

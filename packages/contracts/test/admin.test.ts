@@ -77,6 +77,38 @@ describe("shared administrator contracts", () => {
       }).success,
     ).toBe(true);
     expect(
+      AdminSchemas.NodeCapabilityAttestationSchema.safeParse({
+        expectedEngineId: "engine-a",
+        expectedDockerVersion: "29.5.2",
+        expectedPortainerVersion: "2.45.2",
+        architecture: "amd64",
+        checkedAt: "2026-10-20T00:00:00Z",
+        report: {
+          runId: uuid,
+          sha256: "b".repeat(64),
+          scopes: Object.fromEntries(
+            [
+              "resourceLimits",
+              "firewallInput",
+              "firewallForward",
+              "ipv6",
+              "sshBootstrap",
+              "cleanupRecovery",
+            ].map((name) => [
+              name,
+              {
+                status: "passed",
+                summary: "checked",
+                evidenceRef: "report://evidence",
+              },
+            ]),
+          ),
+        },
+        networkProfileRevisionIds: [uuid],
+        storageProfileRevisionIds: [uuid],
+      }).success,
+    ).toBe(false);
+    expect(
       AdminSchemas.NodeRuntimeConfigSchema.safeParse({ unexpected: true })
         .success,
     ).toBe(false);

@@ -12,6 +12,7 @@ import {
   TartExecutionProvider,
   type TartExecutionProviderOptions,
 } from "../src/providers/tart-provider.js";
+import { assertFactsMatchPlan } from "../src/providers/tart-runtime-resolver.js";
 
 const { utils: sshUtils } = ssh2;
 
@@ -92,6 +93,61 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
       readiness: "authenticated_ssh",
     },
   };
+  const nativeRuntimeNamespaceId = "11111111-1111-4111-8111-111111111111";
+  const facts = {
+    nativeRuntimeNamespaceId,
+    tartVersion: "2.41.1",
+    hostOS: "macos" as const,
+    hostArch: "arm64" as const,
+    hostCpuCount: 8,
+    hostMemoryBytes: 16 * 1024 * 1024 * 1024,
+    templates: [
+      {
+        templateRef: {
+          source: "local" as const,
+          name: plan.artifact.ref,
+          guestOS: "linux" as const,
+          guestArch: "arm64" as const,
+          configSha256: "b".repeat(64),
+        },
+        artifactDigest: plan.artifact.digest,
+        proofKind: "sealed_local_bundle_v1" as const,
+        sealedAt: new Date().toISOString(),
+      },
+    ],
+  };
+  const runtimeBinding = {
+    installationId: plan.identity.installationId,
+    runtimeIdentityId: plan.identity.runtimeIdentityId,
+    connectionRevisionId: plan.identity.connectionRevisionId,
+    nativeRuntimeNamespaceId,
+    controllerEpoch: 1,
+    profile: {},
+    secrets: { get: async () => "unused-test-secret" },
+  };
+  expect(() => assertFactsMatchPlan(facts, runtimeBinding, plan)).not.toThrow();
+  expect(() =>
+    assertFactsMatchPlan(
+      {
+        ...facts,
+        templates: [
+          {
+            ...facts.templates[0]!,
+            artifactDigest: `sha256:${"c".repeat(64)}`,
+          },
+        ],
+      },
+      runtimeBinding,
+      plan,
+    ),
+  ).toThrow("Tart sealed template proof does not match the frozen artifact");
+  expect(() =>
+    assertFactsMatchPlan(
+      { ...facts, hostOS: "linux" as never },
+      runtimeBinding,
+      plan,
+    ),
+  ).toThrow("Tart Runtime Agent does not match the frozen plan");
   const owner: TartAllocationIdentity = {
     installationId: plan.identity.installationId,
     runtimeIdentityId: plan.identity.runtimeIdentityId,
@@ -129,24 +185,6 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
         state: "running",
         resources: request.resources,
         bootstrapStatus: bootstrapRequest ? "pending" : "not_requested",
-        ipAddress: "192.0.2.44",
-      };
-      return structuredClone(observation);
-    },
-    async recordBootstrapReceipt(
-      identity: TartAllocationIdentity,
-      request: import("@hitchlet/contracts/internal").TartGuestBootstrapRequest,
-      receipt: TartGuestBootstrapReceipt,
-    ) {
-      expect(request).toEqual(bootstrapRequest);
-      observation = {
-        presence: "present",
-        identity,
-        vmName,
-        state: "running",
-        resources: { cpus: 2, memoryMiB: 2048 },
-        bootstrapStatus: "applied",
-        bootstrapReceipt: receipt,
         ipAddress: "192.0.2.44",
       };
       return structuredClone(observation);
@@ -198,7 +236,8 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
         guestApplyAttempts += 1;
         if (guestApplyAttempts === 1)
           throw new Error("synthetic guest hook failure");
-        return {
+        expect(request).toEqual(bootstrapRequest);
+        const receipt: TartGuestBootstrapReceipt = {
           status: "applied",
           identity: request.identity,
           nonce: request.nonce,
@@ -210,6 +249,17 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
           networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
           observedAt: new Date().toISOString(),
         };
+        observation = {
+          presence: "present",
+          identity: request.identity,
+          vmName,
+          state: "running",
+          resources: { cpus: 2, memoryMiB: 2048 },
+          bootstrapStatus: "applied",
+          bootstrapReceipt: receipt,
+          ipAddress: "192.0.2.44",
+        };
+        return receipt;
       },
     },
     ssh: {
@@ -218,6 +268,9 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
         username: input.username,
         hostKeyFingerprint: input.hostKeyFingerprint,
         clientPublicKeyFingerprint: input.clientPublicKeyFingerprint,
+        guestOS: input.guestOS,
+        architecture: input.architecture,
+        scratchWritable: true,
         observedScratchMiB: 640,
       }),
     },

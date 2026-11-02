@@ -2,6 +2,8 @@ import type { PortainerProbe } from "../providers/port.js";
 import { ApplicationError } from "./errors.js";
 import type { Storage } from "../storage/index.js";
 import { SQLiteImagePublicationStore } from "../storage/image-publication-store.js";
+import type { TartFactsForRevision } from "../providers/runtime-credentials.js";
+import { tartTemplateProofMatches } from "./tart-facts.js";
 
 export class ImagePublishingService {
   private readonly store: SQLiteImagePublicationStore;
@@ -10,6 +12,7 @@ export class ImagePublishingService {
     private readonly probe: PortainerProbe,
     now = Date.now,
     private readonly readSecret?: (versionRef: string) => Promise<string>,
+    private readonly tartFactsForRevision?: TartFactsForRevision,
   ) {
     this.store = new SQLiteImagePublicationStore(db, now);
   }
@@ -18,6 +21,27 @@ export class ImagePublishingService {
       versionId,
       expectedEntityVersion,
       async (target) => {
+        if (target.backendKind === "tart") {
+          if (!this.tartFactsForRevision) return false;
+          try {
+            const facts = await this.tartFactsForRevision({
+              installationId: target.installationId,
+              runtimeIdentityId: target.runtimeIdentityId,
+              connectionRevisionId: target.connectionRevisionId,
+              nodeId: target.nodeId,
+              config: target.config,
+            });
+            return tartTemplateProofMatches(facts, {
+              nativeRuntimeNamespaceId: target.nativeRuntimeNamespaceId,
+              artifactRef: target.artifactRef,
+              digest: target.digest,
+              architecture: target.architecture,
+              guestOs: target.guestOs,
+            });
+          } catch {
+            return false;
+          }
+        }
         if (!this.readSecret) return false;
         try {
           const live = await this.probe({

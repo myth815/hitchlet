@@ -88,7 +88,7 @@ import {
   ImagePublishReceiptSchema,
   ImageAliasRequestSchema,
   ImageAliasReceiptSchema,
-  PortainerConnectionInputSchema,
+  ProviderConnectionInputSchema,
   ConnectionActivationSchema,
   ConnectionActivationReceiptSchema,
   MachineInputSchema,
@@ -96,6 +96,7 @@ import {
   NodeAdmissionModeSchema,
   NodeAdmissionModeReceiptSchema,
   NodeRuntimeConfigSchema,
+  TartNodeRuntimeConfigSchema,
   NodeCapabilityAttestationSchema,
   NodeCapabilityAttestationReceiptSchema,
   NetworkProfileInputSchema,
@@ -132,6 +133,7 @@ import {
 } from "./http/admin-protocol.js";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { probePortainer } from "./providers/portainer-probe.js";
+import type { TartFactsForRevision } from "./providers/runtime-credentials.js";
 import { LocalSecretStore } from "./storage/secret-store.js";
 import { StorageError } from "./storage/index.js";
 import { z, ZodError, type ZodType } from "zod";
@@ -142,6 +144,7 @@ export interface AppRuntime {
   readonly logStream?: NodeJS.WritableStream;
   readonly recoveryState?: () => "ready" | "recovering" | "unavailable";
   readonly secrets?: LocalSecretStore;
+  readonly tartFactsForRevision?: TartFactsForRevision;
 }
 type Row = Record<string, string | number | bigint | null>;
 export async function buildApp(
@@ -279,6 +282,7 @@ export async function buildApp(
       runtime.secrets
         ? (versionRef) => runtime.secrets!.get(versionRef)
         : undefined,
+      runtime.tartFactsForRevision,
     );
     const requireAdmin = async (
       request: Parameters<typeof auth.authenticate>[0],
@@ -807,8 +811,11 @@ export async function buildApp(
     });
     app.post("/v1/provider-connections", async (request, reply) => {
       await requireAdmin(request, true);
-      const body = parseInput(PortainerConnectionInputSchema, request.body);
-      const result = await admin.discover(body);
+      const body = parseInput(ProviderConnectionInputSchema, request.body);
+      const result =
+        "runtimeProfile" in body
+          ? await admin.discoverTart(body)
+          : await admin.discover(body);
       reply.header("Cache-Control", "no-store");
       return reply.code(202).send(ProviderOperationReceiptSchema.parse(result));
     });
@@ -842,7 +849,11 @@ export async function buildApp(
       "/v1/provider-connections/:connectionId/revisions",
       async (request, reply) => {
         await requireAdmin(request, true);
-        const body = parseInput(PortainerConnectionInputSchema, request.body);
+        const body = parseInput(ProviderConnectionInputSchema, request.body);
+        if ("runtimeProfile" in body)
+          throw new RangeError(
+            "Tart connection revisions are managed through Tart discovery",
+          );
         const result = await admin.proposeConnectionRevision({
           connectionId: request.params.connectionId,
           ...body,
@@ -939,22 +950,42 @@ export async function buildApp(
       });
       return reply.code(200).header("ETag", `"${result.version}"`).send(result);
     });
+    app.put("/v1/nodes/:nodeId/tart-runtime-config", async (request, reply) => {
+      const actor = await requireAdmin(request, true);
+      const body = parseInput(TartNodeRuntimeConfigSchema, request.body);
+      const result = await admin.configureTartNodeRuntime({
+        nodeId: uuidParam(request.params, "nodeId"),
+        expectedVersion: ifMatchVersion(request.headers["if-match"]),
+        config: body,
+        operatorId: actor.consumerId,
+        requestId: request.id,
+      });
+      return reply.code(200).header("ETag", `"${result.version}"`).send(result);
+    });
     app.post(
       "/v1/nodes/:nodeId/capability-attestations",
       async (request, reply) => {
         const actor = await requireAdmin(request, true);
         const body = parseInput(NodeCapabilityAttestationSchema, request.body);
         const result = NodeCapabilityAttestationReceiptSchema.parse(
-          await admin.attestNodeCapabilities({
-            nodeId: uuidParam(request.params, "nodeId"),
-            expectedVersion: ifMatchVersion(request.headers["if-match"]),
-            ...body,
-            engineId: body.expectedEngineId,
-            dockerVersion: body.expectedDockerVersion,
-            portainerVersion: body.expectedPortainerVersion,
-            operatorId: actor.consumerId,
-            requestId: request.id,
-          }),
+          "backendKind" in body
+            ? await admin.attestTartNodeCapabilities({
+                nodeId: uuidParam(request.params, "nodeId"),
+                expectedVersion: ifMatchVersion(request.headers["if-match"]),
+                ...body,
+                operatorId: actor.consumerId,
+                requestId: request.id,
+              })
+            : await admin.attestNodeCapabilities({
+                nodeId: uuidParam(request.params, "nodeId"),
+                expectedVersion: ifMatchVersion(request.headers["if-match"]),
+                ...body,
+                engineId: body.expectedEngineId,
+                dockerVersion: body.expectedDockerVersion,
+                portainerVersion: body.expectedPortainerVersion,
+                operatorId: actor.consumerId,
+                requestId: request.id,
+              }),
         );
         return reply
           .code(200)

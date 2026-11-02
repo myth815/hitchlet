@@ -80,12 +80,13 @@ export const AuthorizedCatalogSchema = z
           imageId: id,
           imageName: z.string(),
           version: z.string(),
-          kind: z.literal("container"),
           architectures: z.array(z.enum(["amd64", "arm64"])),
           platforms: z.array(
             z
               .object({
+                kind: z.enum(["container", "vm"]),
                 architecture: z.enum(["amd64", "arm64"]),
+                guestOs: z.enum(["linux", "windows", "macos"]),
                 artifactId: id,
                 digest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
                 minimumResources: amounts,

@@ -4,6 +4,10 @@ import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { z } from "zod";
 import { hash } from "../storage/admin-store-utils.js";
 import { SQLiteValidationStore } from "../storage/validation-store.js";
+import {
+  tartTemplateProofMatches,
+  type TartFactsForRevision,
+} from "./tart-facts.js";
 
 const JsonObject = z.record(z.string(), z.unknown());
 function object(value: unknown, label: string) {
@@ -21,6 +25,7 @@ export class ImageValidationService {
   constructor(
     private readonly store: SQLiteValidationStore,
     private readonly now = Date.now,
+    private readonly tartFactsForRevision?: TartFactsForRevision,
   ) {}
 
   async schedule(
@@ -154,6 +159,28 @@ export class ImageValidationService {
       });
     }
     const requested = input.resources.request;
+    const isTart = target.backend_kind === "tart";
+    let tartProofVerified = !isTart;
+    if (isTart && this.tartFactsForRevision) {
+      try {
+        const facts = await this.tartFactsForRevision({
+          installationId: String(target.installation_id),
+          runtimeIdentityId: String(target.runtime_identity_id),
+          connectionRevisionId: String(target.connection_revision_id),
+          nodeId: String(target.node_id),
+          config: object(target.config_json, "node config"),
+        });
+        tartProofVerified = tartTemplateProofMatches(facts, {
+          nativeRuntimeNamespaceId: String(target.native_runtime_namespace_id),
+          artifactRef: String(target.artifact_ref),
+          digest: String(target.content_digest),
+          architecture: String(target.architecture),
+          guestOs: String(target.guest_os),
+        });
+      } catch {
+        tartProofVerified = false;
+      }
+    }
     const minimum = {
       cpuMillis: Number(target.minimum_cpu_millis),
       memoryMiB: Number(target.minimum_memory_mib),
@@ -166,7 +193,8 @@ export class ImageValidationService {
       requested.cpuMillis < minimum.cpuMillis ||
       requested.memoryMiB < minimum.memoryMiB ||
       requested.scratchMiB < minimum.scratchMiB ||
-      input.resources.isolation !== "shared_kernel" ||
+      input.resources.isolation !==
+        (isTart ? "virtual_machine" : "shared_kernel") ||
       input.resources.accelerators.length > 0
     )
       throw new RangeError(
@@ -189,7 +217,7 @@ export class ImageValidationService {
       ) ||
       !stringArray(caps.architectures).includes(String(target.architecture)) ||
       !stringArray(caps.guestOs).includes(String(target.guest_os)) ||
-      !stringArray(caps.resourceKinds).includes("container") ||
+      !stringArray(caps.resourceKinds).includes(isTart ? "vm" : "container") ||
       !accessProtocols.some((protocol) => nodeAccess.includes(protocol)) ||
       !Number.isFinite(expiry) ||
       expiry <= this.now() ||
@@ -199,9 +227,26 @@ export class ImageValidationService {
       target.observed_health !== "healthy" ||
       Number(target.observed_at_ms ?? 0) + 120_000 <= this.now() ||
       target.observed_power !== "on";
-    let blockReason = block
-      ? "node_capacity_or_network_capability_unverified"
-      : null;
+    let blockReason =
+      isTart && !tartProofVerified
+        ? "tart_template_proof_unavailable_or_mismatched"
+        : block
+          ? "node_capacity_or_network_capability_unverified"
+          : null;
+    if (
+      isTart &&
+      (input.storage.length > 0 ||
+        requested.cpuMillis % 1000 !== 0 ||
+        input.resources.scratchEnforcement === "required" ||
+        accessProtocols.length !== 1 ||
+        accessProtocols[0] !== "ssh" ||
+        !Array.isArray(recipe.ports) ||
+        recipe.ports.length !== 1 ||
+        recipe.ports[0] !== 22 ||
+        recipe.discovery !== "guest_ipv4" ||
+        recipe.readiness !== "authenticated_ssh")
+    )
+      blockReason = "tart_validation_request_unsupported";
     if (!block) {
       const capacity = JsonObject.parse(caps.capacity) as Record<
         string,
@@ -237,6 +282,7 @@ export class ImageValidationService {
       managementDenyRules: JSON.parse(String(deny.management_deny_rules_json)),
       architecture: target.architecture,
       guestOs: target.guest_os,
+      ...(isTart ? { tartTemplateProofVerified: tartProofVerified } : {}),
       nodeId: input.nodeId,
       nodeCapabilities: caps,
       connectionRevisionId: target.connection_revision_id,
@@ -252,15 +298,15 @@ export class ImageValidationService {
         grantId: `validation:${validationId}`,
         networkProfileRevisionId: network.current_revision_id,
         platformDenyRevisionId: deny.id,
-        mode: "isolated_bridge",
+        mode: isTart ? "isolated_vm" : "isolated_bridge",
         ipv6: networkPolicy.ipv6,
         allowedEgress: networkPolicy.allowedEgress,
         allowedIngressSourceCidrs: networkPolicy.allowedIngressSourceCidrs,
+        enforcement: isTart ? "tart_agent" : "docker_iptables",
+        verificationRequired: true,
         managementDenyRules: JSON.parse(
           String(deny.management_deny_rules_json),
         ),
-        enforcement: "docker_iptables",
-        verificationRequired: true,
       },
       storage: bindings.map((b, index) => ({
         grantId: `validation:${validationId}:${index}`,

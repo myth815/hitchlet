@@ -18,6 +18,7 @@ import {
   HumanUsePolicySchema,
   type HumanUsePolicy,
 } from "@hitchlet/contracts/admin";
+import type { TartRuntimeFacts } from "@hitchlet/contracts/internal";
 import {
   hash,
   integer,
@@ -472,7 +473,7 @@ export class SQLiteMachineNodeStore {
     operatorId: string;
   }) {
     const connection = await this.db.get<Row>(
-      "SELECT c.backend_kind,c.runtime_identity_id,c.current_revision_id,r.provider_endpoint_id,r.evidence_json FROM provider_connections c JOIN provider_connection_revisions r ON r.id=c.current_revision_id AND r.verified_runtime_identity_id=c.runtime_identity_id WHERE c.id=? AND c.enabled=1",
+      "SELECT c.backend_kind,c.runtime_identity_id,c.current_revision_id,r.provider_endpoint_id,r.evidence_json,ri.native_id FROM provider_connections c JOIN provider_connection_revisions r ON r.id=c.current_revision_id AND r.verified_runtime_identity_id=c.runtime_identity_id JOIN runtime_identities ri ON ri.id=c.runtime_identity_id AND ri.backend_kind=c.backend_kind WHERE c.id=? AND c.enabled=1",
       [input.connectionId],
     );
     const machine = await this.db.get<Row>(
@@ -490,7 +491,27 @@ export class SQLiteMachineNodeStore {
     const id = randomUUID(),
       time = this.now();
     const evidence = parseJson(String(connection.evidence_json));
-    if (
+    if (String(connection.backend_kind) === "tart") {
+      if (
+        machine.host_os !== "macos" ||
+        machine.architecture !== "arm64" ||
+        evidence.nativeRuntimeNamespaceId !== connection.native_id ||
+        evidence.hostOS !== "macos" ||
+        evidence.hostArch !== "arm64" ||
+        typeof evidence.hostCpuCount !== "number" ||
+        !Number.isSafeInteger(evidence.hostCpuCount) ||
+        evidence.hostCpuCount < 1 ||
+        typeof evidence.hostMemoryBytes !== "number" ||
+        !Number.isSafeInteger(evidence.hostMemoryBytes) ||
+        evidence.hostMemoryBytes < 1 ||
+        Number(pool.total_cpu_millis) > evidence.hostCpuCount * 1000 ||
+        Number(pool.total_memory_mib) >
+          Math.floor(evidence.hostMemoryBytes / 1024 ** 2)
+      )
+        throw new RangeError(
+          "Tart machine budget must fit authenticated macOS arm64 host capacity facts; node remains unqualified until manual attestation",
+        );
+    } else if (
       evidence.architecture !== machine.architecture ||
       evidence.os !== "linux" ||
       Number(pool.total_cpu_millis) > Number(evidence.cpuCount) * 1000 ||
@@ -528,6 +549,9 @@ export class SQLiteMachineNodeStore {
           String(pool.id),
           JSON.stringify({
             providerEndpointId: connection.provider_endpoint_id,
+            ...(String(connection.backend_kind) === "tart"
+              ? { executionMode: "tart" }
+              : {}),
           }),
           time,
           time,
@@ -637,6 +661,73 @@ export class SQLiteMachineNodeStore {
       admission: "disabled",
       version: input.expectedVersion + 1,
     };
+  }
+
+  async configureTartRuntime(input: {
+    nodeId: string;
+    expectedVersion: number;
+    config: Readonly<Record<string, unknown>>;
+    operatorId: string;
+    requestId: string;
+  }) {
+    const node = await this.db.get<Row>(
+      "SELECT n.config_json,n.version,r.native_id FROM nodes n JOIN runtime_identities r ON r.id=n.runtime_identity_id WHERE n.id=? AND n.backend_kind='tart' AND n.admission='disabled'",
+      [input.nodeId],
+    );
+    if (!node) throw new ApplicationError("not_found");
+    if (Number(node.version) !== input.expectedVersion)
+      throw new StorageError("STORAGE_CAS_FAILED", "Node version conflict");
+    const time = this.now();
+    const config = {
+      ...parseJson(String(node.config_json)),
+      executionMode: "tart",
+      runtimeProfile: input.config,
+      admissionMode: "constant_online_manual_inventory",
+    };
+    await this.db.batchTransaction([
+      {
+        kind: "run",
+        sql: "UPDATE nodes SET config_json=?,version=version+1,updated_at_ms=? WHERE id=? AND version=? AND admission='disabled' AND backend_kind='tart' AND runtime_identity_id=(SELECT id FROM runtime_identities WHERE native_id=?)",
+        params: [
+          JSON.stringify(config),
+          time,
+          input.nodeId,
+          input.expectedVersion,
+          String(node.native_id),
+        ],
+        expectChanges: 1,
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) VALUES('consumer',?,'node.runtime_configured','node',?,?,?,?)",
+        params: [
+          input.operatorId,
+          input.nodeId,
+          input.requestId,
+          time,
+          JSON.stringify({
+            backendKind: "tart",
+            runtimeAgentId: (
+              input.config.runtimeAgent as Record<string, unknown>
+            ).id,
+            managementDenyRevisionId: input.config.managementDenyRevisionId,
+          }),
+        ],
+      },
+    ]);
+    return {
+      nodeId: input.nodeId,
+      runtimeConfigured: true,
+      admission: "disabled",
+      version: input.expectedVersion + 1,
+    };
+  }
+
+  tartAttestationTarget(nodeId: string) {
+    return this.db.get<Row>(
+      "SELECT n.runtime_identity_id,n.config_json,n.version,pc.current_revision_id,ri.native_id,(SELECT installation_id FROM installations WHERE singleton=1) AS installation_id FROM nodes n JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id JOIN runtime_identities ri ON ri.id=n.runtime_identity_id AND ri.backend_kind='tart' WHERE n.id=? AND n.backend_kind='tart' AND n.admission='disabled'",
+      [nodeId],
+    );
   }
 
   async attestCapabilities(input: {
@@ -826,6 +917,208 @@ export class SQLiteMachineNodeStore {
             reportRunId: input.report.runId,
             reportSha256: input.report.sha256,
             admissionMode,
+          }),
+        ],
+      },
+    ]);
+    return {
+      nodeId: input.nodeId,
+      admission: "enabled",
+      observedHealth: "healthy",
+      capabilityFingerprint,
+      offline: false,
+      powerEnabled: false,
+      version: input.expectedVersion + 1,
+    };
+  }
+
+  async attestTartCapabilities(input: {
+    nodeId: string;
+    expectedVersion: number;
+    expectedConnectionRevisionId: string;
+    expectedNamespaceId: string;
+    expectedTartVersion: string;
+    templateRef: string;
+    templateDigest: string;
+    guestOs: "linux" | "macos";
+    architecture: "arm64";
+    checkedAt: string;
+    validForSeconds?: number | undefined;
+    report: Readonly<{
+      runId: string;
+      sha256: string;
+      scopes: Readonly<
+        Record<
+          string,
+          Readonly<{ status: "passed"; summary: string; evidenceRef: string }>
+        >
+      >;
+    }>;
+    networkProfileRevisionIds: readonly string[];
+    operatorId: string;
+    requestId: string;
+    facts: TartRuntimeFacts;
+  }) {
+    const node = await this.db.get<Row>(
+      "SELECT n.machine_id,n.runtime_identity_id,n.pool_id,n.config_json,n.version,n.backend_kind,m.architecture,m.host_os,pc.current_revision_id,ri.native_id,r.evidence_json FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id AND pc.enabled=1 JOIN runtime_identities ri ON ri.id=n.runtime_identity_id AND ri.backend_kind='tart' JOIN provider_connection_revisions r ON r.id=pc.current_revision_id AND r.verified_runtime_identity_id=n.runtime_identity_id WHERE n.id=? AND n.backend_kind='tart' AND n.admission='disabled'",
+      [input.nodeId],
+    );
+    const checkedAt = Date.parse(input.checkedAt),
+      now = this.now(),
+      validForSeconds = input.validForSeconds ?? 3600,
+      proof = input.facts.templates.find(
+        (item) => item.templateRef.name === input.templateRef,
+      );
+    if (
+      !node ||
+      Number(node.version) !== input.expectedVersion ||
+      typeof node.current_revision_id !== "string" ||
+      String(node.current_revision_id) !== input.expectedConnectionRevisionId
+    )
+      throw new Error(
+        "Tart Node version changed or Node is not ready for capability attestation",
+      );
+    const storedFacts = parseJson(String(node.evidence_json));
+    const config = parseJson(String(node.config_json));
+    if (
+      String(node.native_id) !== input.expectedNamespaceId ||
+      String(node.backend_kind) !== "tart" ||
+      String(node.architecture) !== "arm64" ||
+      String(node.host_os) !== "macos" ||
+      config.executionMode !== "tart" ||
+      !config.runtimeProfile ||
+      input.architecture !== "arm64" ||
+      input.facts.nativeRuntimeNamespaceId !== input.expectedNamespaceId ||
+      input.facts.hostOS !== "macos" ||
+      input.facts.hostArch !== "arm64" ||
+      input.facts.tartVersion !== input.expectedTartVersion ||
+      storedFacts.nativeRuntimeNamespaceId !== input.expectedNamespaceId ||
+      storedFacts.tartVersion !== input.expectedTartVersion ||
+      !proof ||
+      proof.proofKind !== "sealed_local_bundle_v1" ||
+      proof.artifactDigest !== input.templateDigest ||
+      proof.templateRef.source !== "local" ||
+      proof.templateRef.guestArch !== "arm64" ||
+      proof.templateRef.guestOS !==
+        (input.guestOs === "macos" ? "darwin" : "linux") ||
+      input.checkedAt === "" ||
+      !Number.isFinite(checkedAt) ||
+      checkedAt > now + 30_000 ||
+      checkedAt < now - 30 * 60_000 ||
+      !Number.isSafeInteger(validForSeconds) ||
+      validForSeconds < 3600 ||
+      validForSeconds > 30 * 24 * 3600 ||
+      Object.keys(input.report.scopes).length !== 6
+    )
+      throw new RangeError(
+        "Tart attestation must match the current namespace, sealed template and six passed qualification scopes",
+      );
+    const revisions = await this.db.all<Row>(
+      `SELECT id FROM network_profile_revisions WHERE id IN (${input.networkProfileRevisionIds.map(() => "?").join(",")})`,
+      [...input.networkProfileRevisionIds],
+    );
+    if (revisions.length !== input.networkProfileRevisionIds.length)
+      throw new RangeError(
+        "Tart capability report references an unknown network revision",
+      );
+    if (node.pool_id === undefined || node.pool_id === null)
+      throw new Error("Tart Node capacity pool is unavailable");
+    const pool = await this.db.get<Row>(
+      "SELECT total_cpu_millis,total_memory_mib,total_scratch_mib FROM capacity_pools WHERE id=?",
+      [node.pool_id],
+    );
+    if (!pool) throw new Error("Tart Node capacity pool is unavailable");
+    if (
+      input.facts.hostCpuCount < 1 ||
+      Number(pool.total_cpu_millis) > input.facts.hostCpuCount * 1000 ||
+      Number(pool.total_memory_mib) >
+        Math.floor(input.facts.hostMemoryBytes / 1024 ** 2)
+    )
+      throw new RangeError(
+        "Tart capability capacity exceeds authenticated raw host capacity facts",
+      );
+    const capabilityFingerprint = hash(
+      JSON.stringify({
+        backendKind: "tart",
+        namespaceId: input.expectedNamespaceId,
+        connectionRevisionId: String(node.current_revision_id),
+        tartVersion: input.expectedTartVersion,
+        templateRef: input.templateRef,
+        templateDigest: input.templateDigest,
+        guestOs: input.guestOs,
+        checkedAt: input.checkedAt,
+        networkProfileRevisionIds: input.networkProfileRevisionIds,
+        report: input.report,
+      }),
+    );
+    const capability = {
+      cpuHardLimit: "verified",
+      memoryHardLimit: "verified",
+      scratchHardLimit: "unsupported",
+      networkPolicyEnforcement: "verified",
+      storagePolicyEnforcement: "unsupported",
+      supportedAccess: ["ssh"],
+      resourceKinds: ["vm"],
+      architectures: ["arm64"],
+      guestOs: [input.guestOs],
+      capacity: {
+        cpuMillis: integer(pool.total_cpu_millis),
+        memoryMiB: integer(pool.total_memory_mib),
+        scratchMiB: integer(pool.total_scratch_mib),
+      },
+      verifiedNetworkProfileRevisionIds: [...input.networkProfileRevisionIds],
+      verifiedStorageProfileRevisionIds: [],
+      providerVersion: `Tart/${input.expectedTartVersion}`,
+      expiresAt: new Date(checkedAt + validForSeconds * 1000).toISOString(),
+      observedAt: new Date(checkedAt).toISOString(),
+      evidenceValidForSeconds: validForSeconds,
+      capabilityFingerprint,
+      admissionMode: "constant_online_manual_inventory",
+      connectionRevisionId: String(node.current_revision_id),
+      nativeNamespaceId: input.expectedNamespaceId,
+      tartVersion: input.expectedTartVersion,
+      templateRef: input.templateRef,
+      templateDigest: input.templateDigest,
+      architecture: "arm64",
+      offline: false,
+      powerEnabled: false,
+      manualReport: input.report,
+    };
+    const time = this.now();
+    await this.db.batchTransaction([
+      {
+        kind: "run",
+        sql: "UPDATE machines SET admission='enabled',desired_power='on',observed_power='on',power_lifecycle='idle',version=version+1,updated_at_ms=? WHERE id=? AND admission IN('disabled','enabled')",
+        params: [time, String(node.machine_id)],
+        expectChanges: 1,
+      },
+      {
+        kind: "run",
+        sql: "UPDATE nodes SET capabilities_json=?,admission='enabled',observed_health='healthy',observed_at_ms=?,version=version+1,updated_at_ms=? WHERE id=? AND version=? AND admission='disabled' AND backend_kind='tart' AND runtime_identity_id=(SELECT id FROM runtime_identities WHERE native_id=? AND backend_kind='tart')",
+        params: [
+          JSON.stringify(capability),
+          checkedAt,
+          time,
+          input.nodeId,
+          input.expectedVersion,
+          input.expectedNamespaceId,
+        ],
+        expectChanges: 1,
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) VALUES('consumer',?,'node.capabilities_attested','node',?,?,?,?)",
+        params: [
+          input.operatorId,
+          input.nodeId,
+          input.requestId,
+          time,
+          JSON.stringify({
+            backendKind: "tart",
+            nativeNamespaceId: input.expectedNamespaceId,
+            tartVersion: input.expectedTartVersion,
+            templateDigest: input.templateDigest,
+            capabilityFingerprint,
           }),
         ],
       },

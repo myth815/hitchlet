@@ -313,7 +313,7 @@ export class SQLiteManagementStore {
       scope === null
         ? (await this.initialization())!
         : (await this.db.get<Row>(
-            `${scopeCte} SELECT (SELECT count(DISTINCT n.provider_connection_id) FROM nodes n JOIN machines m ON m.id=n.machine_id WHERE m.source='local' AND ${nodeVisible("n.id")}) AS connections,(SELECT count(DISTINCT n.machine_id) FROM nodes n JOIN machines m ON m.id=n.machine_id WHERE m.source='local' AND ${nodeVisible("n.id")}) AS machines,(SELECT count(*) FROM nodes n JOIN machines m ON m.id=n.machine_id WHERE m.source='local' AND ${nodeVisible("n.id")}) AS nodes,(SELECT count(DISTINCT v.id) FROM image_versions v JOIN images i ON i.id=v.image_id JOIN image_artifacts artifact ON artifact.image_version_id=v.id WHERE v.status='published' AND i.status='active' AND artifact.environment_kind='container' AND (i.owner_consumer_id IS NULL OR i.owner_consumer_id=?) AND ${imageVisible}) AS publishedVersions FROM scope s`,
+            `${scopeCte} SELECT (SELECT count(DISTINCT n.provider_connection_id) FROM nodes n JOIN machines m ON m.id=n.machine_id WHERE m.source='local' AND ${nodeVisible("n.id")}) AS connections,(SELECT count(DISTINCT n.machine_id) FROM nodes n JOIN machines m ON m.id=n.machine_id WHERE m.source='local' AND ${nodeVisible("n.id")}) AS machines,(SELECT count(*) FROM nodes n JOIN machines m ON m.id=n.machine_id WHERE m.source='local' AND ${nodeVisible("n.id")}) AS nodes,(SELECT count(DISTINCT v.id) FROM image_versions v JOIN images i ON i.id=v.image_id JOIN image_artifacts artifact ON artifact.image_version_id=v.id WHERE v.status='published' AND i.status='active' AND (i.owner_consumer_id IS NULL OR i.owner_consumer_id=?) AND ${imageVisible}) AS publishedVersions FROM scope s`,
             [...parameters, consumerId],
           ))!;
     return {
@@ -409,7 +409,7 @@ export class SQLiteManagementStore {
   }
   versions() {
     return this.db.all<Row>(
-      "SELECT v.id,v.image_id,v.version,i.name AS image_name,i.owner_consumer_id,a.architecture,a.id AS artifact_id,a.content_digest,a.minimum_cpu_millis,a.minimum_memory_mib,a.minimum_scratch_mib FROM image_versions v JOIN images i ON i.id=v.image_id JOIN image_artifacts a ON a.image_version_id=v.id WHERE v.status='published' AND i.status='active' AND a.environment_kind='container' ORDER BY i.name,v.version,a.id",
+      "SELECT v.id,v.image_id,v.version,i.name AS image_name,i.owner_consumer_id,a.environment_kind,a.guest_os,a.architecture,a.id AS artifact_id,a.content_digest,a.minimum_cpu_millis,a.minimum_memory_mib,a.minimum_scratch_mib FROM image_versions v JOIN images i ON i.id=v.image_id JOIN image_artifacts a ON a.image_version_id=v.id WHERE v.status='published' AND i.status='active' ORDER BY i.name,v.version,a.id",
     );
   }
   profiles(kind: "network" | "storage") {

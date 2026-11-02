@@ -28,6 +28,7 @@ export function AuthorizedAcquire({
   const load = React.useCallback(() => client.catalog(), [client]),
     catalog = useManagementRead(load);
   const [versionId, setVersion] = React.useState(""),
+    [kind, setKind] = React.useState<"container" | "vm">("container"),
     [network, setNetwork] = React.useState(""),
     [resources, setResources] = React.useState({
       cpuMillis: 1000,
@@ -54,6 +55,7 @@ export function AuthorizedAcquire({
       if (!versionId && catalog.data.versions[0]) {
         const v = catalog.data.versions[0];
         setVersion(v.id);
+        setKind(v.platforms[0]?.kind ?? "container");
         setResources({
           cpuMillis: Math.max(v.platforms[0]!.minimumResources.cpuMillis, 1),
           memoryMiB: Math.max(v.platforms[0]!.minimumResources.memoryMiB, 1),
@@ -67,12 +69,12 @@ export function AuthorizedAcquire({
   }, [catalog.data, versionId, network]);
   const request: AcquireRequest = {
     image: { versionId },
-    kind: "container",
+    kind,
     networkProfileId: network,
     resources: {
       ...resources,
       scratchEnforcement: hardScratch ? "required" : "best_effort",
-      isolation: "shared_kernel",
+      isolation: kind === "vm" ? "virtual_machine" : "shared_kernel",
     },
     lease: { requestedSeconds: ttl },
     storage: mounts,
@@ -135,7 +137,9 @@ export function AuthorizedAcquire({
                   const version = catalog.data?.versions.find(
                     (v) => v.id === e.target.value,
                   );
-                  if (version)
+                  if (version) {
+                    const nextKind = version.platforms[0]?.kind ?? "container";
+                    setKind(nextKind);
                     setResources({
                       ...version.platforms[0]!.minimumResources,
                       cpuMillis: Math.max(
@@ -147,15 +151,59 @@ export function AuthorizedAcquire({
                         version.platforms[0]!.minimumResources.memoryMiB,
                       ),
                     });
+                    if (nextKind === "vm") {
+                      setMounts([]);
+                      setHardScratch(false);
+                    }
+                  }
                 }}
               >
                 <option value="">选择已发布版本</option>
                 {catalog.data?.versions.map((v) => (
                   <option key={v.id} value={v.id}>
-                    {v.imageName} / {v.version} · container · Linux ·{" "}
-                    {v.architectures.join("/")}
+                    {v.imageName} / {v.version} ·{" "}
+                    {v.platforms
+                      .map((p) => `${p.kind} ${p.guestOs} ${p.architecture}`)
+                      .join(", ")}
                   </option>
                 ))}
+              </select>
+            </label>
+            <label>
+              运行环境
+              <select
+                value={kind}
+                onChange={(e) => {
+                  const next = e.target.value as "container" | "vm";
+                  setKind(next);
+                  const platform = selected?.platforms.find(
+                    (p) => p.kind === next,
+                  );
+                  if (platform)
+                    setResources({
+                      ...platform.minimumResources,
+                      cpuMillis: Math.max(
+                        platform.minimumResources.cpuMillis,
+                        1,
+                      ),
+                      memoryMiB: Math.max(
+                        platform.minimumResources.memoryMiB,
+                        1,
+                      ),
+                    });
+                  if (next === "vm") {
+                    setMounts([]);
+                    setHardScratch(false);
+                  }
+                }}
+              >
+                {[...new Set(selected?.platforms.map((p) => p.kind) ?? [])].map(
+                  (platformKind) => (
+                    <option key={platformKind} value={platformKind}>
+                      {platformKind}
+                    </option>
+                  ),
+                )}
               </select>
             </label>
             <label>
@@ -177,9 +225,10 @@ export function AuthorizedAcquire({
           {selected ? (
             <p>
               {selected.platforms
+                .filter((p) => p.kind === kind)
                 .map(
                   (p) =>
-                    `${p.architecture} 最低 ${p.minimumResources.cpuMillis}m / ${p.minimumResources.memoryMiB} MiB / ${p.minimumResources.scratchMiB} MiB scratch`,
+                    `${p.guestOs} ${p.architecture} 最低 ${p.minimumResources.cpuMillis}m / ${p.minimumResources.memoryMiB} MiB / ${p.minimumResources.scratchMiB} MiB scratch`,
                 )
                 .join("；")}
               。版本与 profiles 在受理时冻结，不随别名移动改变。
@@ -187,7 +236,11 @@ export function AuthorizedAcquire({
           ) : (
             <p>没有匹配版本时请联系管理员发布并授权镜像。</p>
           )}
-          <ResourceFields value={resources} onChange={setResources} />
+          <ResourceFields
+            value={resources}
+            onChange={setResources}
+            cpuStep={kind === "vm" ? 1000 : 1}
+          />
           {catalog.data ? (
             <p>
               消费者并发累计资源上限 {catalog.data.quota.maxResources.cpuMillis}
@@ -214,10 +267,11 @@ export function AuthorizedAcquire({
           <label className="check-row">
             <input
               type="checkbox"
+              disabled={kind === "vm"}
               checked={hardScratch}
               onChange={(e) => setHardScratch(e.target.checked)}
             />
-            要求临时盘硬限额（当前 Docker 未验证能力时会排除）
+            要求临时盘硬限额（Tart VM 暂不支持）
           </label>
           <details>
             <summary>必要的放置与能力约束</summary>
@@ -228,7 +282,13 @@ export function AuthorizedAcquire({
                 onChange={(e) => setArchitecture(e.target.value)}
               >
                 <option value="">版本可用架构</option>
-                {selected?.architectures.map((a) => (
+                {[
+                  ...new Set(
+                    selected?.platforms
+                      .filter((p) => p.kind === kind)
+                      .map((p) => p.architecture) ?? [],
+                  ),
+                ].map((a) => (
                   <option key={a}>{a}</option>
                 ))}
               </select>
@@ -270,14 +330,14 @@ export function AuthorizedAcquire({
               </label>
             ))}
             <p>
-              仅本地 Docker；required 能力必须由服务端持有 verified
+              仅本地 Docker / Tart；required 能力必须由服务端持有 verified
               证据，不由本页选项认证。严格离线与未实测能力没有候选。
             </p>
           </details>
           <h3>可选授权存储</h3>
           <p>
-            从允许引用选择相对子路径、模式和容器目标；不需要知道宿主 source 或
-            NAS 凭据。不挂载即可试租。
+            从允许引用选择相对子路径、模式和容器目标；Tart VM
+            当前不支持挂载。不需要知道宿主 source 或 NAS 凭据。不挂载即可试租。
           </p>
           {mounts.map((mount, index) => {
             const profile = catalog.data?.storage.find(
@@ -407,7 +467,7 @@ export function AuthorizedAcquire({
           })}
           <button
             type="button"
-            disabled={!catalog.data?.storage.length}
+            disabled={kind === "vm" || !catalog.data?.storage.length}
             onClick={() => {
               const p = catalog.data?.storage[0];
               if (p)

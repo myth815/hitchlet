@@ -20,10 +20,21 @@ export class SQLiteImagePublicationStore {
     versionId: string,
     expected: number,
     verifyRuntime: (target: {
+      backendKind: string;
       endpointUrl: string;
       environmentId: string;
       secretVersionRef: string;
       expected: Record<string, unknown>;
+      installationId: string;
+      nodeId: string;
+      runtimeIdentityId: string;
+      nativeRuntimeNamespaceId: string;
+      connectionRevisionId: string;
+      config: Record<string, unknown>;
+      artifactRef: string;
+      digest: string;
+      architecture: string;
+      guestOs: string;
     }) => Promise<boolean>,
   ) {
     const version = await this.db.get<Row>(
@@ -44,7 +55,7 @@ export class SQLiteImagePublicationStore {
     const selected: Report[] = [];
     for (const artifact of artifacts) {
       const candidates = await this.db.all<Row>(
-        `SELECT v.*,n.capabilities_json AS current_capabilities,n.config_json AS current_config,n.version AS current_node_version,n.admission AS node_admission,pc.current_revision_id,cr.evidence_json AS current_provider,cr.endpoint_ref,cr.provider_endpoint_id,cr.secret_version_ref,np.current_revision_id AS current_network,d.id AS current_deny FROM image_validations v JOIN nodes n ON n.id=v.node_id JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions cr ON cr.id=pc.current_revision_id JOIN network_profiles np ON np.id=json_extract(v.accepted_contract_json,'$.networkProfileId') JOIN platform_network_deny_revisions d ON d.revision=(SELECT max(revision) FROM platform_network_deny_revisions) WHERE v.image_artifact_id=? AND v.state='succeeded' AND v.test_outcome='passed' AND v.cleanup_status='complete' AND v.report_id IS NOT NULL AND (v.evidence_expires_at_ms IS NULL OR v.evidence_expires_at_ms>?) AND pc.enabled=1 AND np.status='active' AND NOT EXISTS(SELECT 1 FROM json_each(v.accepted_contract_json,'$.storageBindings') b JOIN profile_grant_revocations r ON r.storage_profile_revision_id=json_extract(b.value,'$.storageProfileRevisionId')) AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=np.current_revision_id) ORDER BY v.finished_at_ms DESC`,
+        `SELECT v.*,a.backend_kind AS current_backend_kind,a.artifact_ref AS current_artifact_ref,a.content_digest AS current_artifact_digest,a.architecture AS current_architecture,a.guest_os AS current_guest_os,n.id AS current_node_id,n.runtime_identity_id AS current_runtime_identity_id,ri.native_id AS current_native_runtime_namespace_id,(SELECT installation_id FROM installations WHERE singleton=1) AS current_installation_id,n.capabilities_json AS current_capabilities,n.config_json AS current_config,n.version AS current_node_version,n.admission AS node_admission,pc.current_revision_id,cr.evidence_json AS current_provider,cr.endpoint_ref,cr.provider_endpoint_id,cr.secret_version_ref,np.current_revision_id AS current_network,d.id AS current_deny FROM image_validations v JOIN image_artifacts a ON a.id=v.image_artifact_id JOIN nodes n ON n.id=v.node_id JOIN runtime_identities ri ON ri.id=n.runtime_identity_id AND ri.backend_kind=n.backend_kind JOIN provider_connections pc ON pc.id=n.provider_connection_id JOIN provider_connection_revisions cr ON cr.id=pc.current_revision_id JOIN network_profiles np ON np.id=json_extract(v.accepted_contract_json,'$.networkProfileId') JOIN platform_network_deny_revisions d ON d.revision=(SELECT max(revision) FROM platform_network_deny_revisions) WHERE v.image_artifact_id=? AND v.state='succeeded' AND v.test_outcome='passed' AND v.cleanup_status='complete' AND v.report_id IS NOT NULL AND (v.evidence_expires_at_ms IS NULL OR v.evidence_expires_at_ms>?) AND pc.enabled=1 AND np.status='active' AND NOT EXISTS(SELECT 1 FROM json_each(v.accepted_contract_json,'$.storageBindings') b JOIN profile_grant_revocations r ON r.storage_profile_revision_id=json_extract(b.value,'$.storageProfileRevisionId')) AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=np.current_revision_id) ORDER BY v.finished_at_ms DESC`,
         [String(artifact.id), this.now()],
       );
       let report: Report | undefined;
@@ -113,6 +124,19 @@ export class SQLiteImagePublicationStore {
           environmentId: String(row.provider_endpoint_id),
           secretVersionRef: String(row.secret_version_ref),
           expected: parseJson(String(row.current_provider)),
+          backendKind: String(row.current_backend_kind),
+          installationId: String(row.current_installation_id),
+          nodeId: String(row.current_node_id),
+          runtimeIdentityId: String(row.current_runtime_identity_id),
+          nativeRuntimeNamespaceId: String(
+            row.current_native_runtime_namespace_id,
+          ),
+          connectionRevisionId: String(row.current_revision_id),
+          config: parseJson(String(row.current_config)),
+          artifactRef: String(row.current_artifact_ref),
+          digest: String(row.current_artifact_digest),
+          architecture: String(row.current_architecture),
+          guestOs: String(row.current_guest_os),
         }))
       )
         return undefined;

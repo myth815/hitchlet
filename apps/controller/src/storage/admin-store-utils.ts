@@ -1,4 +1,5 @@
 import { dockerImageReferencePath } from "../domain/docker-image-reference.js";
+import { tartRuntimeFactsSchema } from "@hitchlet/contracts/internal";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 
@@ -50,6 +51,9 @@ export function projectEvidence(value: string) {
     containerCount: integer(e.containerCount),
     unmanagedContainerCount: integer(e.unmanagedContainerCount),
   };
+}
+export function projectTartEvidence(value: string) {
+  return tartRuntimeFactsSchema.parse(JSON.parse(value));
 }
 export function projectCapabilities(value: string, now = Date.now()) {
   const c = parseJson(value);

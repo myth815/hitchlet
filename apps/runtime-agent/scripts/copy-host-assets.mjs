@@ -8,3 +8,7 @@ await copyFile(
   resolve("src/host-power-windows.ps1"),
   resolve("dist/host-power-windows.ps1"),
 );
+await copyFile(
+  resolve("src/drivers/tart-guest-bootstrap.cjs"),
+  resolve("dist/drivers/tart-guest-bootstrap.cjs"),
+);

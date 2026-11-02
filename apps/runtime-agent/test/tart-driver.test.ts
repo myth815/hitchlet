@@ -12,9 +12,9 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, expect, it } from "vitest";
 import { TartLocalDriver } from "../src/drivers/tart.js";
+import { withCommandDeadline } from "../src/command-exec.js";
 import type {
   TartAllocationIdentity,
-  TartGuestBootstrapReceipt,
   TartGuestBootstrapRequest,
   TartReconcileRequest,
 } from "@hitchlet/contracts/internal";
@@ -128,32 +128,48 @@ it.skipIf(!supportsTartHost)(
       presence: "present",
       bootstrapStatus: "pending",
     });
-    const unknownReceipt: TartGuestBootstrapReceipt = {
-      status: "unknown",
-      identity,
-      nonce: request.bootstrap!.nonce,
-      reason: "guest_unreachable",
-      observedAt: "2028-01-01T00:00:00.000Z",
-    };
+    const portBusyMarker = join(root, "tart-home", "guest-port-busy-marker");
+    await writeFile(portBusyMarker, "1");
     expect(
-      await driver.recordBootstrapReceipt(
-        identity,
-        request.bootstrap!,
-        unknownReceipt,
-      ),
-    ).toMatchObject({ presence: "present", bootstrapStatus: "unknown" });
-    const receipt = await makeReceipt(request.bootstrap!);
-    expect(
-      await driver.recordBootstrapReceipt(
-        identity,
-        request.bootstrap!,
-        receipt,
-      ),
+      await driver.bootstrapApply(identity, request.bootstrap!),
     ).toMatchObject({
       presence: "present",
-      bootstrapStatus: "applied",
-      bootstrapReceipt: receipt,
+      bootstrapStatus: "unknown",
+      bootstrapReceipt: {
+        status: "unknown",
+        reason: "guest_ssh_port_22_in_use",
+      },
     });
+    await rm(portBusyMarker, { force: true });
+    const applied = await driver.bootstrapApply(identity, request.bootstrap!);
+    expect(applied).toMatchObject({
+      presence: "present",
+      bootstrapStatus: "applied",
+    });
+    if (applied.presence !== "present" || !applied.bootstrapReceipt)
+      throw new Error("fake_guest_receipt_missing");
+    const receipt = applied.bootstrapReceipt;
+    expect(receipt).toMatchObject({
+      status: "applied",
+      nonce: request.bootstrap!.nonce,
+    });
+    const execEvent = (await readEvents(root)).find(
+      (event) => event.args[0] === "exec",
+    );
+    expect(execEvent?.args.slice(1, 7)).toEqual([
+      "-i",
+      expectedName(identity),
+      "/usr/bin/sudo",
+      "-n",
+      "/opt/homebrew/bin/node",
+      "-e",
+    ]);
+    expect(execEvent?.args[7]).toContain("runGuestBootstrap");
+    expect(
+      JSON.parse(
+        await readFile(join(root, "tart-home", "bootstrap-input.json")),
+      ),
+    ).toMatchObject({ nonce: request.bootstrap!.nonce, identity });
     await driver.close();
 
     const resumed = makeDriver(root);
@@ -171,11 +187,7 @@ it.skipIf(!supportsTartHost)(
       presence: "absent",
     });
     expect(
-      await resumed.recordBootstrapReceipt(
-        identity,
-        request.bootstrap!,
-        receipt,
-      ),
+      await resumed.bootstrapApply(identity, request.bootstrap!),
     ).toMatchObject({
       presence: "unknown",
       reason: "bootstrap_receipt_fence_closed",
@@ -242,6 +254,42 @@ it.skipIf(!supportsTartHost)(
       ),
     ).toHaveLength(0);
     await runningTemplateDriver.close();
+  },
+);
+
+it.skipIf(!supportsTartHost)(
+  "seals an explicit local bundle once and stops reporting its digest after file metadata changes",
+  async () => {
+    const root = await setupFixture();
+    const template = join(root, "tart-home", "vms", "linux-arm64-template");
+    await writeFile(
+      join(template, "disk.img"),
+      Buffer.from("synthetic disk bytes"),
+    );
+    await writeFile(
+      join(template, "nvram.bin"),
+      Buffer.from("synthetic nvram"),
+    );
+    const request = await makeRequest(root);
+    const driver = makeDriver(root);
+    const namespaceId = "3b241101-e2bb-4255-8caf-4136c566a962";
+    expect((await driver.facts(namespaceId)).templates).toEqual([]);
+    const sealed = await driver.sealTemplate(request.template.name);
+    expect(sealed).toMatchObject({
+      templateRef: request.template,
+      artifactDigest: expect.stringMatching(/^sha256:[a-f0-9]{64}$/),
+      proofKind: "sealed_local_bundle_v1",
+    });
+    expect((await driver.facts(namespaceId)).templates).toEqual([sealed]);
+    await writeFile(
+      join(template, "disk.img"),
+      Buffer.from("modified synthetic disk bytes"),
+    );
+    expect((await driver.facts(namespaceId)).templates).toEqual([]);
+    const resealed = await driver.sealTemplate(request.template.name);
+    expect(resealed.artifactDigest).not.toBe(sealed.artifactDigest);
+    expect((await driver.facts(namespaceId)).templates).toEqual([resealed]);
+    await driver.close();
   },
 );
 
@@ -386,6 +434,30 @@ it("rejects hosts outside the macOS arm64 Tart scope", () => {
     );
 });
 
+it("caps a short Tart CLI command at the ambient action deadline", async () => {
+  const root = await mkdtemp(join(tmpdir(), "hitchlet-tart-deadline-"));
+  roots.push(root);
+  const driver = Object.create(TartLocalDriver.prototype) as Record<
+    string,
+    unknown
+  >;
+  driver.executable = process.execPath;
+  driver.home = root;
+  driver.env = process.env;
+  const runShort = (
+    driver as unknown as {
+      runShort(args: readonly string[]): Promise<unknown>;
+    }
+  ).runShort.bind(driver);
+  const startedAt = Date.now();
+  await expect(
+    withCommandDeadline(Date.now() + 250, () =>
+      runShort(["-e", "setTimeout(() => process.stdout.write('late'), 1500)"]),
+    ),
+  ).rejects.toThrow("tart_cli_command_failed");
+  expect(Date.now() - startedAt).toBeLessThan(1_200);
+});
+
 function makeDriver(
   root: string,
   tartHome = join(root, "tart-home"),
@@ -429,24 +501,6 @@ async function makeRequest(
     },
     resources: { cpus: 4, memoryMiB: 4096 },
     ...(includeBootstrap ? { bootstrap } : {}),
-  };
-}
-
-async function makeReceipt(
-  request: TartGuestBootstrapRequest,
-): Promise<TartGuestBootstrapReceipt> {
-  const hostPublicKey = makeSshKey("host");
-  return {
-    status: "applied",
-    identity,
-    nonce: request.nonce,
-    account: request.account,
-    clientPublicKeyFingerprint: request.clientPublicKeyFingerprint,
-    hostPublicKey,
-    hostKeyFingerprint: fingerprint(hostPublicKey),
-    networkEvidenceReference: request.networkEvidence.reference,
-    networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
-    observedAt: "2029-01-01T00:00:00.000Z",
   };
 }
 
@@ -496,6 +550,8 @@ async function setupFixture(): Promise<string> {
 const fs=require('node:fs'),path=require('node:path'),home=process.env.TART_HOME,vms=path.join(home,'vms'),args=process.argv.slice(2),events=path.join(home,'events.jsonl');
 const vm=(name)=>path.join(vms,name),config=(name)=>path.join(vm(name),'config.json');fs.mkdirSync(home,{recursive:true});fs.appendFileSync(events,JSON.stringify({args,env:{TART_HOME:process.env.TART_HOME,TART_NO_AUTO_PRUNE:process.env.TART_NO_AUTO_PRUNE}})+'\\n');
 if(args[0]==='list'){const rows=fs.readdirSync(vms,{withFileTypes:true}).filter(e=>e.isDirectory()&&!(fs.existsSync(path.join(home,'hide-owned-vm-marker'))&&e.name.startsWith('hitchlet-'))).map(e=>{const running=fs.existsSync(path.join(vm(e.name),'run.pid'))||(e.name==='linux-arm64-template'&&fs.existsSync(path.join(home,'template-running-marker')));return {Source:'local',Name:e.name,Running:running,State:running?'running':'stopped'}});process.stdout.write(JSON.stringify(rows));}
+else if(args[0]==='--version')process.stdout.write('tart 2.fixture\\n');
+else if(args[0]==='exec'){let input='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>input+=c);process.stdin.on('end',()=>{if(fs.existsSync(path.join(home,'guest-port-busy-marker'))){process.stderr.write('guest_ssh_port_22_in_use\\n');process.exitCode=1;return}const request=JSON.parse(input);fs.writeFileSync(path.join(home,'bootstrap-input.json'),JSON.stringify({nonce:request.nonce,identity:request.identity}));const algorithm=Buffer.from('ssh-ed25519');const key=require('node:crypto').createHash('sha256').update('synthetic-host-key').digest();const u=(n)=>{const b=Buffer.alloc(4);b.writeUInt32BE(n);return b};const blob=Buffer.concat([u(algorithm.length),algorithm,u(key.length),key]);const publicKey='ssh-ed25519 '+blob.toString('base64');const fingerprint='SHA256:'+require('node:crypto').createHash('sha256').update(blob).digest('base64').replace(/=+$/,'');process.stdout.write(JSON.stringify({status:'applied',identity:request.identity,nonce:request.nonce,account:request.account,clientPublicKeyFingerprint:request.clientPublicKeyFingerprint,hostPublicKey:publicKey,hostKeyFingerprint:fingerprint,networkEvidenceReference:request.networkEvidence.reference,networkEvidenceExpiresAt:request.networkEvidence.expiresAt,observedAt:new Date().toISOString()}));});}
 else if(args[0]==='clone'){fs.cpSync(vm(args[1]),vm(args[2]),{recursive:true,errorOnExist:true});const c=JSON.parse(fs.readFileSync(config(args[2]),'utf8'));if(!fs.existsSync(path.join(home,'preserve-clone-mac-marker')))c.macAddress='02:00:00:00:00:22';fs.writeFileSync(config(args[2]),JSON.stringify(c));}
 else if(args[0]==='set'){const c=JSON.parse(fs.readFileSync(config(args[1]),'utf8'));c.cpuCount=Number(args[args.indexOf('--cpu')+1]);c.memorySize=Number(args[args.indexOf('--memory')+1])*1024*1024;fs.writeFileSync(config(args[1]),JSON.stringify(c));}
 else if(args[0]==='run'){fs.writeFileSync(path.join(vm(args[2]),'run.pid'),String(process.pid));process.on('SIGINT',()=>{if(!fs.existsSync(path.join(home,'keep-run-marker'))){try{fs.unlinkSync(path.join(vm(args[2]),'run.pid'))}catch{}}process.exit(0)});setInterval(()=>{},1000);}

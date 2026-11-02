@@ -670,15 +670,15 @@ export function openApiDocument() {
       },
       "/v1/provider-connections": {
         get: adminOperation(
-          "List Portainer connections and verified revisions",
+          "List verified Portainer and Tart connection revisions",
           "200",
           undefined,
           z.array(AdminSchemas.ProviderConnectionViewSchema),
         ),
         post: adminOperation(
-          "Persist and run a read-only Portainer discovery",
+          "Persist and run a read-only Portainer or authenticated Tart facts discovery",
           "202",
-          AdminSchemas.PortainerConnectionInputSchema,
+          AdminSchemas.ProviderConnectionInputSchema,
           AdminSchemas.ProviderOperationReceiptSchema,
         ),
       },
@@ -828,6 +828,15 @@ export function openApiDocument() {
           "Register Runtime Agent and fixed network/access configuration",
           "200",
           AdminSchemas.NodeRuntimeConfigSchema,
+          AdminSchemas.NodeRuntimeConfigReceiptSchema,
+          [pathId("nodeId"), ifMatch()],
+        ),
+      },
+      "/v1/nodes/{nodeId}/tart-runtime-config": {
+        put: adminOperation(
+          "Register Tart Runtime Agent and management-deny configuration",
+          "200",
+          AdminSchemas.TartNodeRuntimeConfigSchema,
           AdminSchemas.NodeRuntimeConfigReceiptSchema,
           [pathId("nodeId"), ifMatch()],
         ),

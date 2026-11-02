@@ -2870,12 +2870,23 @@ describe("Tart VM ticket ledger integration", () => {
         }
         return structuredClone(observation);
       },
-      async recordBootstrapReceipt(
+      async bootstrapApply(
         identity: TartAllocationIdentity,
         request: TartGuestBootstrapRequest,
-        receipt: TartGuestBootstrapReceipt,
       ): Promise<TartInspection> {
         expect(request).toEqual(savedBootstrap);
+        const receipt: TartGuestBootstrapReceipt = {
+          status: "applied",
+          identity,
+          nonce: request.nonce,
+          account: request.account,
+          clientPublicKeyFingerprint: request.clientPublicKeyFingerprint,
+          hostPublicKey,
+          hostKeyFingerprint,
+          networkEvidenceReference: request.networkEvidence.reference,
+          networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
+          observedAt: new Date(clock).toISOString(),
+        };
         observation = {
           presence: "present",
           identity,
@@ -2937,18 +2948,16 @@ describe("Tart VM ticket ledger integration", () => {
       },
       guestBootstrap: {
         async apply(request) {
-          return {
-            status: "applied",
-            identity: request.identity,
-            nonce: request.nonce,
-            account: request.account,
-            clientPublicKeyFingerprint: request.clientPublicKeyFingerprint,
-            hostPublicKey,
-            hostKeyFingerprint,
-            networkEvidenceReference: request.networkEvidence.reference,
-            networkEvidenceExpiresAt: request.networkEvidence.expiresAt,
-            observedAt: new Date(clock).toISOString(),
-          };
+          const persisted = await runtime.bootstrapApply(
+            request.identity,
+            request,
+          );
+          expect(persisted.presence).toBe("present");
+          if (persisted.presence !== "present")
+            throw new Error("synthetic bootstrap receipt was not persisted");
+          expect(persisted.bootstrapStatus).toBe("applied");
+          expect(persisted.bootstrapReceipt?.status).toBe("applied");
+          return persisted.bootstrapReceipt as TartGuestBootstrapReceipt;
         },
       },
       ssh: {
@@ -2958,11 +2967,16 @@ describe("Tart VM ticket ledger integration", () => {
           expect(input.hostPublicKey).toBe(hostPublicKey);
           expect(input.hostKeyFingerprint).toBe(hostKeyFingerprint);
           expect(input.privateKey).toContain("BEGIN OPENSSH PRIVATE KEY");
+          expect(input.guestOS).toBe("macos");
+          expect(input.architecture).toBe("arm64");
           return {
             authenticated: true,
             username: input.username,
             hostKeyFingerprint: input.hostKeyFingerprint,
             clientPublicKeyFingerprint: input.clientPublicKeyFingerprint,
+            guestOS: input.guestOS,
+            architecture: input.architecture,
+            scratchWritable: true,
           };
         },
       },

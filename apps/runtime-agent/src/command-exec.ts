@@ -39,6 +39,10 @@ export function withCommandDeadline<T>(
   return commandDeadline.run(deadlineMs, work);
 }
 
+export function currentCommandDeadlineMs(): number | undefined {
+  return commandDeadline.getStore();
+}
+
 /** Runs a fixed argv command with a hard kill and no command details in errors. */
 export async function runFixedCommand(
   binary: string,

@@ -63,7 +63,10 @@ export class SQLiteImageValidationStore {
     name: string;
     description?: string;
     version: string;
+    backendKind?: "portainer" | "tart";
+    kind?: "container" | "vm";
     architecture: "amd64" | "arm64";
+    guestOs?: "linux" | "macos";
     artifactRef: string;
     digest: string;
     minimumResources: {
@@ -75,7 +78,7 @@ export class SQLiteImageValidationStore {
     access: unknown;
     authorizedConsumerIds: readonly string[];
   }) {
-    validateArtifact(input.artifactRef, input.digest);
+    const platform = draftPlatform(input);
     validateBootstrapAndAccess(input.bootstrap, input.access);
     if (
       !Object.values(input.minimumResources).every(Number.isSafeInteger) ||
@@ -95,7 +98,12 @@ export class SQLiteImageValidationStore {
     const manifest = {
       requirements,
       access: input.access,
-      platform: { architecture: input.architecture, guestOs: "linux" },
+      platform: {
+        provider: platform.backendKind,
+        kind: platform.kind,
+        architecture: input.architecture,
+        guestOs: platform.guestOs,
+      },
       minimumResources: input.minimumResources,
     };
     const statements: import("../storage/protocol.js").Statement[] = [
@@ -118,11 +126,14 @@ export class SQLiteImageValidationStore {
       },
       {
         kind: "run",
-        sql: "INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms) VALUES(?,?,'portainer','container',?,'linux',?,?,?,?,?,?,?,?)",
+        sql: "INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         params: [
           artifactId,
           versionId,
+          platform.backendKind,
+          platform.kind,
           input.architecture,
+          platform.guestOs,
           input.artifactRef,
           input.digest,
           input.minimumResources.cpuMillis,
@@ -174,7 +185,10 @@ export class SQLiteImageValidationStore {
   async createVersion(input: {
     imageId: string;
     version: string;
+    backendKind?: "portainer" | "tart";
+    kind?: "container" | "vm";
     architecture: "amd64" | "arm64";
+    guestOs?: "linux" | "macos";
     artifactRef: string;
     digest: string;
     minimumResources: {
@@ -185,7 +199,7 @@ export class SQLiteImageValidationStore {
     requirements: unknown;
     access: unknown;
   }) {
-    validateArtifact(input.artifactRef, input.digest);
+    const platform = draftPlatform(input);
     const requirements = normalizeDraftRequirements(input.requirements);
     validateBootstrapAndAccess(requirements.bootstrap, input.access);
     const image = await this.db.get<Row>(
@@ -199,7 +213,12 @@ export class SQLiteImageValidationStore {
     const manifest = {
       requirements,
       access: input.access,
-      platform: { architecture: input.architecture, guestOs: "linux" },
+      platform: {
+        provider: platform.backendKind,
+        kind: platform.kind,
+        architecture: input.architecture,
+        guestOs: platform.guestOs,
+      },
       minimumResources: input.minimumResources,
     };
     await this.db.batchTransaction([
@@ -217,11 +236,14 @@ export class SQLiteImageValidationStore {
       },
       {
         kind: "run",
-        sql: "INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms) VALUES(?,?,'portainer','container',?,'linux',?,?,?,?,?,?,?,?)",
+        sql: "INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         params: [
           artifactId,
           versionId,
+          platform.backendKind,
+          platform.kind,
           input.architecture,
+          platform.guestOs,
           input.artifactRef,
           input.digest,
           input.minimumResources.cpuMillis,
@@ -245,7 +267,10 @@ export class SQLiteImageValidationStore {
   async addDraftArtifact(
     versionId: string,
     input: {
+      backendKind?: "portainer" | "tart";
+      kind?: "container" | "vm";
       architecture: "amd64" | "arm64";
+      guestOs?: "linux" | "macos";
       artifactRef: string;
       digest: string;
       minimumResources: {
@@ -257,7 +282,7 @@ export class SQLiteImageValidationStore {
       access: unknown;
     },
   ) {
-    validateArtifact(input.artifactRef, input.digest);
+    const platform = draftPlatform(input);
     const requirements = normalizeDraftRequirements(input.requirements);
     validateBootstrapAndAccess(requirements.bootstrap, input.access);
     const version = await this.db.get<Row>(
@@ -271,11 +296,14 @@ export class SQLiteImageValidationStore {
     await this.db.batchTransaction([
       {
         kind: "run",
-        sql: "INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms) VALUES(?,?,'portainer','container',?,'linux',?,?,?,?,?,?,?,?)",
+        sql: "INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         params: [
           id,
           versionId,
+          platform.backendKind,
+          platform.kind,
           input.architecture,
+          platform.guestOs,
           input.artifactRef,
           input.digest,
           input.minimumResources.cpuMillis,
@@ -484,4 +512,68 @@ export class SQLiteImageValidationStore {
       digest: cached.content_digest,
     };
   }
+}
+
+function draftPlatform(input: {
+  backendKind?: "portainer" | "tart";
+  kind?: "container" | "vm";
+  architecture: "amd64" | "arm64";
+  guestOs?: "linux" | "macos";
+  artifactRef: string;
+  digest: string;
+  bootstrap?: unknown;
+  requirements?: unknown;
+  access: unknown;
+  minimumResources: {
+    cpuMillis: number;
+    memoryMiB: number;
+    scratchMiB: number;
+  };
+}) {
+  const backendKind = input.backendKind ?? "portainer";
+  const kind = input.kind ?? "container";
+  const guestOs = input.guestOs ?? "linux";
+  if (backendKind === "portainer") {
+    validateArtifact(input.artifactRef, input.digest);
+    if (kind !== "container" || guestOs !== "linux")
+      throw new RangeError("Portainer artifacts must be Linux containers");
+    return { backendKind, kind, guestOs } as const;
+  }
+  const requirements = input.requirements;
+  const bootstrap =
+    input.bootstrap ??
+    (requirements &&
+    typeof requirements === "object" &&
+    !Array.isArray(requirements)
+      ? (requirements as Record<string, unknown>).bootstrap
+      : undefined);
+  const access = input.access as Record<string, unknown> | null;
+  if (
+    kind !== "vm" ||
+    input.architecture !== "arm64" ||
+    !["linux", "macos"].includes(guestOs) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(input.artifactRef) ||
+    !/^sha256:[a-f0-9]{64}$/.test(input.digest) ||
+    input.minimumResources.scratchMiB !== 0 ||
+    !bootstrap ||
+    typeof bootstrap !== "object" ||
+    Array.isArray(bootstrap) ||
+    (bootstrap as Record<string, unknown>).mechanism !==
+      "tart-guest-bootstrap-v1" ||
+    (bootstrap as Record<string, unknown>).contractVersion !== "1" ||
+    (bootstrap as Record<string, unknown>).identityReset !== true ||
+    !access ||
+    !Array.isArray(access.accessProtocols) ||
+    access.accessProtocols.length !== 1 ||
+    access.accessProtocols[0] !== "ssh" ||
+    !Array.isArray(access.ports) ||
+    access.ports.length !== 1 ||
+    access.ports[0] !== 22 ||
+    access.discovery !== "guest_ipv4" ||
+    access.readiness !== "authenticated_ssh"
+  )
+    throw new RangeError(
+      "Tart drafts require an immutable local arm64 VM template, Tart guest bootstrap, SSH-only access, and zero scratch minimum",
+    );
+  return { backendKind, kind, guestOs } as const;
 }

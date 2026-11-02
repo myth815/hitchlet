@@ -313,11 +313,12 @@ function harness(
             imageId: ids.image,
             imageName: "开发镜像",
             version: "v1",
-            kind: "container",
             architectures: ["amd64"],
             platforms: [
               {
+                kind: "container",
                 architecture: "amd64",
+                guestOs: "linux",
                 artifactId: ids.artifact,
                 digest: "sha256:" + "a".repeat(64),
                 minimumResources: {

@@ -2,6 +2,11 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { PortainerProbe } from "../providers/port.js";
 import { SQLiteProviderConnectionStore } from "../storage/admin-stores.js";
+import {
+  TartConnectionInputSchema,
+  type TartConnectionInput,
+} from "@hitchlet/contracts/admin";
+import type { TartFactsForRevision } from "../providers/runtime-credentials.js";
 
 const DiscoveryIntentSchema = z
   .object({
@@ -21,6 +26,15 @@ const ConnectionRevisionIntentSchema = z
     expectedRuntimeIdentityId: z.string().uuid(),
   })
   .strict();
+const TartDiscoveryIntentSchema = z
+  .object({
+    type: z.literal("tart.discovery"),
+    runtimeIdentityId: z.string().uuid(),
+    runtimeProfile: z.record(z.string(), z.unknown()),
+    connectionId: z.string().uuid(),
+    revisionId: z.string().uuid(),
+  })
+  .strict();
 
 /** Read-only Portainer discovery and same-Engine revision use cases. Persistence stays behind the adapter. */
 export class PortainerConnectionService {
@@ -30,7 +44,46 @@ export class PortainerConnectionService {
     private readonly now = Date.now,
     private readonly allowLoopbackHttp = false,
     private readonly readSecret?: (versionRef: string) => Promise<string>,
+    private readonly tartFactsForRevision?: TartFactsForRevision,
   ) {}
+  async discoverTart(input: TartConnectionInput & { operationId?: string }) {
+    const operationId = input.operationId ?? randomUUID();
+    const target = {
+      runtimeIdentityId: input.runtimeIdentityId,
+      runtimeProfile: input.runtimeProfile,
+    };
+    const started = await this.store.beginTartDiscovery(operationId, target);
+    if (started.complete) return this.discoveryReceipt(operationId);
+    try {
+      if (!this.tartFactsForRevision)
+        throw new Error("Tart Runtime facts probe is unavailable");
+      const facts = await this.tartFactsForRevision({
+        installationId: started.installationId,
+        runtimeIdentityId: input.runtimeIdentityId,
+        connectionRevisionId: started.revisionId,
+        nodeId: started.connectionId,
+        config: input.runtimeProfile,
+      });
+      if (facts.hostOS !== "macos" || facts.hostArch !== "arm64")
+        throw new Error(
+          "Tart Runtime facts do not match the requested namespace or host platform",
+        );
+      await this.store.completeTartDiscovery(
+        operationId,
+        target,
+        started.connectionId,
+        started.revisionId,
+        facts,
+      );
+      return this.discoveryReceipt(operationId);
+    } catch {
+      await this.store.markUnknown(
+        operationId,
+        "tart_facts_unavailable_or_mismatched",
+      );
+      return this.discoveryReceipt(operationId);
+    }
+  }
   async discover(input: {
     endpointUrl: string;
     environmentId: string;
@@ -142,9 +195,23 @@ export class PortainerConnectionService {
   async retryDiscovery(operationId: string) {
     const operation = await this.store.discoveryOperation(operationId);
     if (!operation || typeof operation.intent_json !== "string") return null;
-    const intent = DiscoveryIntentSchema.parse(
-      JSON.parse(String(operation.intent_json)),
-    );
+    const rawIntent: unknown = JSON.parse(String(operation.intent_json));
+    if (
+      rawIntent &&
+      typeof rawIntent === "object" &&
+      !Array.isArray(rawIntent) &&
+      (rawIntent as Record<string, unknown>).type === "tart.discovery"
+    ) {
+      const intent = TartDiscoveryIntentSchema.parse(rawIntent);
+      return this.discoverTart({
+        ...TartConnectionInputSchema.parse({
+          runtimeIdentityId: intent.runtimeIdentityId,
+          runtimeProfile: intent.runtimeProfile,
+        }),
+        operationId,
+      });
+    }
+    const intent = DiscoveryIntentSchema.parse(rawIntent);
     return this.discover({
       endpointUrl: intent.endpointUrl,
       environmentId: intent.environmentId,

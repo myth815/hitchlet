@@ -88,10 +88,12 @@ export function ResourceFields({
   value,
   onChange,
   label = "资源",
+  cpuStep = 1,
 }: {
   value: { cpuMillis: number; memoryMiB: number; scratchMiB: number };
   onChange: (v: typeof value) => void;
   label?: string;
+  cpuStep?: number;
 }) {
   return (
     <div className="admin-grid">
@@ -106,8 +108,8 @@ export function ResourceFields({
           {label} · {name}
           <input
             type="number"
-            min={key === "scratchMiB" ? 0 : 1}
-            step="1"
+            min={key === "scratchMiB" ? 0 : key === "cpuMillis" ? cpuStep : 1}
+            step={key === "cpuMillis" ? cpuStep : 1}
             required
             value={value[key]}
             onChange={(e) =>

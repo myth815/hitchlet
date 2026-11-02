@@ -1,52 +1,67 @@
-# Tart 接入：源码与合成验证阶段
+# Tart 接入：管理接线与受控验证阶段
 
-当前已实现内部 Tart 本机驱动、初始化/SSH 材料合同和 Controller 服务层的 `TartExecutionProvider`，并接入现有 Ticket、Operation、Lease 与 Claim。它们复用同一个 SQLite 账本，不另建 VM 调度平台。
+Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。当前已补可信 Runtime 通道、固定 guest 初始化、真实 SSH 探针源码，以及正常管理 API/SDK 的发现、注册、资格登记、验证与发布。**尚不能在正式 server 启用真实 Tart 租用**：原生 VM 网络执行/取证适配器与 server 最终组合仍缺源码，`EXECUTION_MODE=tart` 明确拒绝启动，默认仍为 `disabled`。不能将配置枚举或合成测试当作已有可租 VM。
 
-**尚未注册生产 server 的 Tart 执行模式，也未开放正常管理 API 的 Tart 制品发布。** 真实 Agent 控制通道、guest 初始化实现、网络资格和 SSH 探针组合尚未验收；代码可注入合成端口测试，不能据此宣布已有真实 VM 可租。影音业务与 Vesta 适配不在 Hitchlet 内实现。
+影音和 Vesta 的业务属于各自租客工程。Linux guest、Windows 原生、Hyper-V、快照池、Orchard 和云扩容均不是本批交付。
 
-## 当前实现
+## 当前接线与证据
 
-| 层次                | 已有源码行为                                                                                          | 证据边界                                                 |
-| ------------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| 内部合同            | 固定分配身份/动作栅栏、local 模板、OS+arch、bootstrap request/receipt、presence 与 bootstrap 状态分离 | 严格 schema；仅客户端公钥和回执公开材料，无私钥/口令字段 |
-| Runtime driver      | clone/set/run/IP、inspect/reconcile、停止删除与完整盘点、持久归属和终止 tombstone                     | Studio macOS arm64 上假 CLI；没有执行真实 Tart           |
-| Controller provider | 冻结模板/平台/规格、持久创建意图、同实例恢复、初始化回执读回、网络修订和 SSH 指纹/认证证据校验        | guest/network/SSH 都是注入端口，当前实际验收使用合成实现 |
-| 同账本生命周期      | VM 申请、预留、ready、claim/access、renew、release、unknown 保留 Claim、查实不存在后归还              | 服务层整合测试；不是生产 server/GUI 的真实 VM 流程       |
+| 层次           | 已有源码                                                                                                                                       | 已验证边界                                                                        |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
+| 本机驱动       | local template clone/set/run/IP、持久归属、inspect/reconcile、终止 tombstone、停止删除与完整盘点                                               | Studio 上假 CLI/临时文件；未执行 Tart                                             |
+| Runtime 入口   | 独立 `dist/tart-main.js`、显式 namespace 初始化、模板封存、mTLS+Bearer、epoch/nonce/deadline                                                   | 临时证书/loopback HTTPS fixture；非真实部署认证                                   |
+| guest 初始化   | 固定 GuestAgent exec，macOS arm64/Node 24，按分配身份持久初始化、生成 guest 内 host key、独立 sshd、幂等回执                                   | 受控依赖夹具；未在真实 guest 运行                                                 |
+| Controller     | 精确冻结 Operation/Node/revision/native namespace，可信 facts/template 校验，bootstrap RPC 后读回 applied receipt，SSH 指纹及账户/OS/arch 检查 | 同账本生命周期、HTTP client、mock ssh2；没有真实 VM 握手                          |
+| 管理发布       | 发现→禁用/unknown 注册→配置→独立资格报告→草稿→持久验证和回收→重新核模板→发布                                                                   | 真实服务/SQLite/worker/provider 配合合成 native 端口；没有 SQL 直接伪造已发布状态 |
+| 租客 UI        | 目录可含 `kind: vm`，VM 请求用整 vCPU、virtual_machine、best_effort，无挂载                                                                    | GUI 测试；没有浏览器操作真实 VM                                                   |
+| 网络与正式启动 | 现有 contract/证据检查端口保留；尚无 Tart 原生执行与正反探针实现                                                                               | 未通过；启动 guard 保持关闭                                                       |
 
-本机驱动为 `apps/runtime-agent/src/drivers/tart.ts`，仅接受 macOS arm64 宿主、本地停止且一致的 `darwin`/`linux` arm64 模板。显式专用 `TART_HOME` 和独立 manifest 目录不得指向日常 `~/.tart`；关闭自动缓存清理。不下载 OCI 镜像，不安装 Tart，不使用 overwrite、快照池、Orchard 或任意脚本执行。
+## Runtime 入口与模板
 
-主要方法：`inspect(identity)`、`reconcile(request)`、`recordBootstrapReceipt(identity, request, receipt)`、`destroy(identity)`。初始化回执入口只负责校验与落盘，不执行 guest 初始化，也不证明网络/SSH 合格。前台 `tart run` 单独监管；关闭驱动不隐含归还或删除，只报告最近观察到的自有运行对象。一个专用 home/manifest 同时只支持一个管理进程，跨进程执行权与真实服务部署仍待接入。
+`HITCHLET_TART_RUNTIME_CONFIG` 指向显式配置文件。字段见 `apps/runtime-agent/src/tart-main.ts`：`enabled: true`、监听地址/端口、installation/runtime identity、官方 app 内 executable、独立 `tartHome`、manifest/registry/journal/namespace 路径，以及已有模型的 token/CA/cert/key 文件引用。配置不接受任意 guest 命令或 Controller 提供的成功回执。
 
-clone 前持久意图，clone 返回后立即记实例身份，再配置 CPU/内存。已记账实例的回执丢失可恢复，资源配置中断不抹掉所有权。无资源的先到终止也持久 tombstone，阻止迟到创建复活。clone 已发生但首次实例身份记账前中断仍为 unknown，不能凭同名接管或删除，当前仍需要受控对账。模板目录身份与 `config.json` 摘要不等于完整 VM 磁盘制品 digest，也不证明工具环境或供应链。
-
-## 固定初始化与访问合同
-
-当前 recipe 为 `tart-guest-bootstrap-v1`、`contractVersion: "1"`、`identityReset: true`；SSH discovery 为 `guest_ipv4`，readiness 为 `authenticated_ssh`，端口 22。guest hook 必须以同一分配身份和 nonce 幂等应用或读取原回执，恢复不能重置新凭据或产生第二个 VM。
-
-request 绑定 identity、nonce、account、客户端公钥/指纹及网络回执引用/到期；applied receipt 还返回 guest host 公钥/指纹和观测时间。Controller 验证双方指纹、身份、冻结 OS/arch、资源读回、网络合同 hash/修订/新鲜度及 SSH 认证，然后才产生 ReadyReceipt。获得 IP、clone 成功或 guest 自报均不是 ready。
-
-本批 Tart 只支持整 vCPU、明确虚拟机隔离、SSH、无挂载/加速器，以及显式 best-effort scratch 预算。硬磁盘配额不支持，不可宣称已实施。已知不支持的合同在预览/准入时拒绝。原 Docker 合同与 hash 布局保持不变；Hyper-V 不会因类型存在而被当作 Tart 执行。
-
-## 验证入口与剩余工作
-
-使用仓库已有 Node 24、pnpm 10.28.2 和依赖：
+以下是**完成工具、模板、网络和认证准备后的入口**，本轮未对真实环境执行：
 
 ```sh
-pnpm --filter @hitchlet/contracts exec vitest run test/tart-runtime.test.ts
-pnpm --filter @hitchlet/runtime-agent exec vitest run test/tart-driver.test.ts
-pnpm --filter @hitchlet/controller exec vitest run test/tart-provider.test.ts test/tickets.test.ts
+node apps/runtime-agent/dist/tart-main.js --init
+node apps/runtime-agent/dist/tart-main.js --seal-template <localName>
+node apps/runtime-agent/dist/tart-main.js
 ```
 
-上述测试只使用临时账本、受控假 CLI、合成 VM/guest/network/SSH 端口；没有配置真实身份、创建 VM、访问媒体库或改变网络。实际通过数和提交证据以本批交接回执为准。非目标宿主不会被假 CLI 测试误标为 Tart 宿主支持。
+`--init` 一次性创建非秘密 native namespace UUID，绑定 installation、配置的 runtime identity 和专用 TART_HOME 的路径/dev/inode；它与账本 runtime identity UUID 不是同一概念。普通启动缺标记或绑定不匹配会拒绝。拒绝日常 `~/.tart`，不覆盖已有身份，一个专用 home/manifest 只由一个管理进程控制。
 
-下一步先固定实际 Tart 版本和一张不可变模板，完成可信 Runtime 身份/控制通道、模板内固定初始化、网络正反探针、真实 SSH 与磁盘/VM 回收取证，再接管理发布和正常 server 组合。先完成一种客体单票，再扩另一种。Controller 离线硬到期停止仍不支持，本批没有增加该保证。跨仓 SDK 分发、Windows 原生、Hyper-V 和租客业务保持各自后续范围。
+`--seal-template` 只接受停止的本地模板，流式计算 `config.json`、`disk.img`、`nvram.bin` 的 SHA256，生成 `sealed_local_bundle_v1` 摘要并保存 dev/inode/size/mtimeNs。facts 检查模板与封存状态；不会把 config hash 当完整磁盘 digest，也不会自动封存或每次请求重读整个磁盘。上游 OCI digest 与准备后的本地 bundle digest 不同，后者必须实际生成。
 
-CLI/布局依据 [官方 Quick Start](https://tart.run/quick-start/) 和 [官方命令源码](https://github.com/openai/tart/tree/main/Sources/tart/Commands) 核对；源码合成测试不证明本机已安装版本兼容性。
+可信 API 为 POST `/v1/tart/facts` 和 `/v1/tart/actions`。动作只有 inspect/reconcile/bootstrap.apply/destroy，绑定完整分配身份、controller epoch、nonce、原 Operation 截止时间；等待串行执行后再次检查。短 CLI/GuestAgent exec/地址轮询均受剩余预算约束，原生常驻 `tart run` 不因单次 RPC 到期被误报 absent。超时或盘点不全保持 unknown，可恢复或回收，不释放未查实的 Claim。
 
-## Studio 真实验收前提：只读核对
+clone 前持久意图，clone 成功后先落实例身份再改规格；重试复用已归属实例。clone 已发生而首次身份写盘前中断仍为 unknown，不能凭同名接管/删除。停止 Controller 或 Runtime 不隐含删除 VM；查实不存在才退款/释放 Claim。Controller 离线硬到期强停仍不支持。
 
-本轮仅核对已有状态，没有安装或启用软件：Studio 报告 macOS 27.0.1（26A434）、18 核 CPU、64 GiB 内存、硬件虚拟化标志为 1；项目所在本地卷可用空间约 263 GiB。Homebrew 已存在，但 `brew list --versions tart`、PATH、常见安装路径以及默认 `~/.tart` 都未找到 Tart/模板。这些静态硬件规格可用于规划一张有限测试票；实际可用内存、现有负载以及此 macOS 版本与 Tart 的兼容性仍须在真实验收前核对。
+## 固定 guest 和访问契约
 
-[官方 release](https://github.com/openai/tart/releases/tag/2.41.1) 当前标为 2.41.1；[Cirrus Homebrew 配方](https://github.com/cirruslabs/homebrew-cli/blob/master/tart.rb) 查询时仍为 2.32.1 并依赖 Softnet。不能直接将未固定的 brew 安装等同于本驱动测试目标。真实验收前需固定实际版本、官方文件来源与校验值；本次没有下载二进制、调用新软件或接受新许可。[官方许可说明](https://tart.run/licensing/)将个人工作站使用列为免授权费场景；实际采用版本的条款仍需在安装范围确定后核对，不在本轮购买或配置商业授权。
+recipe 为 `tart-guest-bootstrap-v1`、contractVersion `1`、identityReset `true`，guest_ipv4 + authenticated_ssh + SSH 22。当前固定实现仅 macOS arm64：GuestAgent、现有 `admin` 账户和 guest 内非交互 sudo、`/opt/homebrew/bin/node` 24、准备标记和空闲 22 端口是模板条件；不是自动下载/安装器。Linux 虽保留平台合同和本机驱动声明，尚无对应固定初始化实现，不能据此发布为已验可租。
 
-最小真实闭环仍缺：一张不可变版本的受控 arm64 模板、模板内固定初始化入口、每票短期 SSH 材料和可信指纹交付、具体 VM 网络正反探针与来源范围、以及同一 Runtime 身份的可信控制通道。默认 NAT/IP 发现、来宾自报或合成回执均不能替代这些证明。模板 digest、初始化共享目录及网络路径尚未实际验证，不猜测值、不配置账号或安全策略。应先以一张 macOS 或 Linux 模板完成单票，再扩另一种客体；不引入 Orchard、快照池或额外编排平台。
+固定 helper 由 Runtime 通过受控 stdin 发送给自有 VM；不接受租客脚本。它只接收公钥，guest 内生成的 host 私钥留在 guest。独立 sshd 支持租客 shell/exec/SFTP，禁用密码、root 登录与端口转发，不停止或覆盖未知 sshd。公钥目录供 sshd 切换用户后读取，私钥和状态目录保留私有权限。相同身份/nonce 读回同一回执，不重置凭据。
+
+Controller 验证双方公钥指纹、精确回执与身份、冻结规格、网络合同/修订/新鲜度，再以私钥认证执行固定只读 SSH 检查。SSH 源码目前只经 mock ssh2 测试，既有 Docker SSH 实测不算 Tart 证据。
+
+只支持整 vCPU、虚拟机隔离、无加速器/挂载、显式 best-effort scratch。没有硬磁盘配额；不支持的请求拒绝，不能放宽成已实施。
+
+## 管理与发布
+
+沿用 POST `/v1/provider-connections` 的 Tart 输入和既有注册接口；新增 `/v1/nodes/:nodeId/tart-runtime-config`。SDK 为 `client.admin.inventory.discoverTart`、`client.admin.inventory.configureTartRuntime` 等既有管理流程方法（具体实例入口见 SDK 导出）。Tart profile 不要求 Docker endpoint、桥地址或 userland proxy 字段。
+
+认证 facts 证明来源与模板，**不证明能力资格**。注册后仍 disabled/unknown、空能力；池预算不得超过原始宿主 CPU/内存。独立 Tart attestation 需匹配 namespace、版本、平台、模板 digest 和真实验收报告，沿用现有六 scope、report SHA、network revision 与有效期机制，不借用 Docker 版本/iptables 成功标记。测试报告均明确 synthetic，未提交任何真实节点资格。
+
+发布还要求持久验证完成、验证 allocation 查实清理、相关 Claim 归还、CAS 成功，并通过 fresh authenticated facts 重新核模板。封存或人工资格报告单独不能直接发布。Tart connection revision 的重新提议/轮换尚未提供；当前 discovery 管理初次身份，不承诺生产轮换闭环。管理 GUI 可展示 Tart facts，但尚无 Tart 注册/资格表单，这段使用正常 API/SDK；租客 VM 选择已接入 GUI。
+
+## 验证入口与下一步
+
+使用已有 Node 24、pnpm 10.28.2 和依赖，无需安装新包：
+
+```sh
+pnpm --filter @hitchlet/contracts exec vitest run test/tart-runtime.test.ts test/tart-transport.test.ts
+pnpm --filter @hitchlet/runtime-agent exec vitest run test/tart-driver.test.ts test/tart-main.test.ts test/tart-server.test.ts test/tart-guest-bootstrap.test.ts
+pnpm --filter @hitchlet/controller exec vitest run test/tart-provider.test.ts test/tart-runtime-client.test.ts test/tart-ssh-readiness.test.ts test/tart-admin-publication.test.ts test/validation-lifecycle.test.ts
+```
+
+实际执行结果见当前批交接；测试是受控源码验证，不是安装或 VM 验收。下一段最小源码工作是 VM 网络 contract 到 native 规则、效果读回/正反探针及 server composition；需先固定实际后端和来源地址映射，不能注入合成成功或只删启动 guard。具体 Studio 工具、模板、权限和单票预算见 [实机验收方案](TART-STUDIO-ACCEPTANCE-PLAN.md)。

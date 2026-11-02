@@ -2,9 +2,11 @@ import { parseResponse } from "./response.js";
 import {
   AdminSchemas as S,
   type PortainerConnectionInput,
+  type TartConnectionInput,
   type MachineInput,
   type NodeInput,
   type NodeRuntimeConfigInput,
+  type TartNodeRuntimeConfigInput,
   type NodeCapabilityAttestationInput,
   type NetworkProfileInput,
   type NetworkProfileRevisionInput,
@@ -48,6 +50,15 @@ export class InventoryCommands {
       "/v1/provider-connections",
       "POST",
       S.PortainerConnectionInputSchema.parse(body),
+      (v) => parseResponse(S.ProviderOperationReceiptSchema, v),
+      { key, retry: false },
+    );
+  }
+  discoverTart(body: TartConnectionInput, key: string) {
+    return this.http.request(
+      "/v1/provider-connections",
+      "POST",
+      S.TartConnectionInputSchema.parse(body),
       (v) => parseResponse(S.ProviderOperationReceiptSchema, v),
       { key, retry: false },
     );
@@ -137,6 +148,20 @@ export class InventoryCommands {
       `/v1/nodes/${path(id)}/runtime-config`,
       "PUT",
       S.NodeRuntimeConfigSchema.parse(body),
+      (v) => parseResponse(S.NodeRuntimeConfigReceiptSchema, v),
+      { key, expectedVersion, retry: false },
+    );
+  }
+  configureTartRuntime(
+    id: string,
+    body: TartNodeRuntimeConfigInput,
+    expectedVersion: number,
+    key: string,
+  ) {
+    return this.http.request(
+      `/v1/nodes/${path(id)}/tart-runtime-config`,
+      "PUT",
+      S.TartNodeRuntimeConfigSchema.parse(body),
       (v) => parseResponse(S.NodeRuntimeConfigReceiptSchema, v),
       { key, expectedVersion, retry: false },
     );

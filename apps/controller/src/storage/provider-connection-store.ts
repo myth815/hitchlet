@@ -2,12 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { Storage } from "./index.js";
 import { StorageError } from "./index.js";
 import type { PortainerEvidence } from "../providers/port.js";
+import type { TartRuntimeFacts } from "@hitchlet/contracts/internal";
 import {
   hash,
   integer,
   nullableString,
   parseJson,
   projectEvidence,
+  projectTartEvidence,
   type Row,
 } from "./admin-store-utils.js";
 
@@ -37,7 +39,9 @@ export class SQLiteProviderConnectionStore {
       evidence:
         r.evidence_json === null
           ? null
-          : projectEvidence(String(r.evidence_json)),
+          : String(r.backend_kind) === "tart"
+            ? projectTartEvidence(String(r.evidence_json))
+            : projectEvidence(String(r.evidence_json)),
     }));
   }
   discoveryOperation(operationId: string) {
@@ -45,6 +49,171 @@ export class SQLiteProviderConnectionStore {
       "SELECT id,state,intent_json,result_json,created_at_ms,updated_at_ms FROM operations WHERE id=? AND kind='provider.discover'",
       [operationId],
     );
+  }
+  async beginTartDiscovery(
+    operationId: string,
+    target: {
+      runtimeIdentityId: string;
+      runtimeProfile: Record<string, unknown>;
+    },
+  ) {
+    const installation = await this.db.get<Row>(
+      "SELECT installation_id,controller_epoch FROM installations WHERE singleton=1",
+    );
+    if (!installation) throw new Error("Installation is not initialized");
+    const existing = await this.discoveryOperation(operationId);
+    const saved = existing?.intent_json
+      ? parseJson(String(existing.intent_json))
+      : undefined;
+    const connectionId =
+        typeof saved?.connectionId === "string"
+          ? saved.connectionId
+          : randomUUID(),
+      revisionId =
+        typeof saved?.revisionId === "string" ? saved.revisionId : randomUUID(),
+      intent = {
+        type: "tart.discovery",
+        runtimeIdentityId: target.runtimeIdentityId,
+        runtimeProfile: target.runtimeProfile,
+        connectionId,
+        revisionId,
+      },
+      time = this.now();
+    await this.db.run(
+      "INSERT INTO operations(id,installation_id,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms) VALUES(?,?,?,'provider.discover',?,?,'planned',?,?,?,?,?,?) ON CONFLICT(id) DO NOTHING",
+      [
+        operationId,
+        String(installation.installation_id),
+        Number(installation.controller_epoch),
+        operationId,
+        `provider.discover:${operationId}`,
+        hash(JSON.stringify(intent)),
+        JSON.stringify(intent),
+        time,
+        time + 120_000,
+        time,
+        time,
+      ],
+    );
+    const op = await this.discoveryOperation(operationId);
+    if (!op || typeof op.intent_json !== "string")
+      throw new RangeError("Tart discovery operation not found");
+    const persisted = parseJson(String(op.intent_json));
+    if (
+      persisted.type !== "tart.discovery" ||
+      persisted.runtimeIdentityId !== target.runtimeIdentityId ||
+      JSON.stringify(persisted.runtimeProfile) !==
+        JSON.stringify(target.runtimeProfile)
+    )
+      throw new RangeError("Tart discovery retry must use its stored target");
+    if (op.state === "succeeded" && typeof op.result_json === "string")
+      return {
+        complete: parseJson(String(op.result_json)),
+        installationId: String(installation.installation_id),
+        connectionId: String(persisted.connectionId),
+        revisionId: String(persisted.revisionId),
+      };
+    await this.db.run(
+      "UPDATE operations SET state='running',attempt_count=attempt_count+1,version=version+1,updated_at_ms=? WHERE id=? AND state IN ('planned','running','unknown')",
+      [this.now(), operationId],
+    );
+    return {
+      complete: null,
+      installationId: String(installation.installation_id),
+      connectionId: String(persisted.connectionId),
+      revisionId: String(persisted.revisionId),
+    };
+  }
+
+  async completeTartDiscovery(
+    operationId: string,
+    target: {
+      runtimeIdentityId: string;
+      runtimeProfile: Record<string, unknown>;
+    },
+    connectionId: string,
+    revisionId: string,
+    facts: TartRuntimeFacts,
+  ) {
+    const runtime = await this.db.get<Row>(
+      "SELECT id FROM runtime_identities WHERE backend_kind='tart' AND native_kind='tart_host' AND native_id=?",
+      [facts.nativeRuntimeNamespaceId],
+    );
+    const existing = await this.db.get<Row>(
+      "SELECT id FROM provider_connections WHERE runtime_identity_id=?",
+      [runtime?.id ?? ""],
+    );
+    if (existing) {
+      const result = {
+        duplicateRuntime: true,
+        connectionId: String(existing.id),
+        nativeRuntimeNamespaceId: facts.nativeRuntimeNamespaceId,
+      };
+      await this.db.run(
+        "UPDATE operations SET state='succeeded',result_json=?,version=version+1,updated_at_ms=? WHERE id=? AND state='running'",
+        [JSON.stringify(result), this.now(), operationId],
+      );
+      return { operationId, ...result };
+    }
+    const time = this.now(),
+      profile = target.runtimeProfile,
+      agent = profile.runtimeAgent as Record<string, unknown>,
+      result = {
+        duplicateRuntime: false,
+        runtimeIdentityId: target.runtimeIdentityId,
+        connectionId,
+        connectionRevisionId: revisionId,
+        nativeRuntimeNamespaceId: facts.nativeRuntimeNamespaceId,
+        facts,
+      };
+    await this.db.batchTransaction([
+      ...(!runtime
+        ? [
+            {
+              kind: "run" as const,
+              sql: "INSERT INTO runtime_identities(id,backend_kind,native_kind,native_id,created_at_ms) VALUES(?,'tart','tart_host',?,?)",
+              params: [
+                target.runtimeIdentityId,
+                facts.nativeRuntimeNamespaceId,
+                time,
+              ],
+            },
+          ]
+        : []),
+      {
+        kind: "run",
+        sql: "INSERT INTO provider_connections(id,backend_kind,runtime_identity_id,created_at_ms,updated_at_ms) VALUES(?,'tart',?,?,?)",
+        params: [connectionId, target.runtimeIdentityId, time, time],
+      },
+      {
+        kind: "run",
+        sql: "INSERT INTO provider_connection_revisions(id,connection_id,revision,endpoint_ref,provider_endpoint_id,secret_version_ref,config_json,verified_runtime_identity_id,verified_at_ms,evidence_json,created_at_ms) VALUES(?,?,1,?,?,NULL,?,?,?,?,?)",
+        params: [
+          revisionId,
+          connectionId,
+          String(agent.baseUrl),
+          String(agent.id),
+          JSON.stringify(profile),
+          target.runtimeIdentityId,
+          time,
+          JSON.stringify(facts),
+          time,
+        ],
+      },
+      {
+        kind: "run",
+        sql: "UPDATE provider_connections SET current_revision_id=?,version=version+1,updated_at_ms=? WHERE id=? AND runtime_identity_id=? AND current_revision_id IS NULL",
+        params: [revisionId, time, connectionId, target.runtimeIdentityId],
+        expectChanges: 1,
+      },
+      {
+        kind: "run",
+        sql: "UPDATE operations SET state='succeeded',result_json=?,version=version+1,updated_at_ms=? WHERE id=? AND state='running'",
+        params: [JSON.stringify(result), time, operationId],
+        expectChanges: 1,
+      },
+    ]);
+    return { operationId, ...result };
   }
   connectionRevisionOperation(operationId: string) {
     return this.db.get<Row>(

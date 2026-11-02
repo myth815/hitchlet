@@ -57,10 +57,11 @@ export class ManagementService {
         imageId: string;
         imageName: string;
         version: string;
-        kind: "container";
         architectures: string[];
         platforms: {
+          kind: "container" | "vm";
           architecture: string;
+          guestOs: string;
           artifactId: string;
           digest: string;
           minimumResources: {
@@ -86,7 +87,9 @@ export class ManagementService {
       if (existing) {
         existing.architectures.push(String(r.architecture));
         existing.platforms.push({
+          kind: String(r.environment_kind) as "container" | "vm",
           architecture: String(r.architecture),
+          guestOs: String(r.guest_os),
           artifactId: String(r.artifact_id),
           digest: String(r.content_digest),
           minimumResources: amounts,
@@ -97,11 +100,12 @@ export class ManagementService {
           imageId: String(r.image_id),
           imageName: String(r.image_name),
           version: String(r.version),
-          kind: "container",
           architectures: [String(r.architecture)],
           platforms: [
             {
+              kind: String(r.environment_kind) as "container" | "vm",
               architecture: String(r.architecture),
+              guestOs: String(r.guest_os),
               artifactId: String(r.artifact_id),
               digest: String(r.content_digest),
               minimumResources: amounts,

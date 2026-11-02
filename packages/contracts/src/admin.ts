@@ -11,6 +11,7 @@ import {
   TicketViewSchema,
 } from "./schemas.js";
 import { ManagementSchemas as M } from "./management.js";
+import { tartRuntimeFactsSchema } from "./tart-transport.js";
 
 const id = z.string().uuid();
 const admissionState = z.enum(["enabled", "draining", "disabled"]);
@@ -74,6 +75,42 @@ const storageConfig = z
   })
   .strict();
 const sha = z.string().regex(/^sha256:[a-f0-9]{64}$/);
+function validateDraftPlatform(
+  value: {
+    backendKind: "portainer" | "tart";
+    kind: "container" | "vm";
+    architecture: "amd64" | "arm64";
+    guestOs: "linux" | "macos";
+    artifactRef: string;
+  },
+  context: z.RefinementCtx,
+) {
+  if (value.backendKind === "portainer") {
+    if (
+      value.kind !== "container" ||
+      value.guestOs !== "linux" ||
+      !/^.+@sha256:[a-f0-9]{64}$/.test(value.artifactRef)
+    )
+      context.addIssue({
+        code: "custom",
+        message:
+          "Portainer artifacts must be Linux containers pinned by OCI digest",
+        path: ["artifactRef"],
+      });
+    return;
+  }
+  if (
+    value.kind !== "vm" ||
+    value.architecture !== "arm64" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.artifactRef)
+  )
+    context.addIssue({
+      code: "custom",
+      message:
+        "Tart artifacts must name an immutable local arm64 Linux or macOS VM template",
+      path: ["artifactRef"],
+    });
+}
 export type AdminImageValidationRequest = z.input<
   typeof ImageValidationRequestSchema
 >;
@@ -350,20 +387,35 @@ export const NodeRuntimeConfigSchema = z
     managementDenyRules: z.array(runtimeDenyRule),
   })
   .strict();
-export const NodeCapabilityAttestationSchema = z
+/** Tart has no Docker endpoint, network CIDR, or userland proxy configuration. */
+export const TartNodeRuntimeConfigSchema = z
   .object({
-    expectedEngineId: z.string().min(1).max(200),
-    expectedDockerVersion: z.string().min(1).max(100),
-    expectedPortainerVersion: z.string().min(1).max(100),
-    architecture: z.enum(["amd64", "arm64"]),
-    checkedAt: z.string().datetime({ offset: true }),
-    /** Evidence lifetime is an explicit bounded re-attestation interval; observations never extend it. */
-    validForSeconds: z
-      .number()
-      .int()
-      .min(3600)
-      .max(30 * 24 * 3600)
-      .default(3600),
+    runtimeAgent: z
+      .object({
+        id,
+        baseUrl: z.string().url(),
+        tokenSecretRef: secretRef,
+        caSecretRef: secretRef,
+        clientCertSecretRef: secretRef,
+        clientKeySecretRef: secretRef,
+      })
+      .strict(),
+    managementDenyRevisionId: id,
+    managementDenyRules: z.array(runtimeDenyRule),
+  })
+  .strict();
+export const TartConnectionInputSchema = z
+  .object({
+    runtimeIdentityId: id,
+    runtimeProfile: TartNodeRuntimeConfigSchema,
+  })
+  .strict();
+export const ProviderConnectionInputSchema = z.union([
+  PortainerConnectionInputSchema,
+  TartConnectionInputSchema,
+]);
+const capabilityReport = z
+  .object({
     report: z
       .object({
         runId: id,
@@ -402,12 +454,60 @@ export const NodeCapabilityAttestationSchema = z
           .strict(),
       })
       .strict(),
+  })
+  .strict();
+const attestationLifetime = z
+  .number()
+  .int()
+  .min(3600)
+  .max(30 * 24 * 3600)
+  .default(3600);
+export const PortainerCapabilityAttestationSchema = z
+  .object({
+    expectedEngineId: z.string().min(1).max(200),
+    expectedDockerVersion: z.string().min(1).max(100),
+    expectedPortainerVersion: z.string().min(1).max(100),
+    architecture: z.enum(["amd64", "arm64"]),
+    checkedAt: z.string().datetime({ offset: true }),
+    validForSeconds: attestationLifetime,
+    report: capabilityReport.shape.report,
     networkProfileRevisionIds: z.array(id).min(1),
     storageProfileRevisionIds: z.array(id).default([]),
   })
-  .strict()
+  .strict();
+export const TartCapabilityAttestationSchema = z
+  .object({
+    backendKind: z.literal("tart"),
+    expectedNamespaceId: id,
+    expectedTartVersion: z.string().min(1).max(100),
+    templateRef: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+    templateDigest: sha,
+    guestOs: z.enum(["linux", "macos"]),
+    architecture: z.literal("arm64"),
+    checkedAt: z.string().datetime({ offset: true }),
+    validForSeconds: attestationLifetime,
+    report: z
+      .object({
+        runId: id,
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        scopes: capabilityReport.shape.report.shape.scopes,
+      })
+      .strict(),
+    networkProfileRevisionIds: z.array(id).min(1),
+    storageProfileRevisionIds: z.array(id).length(0).default([]),
+  })
+  .strict();
+export const NodeCapabilityAttestationSchema = z
+  .union([
+    PortainerCapabilityAttestationSchema,
+    TartCapabilityAttestationSchema,
+  ])
   .superRefine((value, ctx) => {
-    if (value.storageProfileRevisionIds.length && !value.report.storageScopes)
+    if (
+      !("backendKind" in value) &&
+      value.storageProfileRevisionIds.length &&
+      !("storageScopes" in value.report && value.report.storageScopes)
+    )
       ctx.addIssue({
         code: "custom",
         path: ["report", "storageScopes"],
@@ -471,36 +571,50 @@ export const ImageDraftSchema = z
     name: z.string().min(1).max(120),
     description: z.string().max(2000).optional(),
     version: z.string().min(1).max(120),
+    backendKind: z.enum(["portainer", "tart"]).default("portainer"),
+    kind: z.enum(["container", "vm"]).default("container"),
     architecture: z.enum(["amd64", "arm64"]),
-    artifactRef: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/),
+    guestOs: z.enum(["linux", "macos"]).default("linux"),
+    /** OCI digest ref for Portainer; sealed local Tart template name for Tart. */
+    artifactRef: z.string().min(1).max(240),
     digest: sha,
     minimumResources,
     bootstrap,
     access,
     authorizedConsumerIds: z.array(id).min(1),
   })
-  .strict();
+  .strict()
+  .superRefine(validateDraftPlatform);
 export const DraftArtifactSchema = z
   .object({
+    backendKind: z.enum(["portainer", "tart"]).default("portainer"),
+    kind: z.enum(["container", "vm"]).default("container"),
     architecture: z.enum(["amd64", "arm64"]),
-    artifactRef: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/),
+    guestOs: z.enum(["linux", "macos"]).default("linux"),
+    /** OCI digest ref for Portainer; sealed local Tart template name for Tart. */
+    artifactRef: z.string().min(1).max(240),
     digest: sha,
     minimumResources,
     requirements,
     access,
   })
-  .strict();
+  .strict()
+  .superRefine(validateDraftPlatform);
 export const ImageVersionDraftSchema = z
   .object({
     version: z.string().min(1).max(120),
+    backendKind: z.enum(["portainer", "tart"]).default("portainer"),
+    kind: z.enum(["container", "vm"]).default("container"),
     architecture: z.enum(["amd64", "arm64"]),
-    artifactRef: z.string().regex(/^.+@sha256:[a-f0-9]{64}$/),
+    guestOs: z.enum(["linux", "macos"]).default("linux"),
+    artifactRef: z.string().min(1).max(240),
     digest: sha,
     minimumResources,
     requirements,
     access,
   })
-  .strict();
+  .strict()
+  .superRefine(validateDraftPlatform);
 export const ImageValidationRequestSchema = z
   .object({
     imageArtifactId: id,
@@ -628,10 +742,10 @@ export const DraftVersionViewSchema = z
       z
         .object({
           id,
-          provider: z.literal("portainer"),
-          kind: z.literal("container"),
+          provider: z.enum(["portainer", "tart"]),
+          kind: z.enum(["container", "vm"]),
           architecture: z.enum(["amd64", "arm64"]),
-          guestOs: z.literal("linux"),
+          guestOs: z.enum(["linux", "macos"]),
           artifactRef: z.string(),
           digest: sha,
           minimumResources,
@@ -662,7 +776,7 @@ export const PortainerEvidenceSchema = z
 export const ProviderConnectionViewSchema = z
   .object({
     id,
-    backendKind: z.literal("portainer"),
+    backendKind: z.enum(["portainer", "tart"]),
     runtimeIdentityId: id,
     currentRevisionId: id.nullable(),
     enabled: z.boolean(),
@@ -671,7 +785,9 @@ export const ProviderConnectionViewSchema = z
     endpointUrl: z.string().url().nullable(),
     environmentId: z.string().nullable(),
     verifiedAtMs: z.number().int().nonnegative().nullable(),
-    evidence: PortainerEvidenceSchema.nullable(),
+    evidence: z
+      .union([PortainerEvidenceSchema, tartRuntimeFactsSchema])
+      .nullable(),
   })
   .strict();
 export const NodeViewSchema = z
@@ -934,6 +1050,8 @@ export const AdminSchemas = {
   ImageAliasRequestSchema,
   ImageAliasReceiptSchema,
   PortainerConnectionInputSchema,
+  TartConnectionInputSchema,
+  ProviderConnectionInputSchema,
   ProviderOperationReceiptSchema,
   ImageVersionDraftSchema,
   ConnectionActivationSchema,
@@ -948,6 +1066,7 @@ export const AdminSchemas = {
   NodeAdmissionModeSchema,
   NodeAdmissionModeReceiptSchema,
   NodeRuntimeConfigSchema,
+  TartNodeRuntimeConfigSchema,
   NodeCapabilityAttestationSchema,
   NetworkProfileInputSchema,
   NetworkProfileRevisionSchema,
@@ -986,9 +1105,16 @@ export * from "./management.js";
 export type PortainerConnectionInput = z.input<
   typeof PortainerConnectionInputSchema
 >;
+export type TartConnectionInput = z.input<typeof TartConnectionInputSchema>;
+export type ProviderConnectionInput = z.input<
+  typeof ProviderConnectionInputSchema
+>;
 export type MachineInput = z.input<typeof MachineInputSchema>;
 export type NodeInput = z.input<typeof NodeInputSchema>;
 export type NodeRuntimeConfigInput = z.input<typeof NodeRuntimeConfigSchema>;
+export type TartNodeRuntimeConfigInput = z.input<
+  typeof TartNodeRuntimeConfigSchema
+>;
 export type NodeCapabilityAttestationInput = z.input<
   typeof NodeCapabilityAttestationSchema
 >;
@@ -1062,10 +1188,13 @@ export function managementRequestContract(
         response: M.ManagementOperationSchema,
         cas: false,
       };
-    if (
-      path === "/v1/provider-connections" ||
-      route("/v1/provider-connections/:id/revisions")
-    )
+    if (path === "/v1/provider-connections")
+      return {
+        request: ProviderConnectionInputSchema,
+        response: ProviderOperationReceiptSchema,
+        cas: false,
+      };
+    if (route("/v1/provider-connections/:id/revisions"))
       return {
         request: PortainerConnectionInputSchema,
         response: ProviderOperationReceiptSchema,
@@ -1211,6 +1340,12 @@ export function managementRequestContract(
     if (route("/v1/nodes/:id/runtime-config"))
       return {
         request: NodeRuntimeConfigSchema,
+        response: NodeRuntimeConfigReceiptSchema,
+        cas: true,
+      };
+    if (route("/v1/nodes/:id/tart-runtime-config"))
+      return {
+        request: TartNodeRuntimeConfigSchema,
         response: NodeRuntimeConfigReceiptSchema,
         cas: true,
       };

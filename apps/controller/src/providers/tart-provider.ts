@@ -35,10 +35,9 @@ const EVIDENCE_MAX_AGE_MS = 30_000;
 export type TartRuntimePort = Readonly<{
   inspect(identity: TartAllocationIdentity): Promise<TartInspection>;
   reconcile(request: TartReconcileRequest): Promise<TartInspection>;
-  recordBootstrapReceipt(
+  bootstrapApply(
     identity: TartAllocationIdentity,
     request: TartGuestBootstrapRequest,
-    receipt: TartGuestBootstrapReceipt,
   ): Promise<TartInspection>;
   destroy(identity: TartAllocationIdentity): Promise<TartInspection>;
 }>;
@@ -62,11 +61,14 @@ export type TartNetworkEvidence = Readonly<{
   expiresAt: string;
 }>;
 
-type TartSshProbeEvidence = Readonly<{
+export type TartSshProbeEvidence = Readonly<{
   authenticated: true;
   username: string;
   hostKeyFingerprint: string;
   clientPublicKeyFingerprint: string;
+  guestOS: "linux" | "macos";
+  architecture: "arm64";
+  scratchWritable: true;
   /** Optional authenticated guest observation; scratch remains best-effort. */
   observedScratchMiB?: number;
 }>;
@@ -99,6 +101,9 @@ export type TartExecutionProviderOptions = Readonly<{
         hostPublicKey: string;
         hostKeyFingerprint: string;
         clientPublicKeyFingerprint: string;
+        guestOS: "linux" | "macos";
+        architecture: "arm64";
+        deadlineMs: number;
       }>,
     ): Promise<TartSshProbeEvidence>;
   }>;
@@ -285,7 +290,7 @@ export class TartExecutionProvider implements ExecutionPort {
     assertBootstrapReceipt(receipt, request, plan, this.now());
 
     const persisted = tartInspectionSchema.parse(
-      await resolved.runtime.recordBootstrapReceipt(identity, request, receipt),
+      await resolved.runtime.inspect(identity),
     );
     assertInspectionOwner(persisted, identity);
     if (
@@ -305,6 +310,9 @@ export class TartExecutionProvider implements ExecutionPort {
       hostPublicKey: receipt.hostPublicKey,
       hostKeyFingerprint: receipt.hostKeyFingerprint,
       clientPublicKeyFingerprint: materials.fingerprint,
+      guestOS: plan.artifact.guestOS!,
+      architecture: "arm64",
+      deadlineMs: plan.deadlineMs,
     });
     if (
       this.now() >= plan.deadlineMs ||
@@ -313,6 +321,9 @@ export class TartExecutionProvider implements ExecutionPort {
       ssh.username !== plan.access.account ||
       ssh.hostKeyFingerprint !== receipt.hostKeyFingerprint ||
       ssh.clientPublicKeyFingerprint !== materials.fingerprint ||
+      ssh.guestOS !== plan.artifact.guestOS ||
+      ssh.architecture !== plan.artifact.architecture ||
+      ssh.scratchWritable !== true ||
       (ssh.observedScratchMiB !== undefined &&
         (!Number.isSafeInteger(ssh.observedScratchMiB) ||
           ssh.observedScratchMiB < 0))

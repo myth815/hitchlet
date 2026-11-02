@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { loadConfig, redact } from "../src/config.js";
+import {
+  assertTartExecutionAdaptersConfigured,
+  loadConfig,
+  redact,
+} from "../src/config.js";
 describe("configuration", () => {
   it("requires a data directory", () => {
     expect(() => loadConfig({})).toThrow(/DATA_DIR/);
@@ -16,6 +20,27 @@ describe("configuration", () => {
     expect(loadConfig({ DATA_DIR: "/tmp/hitchlet" }).EXECUTION_MODE).toBe(
       "disabled",
     );
+  });
+  it("requires the encrypted secret store for Portainer and Tart execution", () => {
+    expect(() =>
+      loadConfig({ DATA_DIR: "/tmp/hitchlet", EXECUTION_MODE: "portainer" }),
+    ).toThrow(/HITCHLET_SECRET_KEY_FILE/);
+    expect(() =>
+      loadConfig({ DATA_DIR: "/tmp/hitchlet", EXECUTION_MODE: "tart" }),
+    ).toThrow(/HITCHLET_SECRET_KEY_FILE/);
+    expect(
+      loadConfig({
+        DATA_DIR: "/tmp/hitchlet",
+        EXECUTION_MODE: "tart",
+        HITCHLET_SECRET_KEY_FILE: "/tmp/hitchlet.key",
+      }).EXECUTION_MODE,
+    ).toBe("tart");
+    expect(() => assertTartExecutionAdaptersConfigured("tart")).toThrow(
+      "Tart execution is not configured: native VM network enforcement/verification adapter and production server composition are not configured",
+    );
+    expect(() =>
+      assertTartExecutionAdaptersConfigured("disabled"),
+    ).not.toThrow();
   });
   it("ignores unrelated process environment variables", () => {
     expect(loadConfig({ ...process.env, DATA_DIR: "/tmp/hitchlet" }).PORT).toBe(

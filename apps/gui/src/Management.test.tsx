@@ -48,11 +48,12 @@ const catalog = {
       imageId: version,
       imageName: "Node workspace",
       version: "v1",
-      kind: "container",
       architectures: ["arm64"],
       platforms: [
         {
+          kind: "container",
           architecture: "arm64",
+          guestOs: "linux",
           artifactId: id,
           digest: `sha256:${"a".repeat(64)}`,
           minimumResources: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
@@ -251,6 +252,108 @@ describe("D24 structured GUI and recovery", () => {
           isolation: "shared_kernel",
           scratchEnforcement: "best_effort",
         }),
+      }),
+    );
+  });
+  it("submits a Tart VM request with whole vCPUs, best-effort scratch, and no storage mounts", async () => {
+    const vmVersionId = "00000000-0000-4000-8000-000000000005";
+    const vmCatalog = {
+      ...catalog,
+      versions: [
+        catalog.versions[0]!,
+        {
+          ...catalog.versions[0]!,
+          id: vmVersionId,
+          version: "v2",
+          platforms: [
+            {
+              kind: "vm" as const,
+              architecture: "arm64",
+              guestOs: "macos",
+              artifactId: "00000000-0000-4000-8000-000000000004",
+              digest: `sha256:${"b".repeat(64)}`,
+              minimumResources: {
+                cpuMillis: 2000,
+                memoryMiB: 2048,
+                scratchMiB: 0,
+              },
+            },
+          ],
+        },
+      ],
+      storage: [
+        {
+          id: "00000000-0000-4000-8000-000000000006",
+          name: "Authorized fixture storage",
+          revisionId: "00000000-0000-4000-8000-000000000007",
+          revision: 1,
+          allowedSubpaths: ["work"],
+          allowedModes: ["read_only"],
+        },
+      ],
+    };
+    const calls: { path: string; body: unknown }[] = [];
+    const client = new HitchletClient("https://controller.test", {
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/catalog") return Response.json(vmCatalog);
+          calls.push({ path, body: JSON.parse(String(init?.body)) });
+          return Response.json({
+            observedAtMs: 2,
+            capacityGuaranteed: false,
+            eligibleNodeIds: [],
+            reasons: ["No capacity reserved"],
+          });
+        },
+      }),
+      acquire = vi.fn();
+    const { element } = await mount(
+      <AuthorizedAcquire
+        client={client}
+        canOperate
+        busy={false}
+        blocked={false}
+        onAcquire={acquire}
+      />,
+    );
+    const selects = element.querySelectorAll("select");
+    const hardScratch = element.querySelector<HTMLInputElement>(
+      'input[type="checkbox"]',
+    )!;
+    await act(async () => {
+      hardScratch.click();
+    });
+    expect(hardScratch.checked).toBe(true);
+    await click(element, "添加授权挂载");
+    expect(element.textContent).toContain("移除此挂载");
+    await change(selects[0]!, vmVersionId);
+    expect(hardScratch.disabled).toBe(true);
+    expect(hardScratch.checked).toBe(false);
+    expect(
+      element.querySelector<HTMLInputElement>('input[type="number"]')?.step,
+    ).toBe("1000");
+    await click(element, "可行性预检");
+    await submit(element.querySelector("form")!);
+    expect(calls[0]!.path).toBe("/v1/catalog/preview");
+    expect(calls[0]!.body).toMatchObject({
+      image: { versionId: vmVersionId },
+      kind: "vm",
+      resources: {
+        cpuMillis: 2000,
+        isolation: "virtual_machine",
+        scratchEnforcement: "best_effort",
+      },
+      storage: [],
+    });
+    expect(acquire).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "vm",
+        resources: expect.objectContaining({
+          cpuMillis: 2000,
+          isolation: "virtual_machine",
+          scratchEnforcement: "best_effort",
+        }),
+        storage: [],
       }),
     );
   });
