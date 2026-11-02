@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   imageRoot: "",
   result: undefined as unknown,
   error: undefined as unknown,
+  failEnginePreflight: false,
   finished: () => {},
   request: undefined as RuntimeStorageRequest | undefined,
 }));
@@ -28,16 +29,32 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     }),
   };
 });
-vi.mock("../src/engine.js", () => ({
-  LocalEngine: class {
+vi.mock("../src/engine.js", () => {
+  class EnginePreflightError extends Error {
+    constructor(
+      readonly code:
+        | "DOCKER_ROOTLESS_UNSUPPORTED"
+        | "DOCKER_SECURITY_OPTIONS_UNVERIFIABLE",
+      message: string,
+    ) {
+      super(message);
+    }
+  }
+  class LocalEngine {
     async assertEngine() {
+      if (state.failEnginePreflight)
+        throw new EnginePreflightError(
+          "DOCKER_ROOTLESS_UNSUPPORTED",
+          "PRIVATE_DOCKER_DETAIL",
+        );
       return "fixture-engine";
     }
     async imageStoreRoot() {
       return state.imageRoot;
     }
-  },
-}));
+  }
+  return { EnginePreflightError, LocalEngine };
+});
 vi.mock("../src/firewall.js", () => ({
   IptablesFirewall: class {},
   IptablesRunner: class {
@@ -160,5 +177,48 @@ it("projects only storage identity from the complete deployed Agent configuratio
         if (!before.get(event)?.includes(listener))
           process.removeListener(event, listener);
     await rm(directory, { recursive: true, force: true });
+  }
+});
+
+it("prints a fixed rootless diagnostic from startup preflight without exposing Engine details", async () => {
+  const config = {
+    host: "127.0.0.1",
+    port: 17222,
+    installationId: "fixture-installation",
+    runtimeIdentityId: "fixture-runtime",
+    nativeEngineId: "fixture-engine",
+    agentId: "fixture-agent",
+    dockerHost: "unix:///var/run/docker.sock",
+    ipv6SysctlRoot: "/run/host-ipv6-conf",
+    journalFile: "/fixture/journal.json",
+    tokenFile: "/fixture/token",
+    caFile: "/fixture/ca.pem",
+    certFile: "/fixture/cert.pem",
+    keyFile: "/fixture/key.pem",
+    storageRoots: [],
+  };
+  const stderr = vi
+    .spyOn(process.stderr, "write")
+    .mockImplementation(() => true);
+  const previousExitCode = process.exitCode;
+  try {
+    state.config = JSON.stringify(config);
+    state.failEnginePreflight = true;
+    vi.stubEnv("HITCHLET_RUNTIME_AGENT_CONFIG", "/fixture/runtime-agent.json");
+    await vi.resetModules();
+    await import("../src/main.js");
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(stderr).toHaveBeenCalledWith(
+      "Hitchlet Runtime Agent startup failed: rootless Docker Engine is not supported\n",
+    );
+    expect(stderr.mock.calls.flat().join(" ")).not.toContain(
+      "PRIVATE_DOCKER_DETAIL",
+    );
+    expect(process.exitCode).toBe(1);
+  } finally {
+    state.failEnginePreflight = false;
+    process.exitCode = previousExitCode;
+    stderr.mockRestore();
   }
 });

@@ -1,17 +1,32 @@
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  LocalEngine,
   disableAndVerifyBridgeIPv6,
   enableAndVerifyBridgeNetfilter,
   parseBridgeNetfilter,
   parseFirewallBackend,
+  parseDockerSecurityOptions,
   requireBridgeNetfilterModule,
   verifyBridgeNetfilter,
   verifyBridgeNetfilterSysfs,
   verifyBridgeIPv6Disabled,
 } from "../src/engine.js";
+
+const dockerExec = vi.hoisted(() => ({ execFile: vi.fn() }));
+vi.mock("node:child_process", () => ({ execFile: dockerExec.execFile }));
+vi.mock("node:util", () => ({
+  promisify:
+    (fn: (...args: any[]) => void) =>
+    (...args: any[]) =>
+      new Promise((resolve, reject) =>
+        fn(...args, (error: Error | null, stdout: string, stderr: string) =>
+          error ? reject(error) : resolve({ stdout, stderr }),
+        ),
+      ),
+}));
 
 const tempDirs: string[] = [];
 afterEach(async () => {
@@ -55,6 +70,93 @@ describe("Docker 29 firewall info", () => {
         ),
       ).toThrow(/Cannot verify Docker/);
     }
+  });
+});
+
+describe("local Engine startup preflight", () => {
+  const config = {
+    dockerHost: "unix:///run/docker.sock",
+    nativeEngineId: "engine-expected",
+    ipv6SysctlRoot: "/run/hitchlet-ipv6",
+  };
+  const response = (overrides: Record<string, unknown> = {}) => ({
+    ID: "engine-expected",
+    SecurityOptions: ["name=seccomp,profile=builtin", "name=cgroupns"],
+    FirewallBackend: {
+      Driver: "iptables",
+      Info: [["EnableUserlandProxy", "true"]],
+    },
+    ...overrides,
+  });
+  const mockInfo = (value: unknown) => {
+    dockerExec.execFile.mockImplementation((...args: any[]) => {
+      const callback = args.at(-1);
+      callback?.(null, JSON.stringify(value), "");
+    });
+  };
+
+  it("rejects Docker's rootless SecurityOptions shape with a fixed diagnostic using one info call", async () => {
+    mockInfo(
+      response({
+        SecurityOptions: [
+          "name=seccomp,profile=builtin",
+          "name=rootless",
+          "name=cgroupns",
+        ],
+        FirewallBackend: { Driver: "unsupported", Info: [] },
+      }),
+    );
+    const engine = new LocalEngine(config);
+
+    await expect(engine.assertEngine()).rejects.toMatchObject({
+      code: "DOCKER_ROOTLESS_UNSUPPORTED",
+      message: "Rootless Docker Engine is not supported",
+    });
+    expect(dockerExec.execFile).toHaveBeenCalledTimes(1);
+    expect(dockerExec.execFile.mock.calls[0]?.[1]).toEqual([
+      "--host",
+      config.dockerHost,
+      "info",
+      "--format",
+      "{{json .}}",
+    ]);
+  });
+
+  it("keeps Engine identity mismatch ahead of SecurityOptions parsing", async () => {
+    mockInfo(
+      response({
+        ID: "different-engine",
+        SecurityOptions: undefined,
+      }),
+    );
+    await expect(new LocalEngine(config).assertEngine()).rejects.toThrow(
+      "Native Engine identity mismatch",
+    );
+  });
+
+  it("fails closed on missing or malformed SecurityOptions but accepts other names", async () => {
+    expect(() => parseDockerSecurityOptions(undefined)).toThrow(
+      "Cannot verify Docker Engine security options",
+    );
+    expect(() => parseDockerSecurityOptions(["name=seccomp", 7])).toThrow(
+      "Cannot verify Docker Engine security options",
+    );
+    expect(
+      parseDockerSecurityOptions([
+        "name=seccomp,profile=builtin",
+        "name=cgroupns",
+        "name=future-engine-feature",
+      ]),
+    ).toEqual([
+      "name=seccomp,profile=builtin",
+      "name=cgroupns",
+      "name=future-engine-feature",
+    ]);
+
+    mockInfo(response());
+    await expect(new LocalEngine(config).assertEngine()).resolves.toBe(
+      config.nativeEngineId,
+    );
   });
 });
 

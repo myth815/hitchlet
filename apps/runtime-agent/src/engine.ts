@@ -9,6 +9,21 @@ const execute = promisify(execFile);
 const LABEL = "io.hitchlet";
 type Json = Record<string, any>;
 
+export type EnginePreflightErrorCode =
+  | "DOCKER_ENGINE_INFO_UNVERIFIABLE"
+  | "DOCKER_SECURITY_OPTIONS_UNVERIFIABLE"
+  | "DOCKER_ROOTLESS_UNSUPPORTED";
+
+export class EnginePreflightError extends Error {
+  constructor(
+    readonly code: EnginePreflightErrorCode,
+    message: string,
+  ) {
+    super(message);
+    this.name = "EnginePreflightError";
+  }
+}
+
 export type EngineConfig = Readonly<{
   dockerHost: string;
   nativeEngineId: string;
@@ -38,13 +53,40 @@ export class LocalEngine {
   }
 
   async assertEngine(): Promise<string> {
-    const id = await this.docker(["info", "--format", "{{.ID}}"]);
+    const info = await this.engineInfo();
+    const id = typeof info.ID === "string" ? info.ID : "";
     if (!id || id !== this.config.nativeEngineId)
       throw new Error("Native Engine identity mismatch");
-    const backend = await this.firewallBackend();
+    const securityOptions = parseDockerSecurityOptions(info.SecurityOptions);
+    if (
+      securityOptions.some((entry) => entry.split(",")[0] === "name=rootless")
+    )
+      throw new EnginePreflightError(
+        "DOCKER_ROOTLESS_UNSUPPORTED",
+        "Rootless Docker Engine is not supported",
+      );
+    const backend = parseFirewallBackend(JSON.stringify(info.FirewallBackend));
     if (backend.driver !== "iptables")
       throw new Error("Docker iptables firewall backend is required");
     return id;
+  }
+
+  private async engineInfo(): Promise<Json> {
+    let info: unknown;
+    try {
+      info = JSON.parse(await this.docker(["info", "--format", "{{json .}}"]));
+    } catch {
+      throw new EnginePreflightError(
+        "DOCKER_ENGINE_INFO_UNVERIFIABLE",
+        "Cannot verify Docker Engine info",
+      );
+    }
+    if (!info || typeof info !== "object" || Array.isArray(info))
+      throw new EnginePreflightError(
+        "DOCKER_ENGINE_INFO_UNVERIFIABLE",
+        "Cannot verify Docker Engine info",
+      );
+    return info as Json;
   }
 
   async ownedInventory(installationId: string) {
@@ -443,4 +485,20 @@ export function parseFirewallBackend(raw: string): {
   if (userlandProxy !== "true" && userlandProxy !== "false")
     throw new Error("Cannot verify Docker userland-proxy mode");
   return { driver: backend.Driver, userlandProxy: userlandProxy === "true" };
+}
+
+/** SecurityOptions is Docker's public []string field, e.g. name=seccomp,... . */
+export function parseDockerSecurityOptions(value: unknown): string[] {
+  if (
+    !Array.isArray(value) ||
+    value.some(
+      (entry) =>
+        typeof entry !== "string" || !/^name=[^,\s]+(?:,.+)?$/.test(entry),
+    )
+  )
+    throw new EnginePreflightError(
+      "DOCKER_SECURITY_OPTIONS_UNVERIFIABLE",
+      "Cannot verify Docker Engine security options",
+    );
+  return value;
 }

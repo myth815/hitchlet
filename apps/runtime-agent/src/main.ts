@@ -3,7 +3,7 @@ import { RuntimeStorageFacts } from "./storage.js";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { FileJournal } from "./journal.js";
-import { LocalEngine } from "./engine.js";
+import { EnginePreflightError, LocalEngine } from "./engine.js";
 import { IptablesFirewall, IptablesRunner } from "./firewall.js";
 import { NetworkWorker } from "./worker.js";
 import { createRuntimeServer, listenRuntimeServer } from "./server.js";
@@ -83,7 +83,15 @@ async function start(): Promise<void> {
   process.once("SIGINT", close);
 }
 
-start().catch(() => {
-  process.stderr.write("Hitchlet Runtime Agent startup failed\n");
+start().catch((error: unknown) => {
+  if (error instanceof EnginePreflightError) {
+    const diagnostic =
+      error.code === "DOCKER_ROOTLESS_UNSUPPORTED"
+        ? "Hitchlet Runtime Agent startup failed: rootless Docker Engine is not supported"
+        : "Hitchlet Runtime Agent startup failed: Docker Engine security capabilities cannot be verified";
+    process.stderr.write(`${diagnostic}\n`);
+  } else {
+    process.stderr.write("Hitchlet Runtime Agent startup failed\n");
+  }
   process.exitCode = 1;
 });
