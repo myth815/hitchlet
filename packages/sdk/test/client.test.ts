@@ -152,6 +152,74 @@ const acquireReceipt = (key: string) => ({
 afterEach(() => vi.restoreAllMocks());
 
 describe("HitchletClient consumer surface", () => {
+  it("decodes renewed receipts with root and nested response extensions", async () => {
+    const receipt = {
+      renewalId: ids.renewal,
+      ticketId: ids.ticket,
+      generation: 1,
+      leaseId: ids.lease,
+      leaseVersion: 2,
+      claimedAt: at,
+      expiresAt: "2026-10-19T02:00:00.000Z",
+      renewUntil: "2026-10-20T00:00:00.000Z",
+      offlineEnforcement: "not_guaranteed",
+      guardAcknowledgementId: null,
+    };
+    const command: PreparedTicketCommand = {
+      schemaVersion: 1,
+      kind: "renew",
+      idempotencyKey: "renew-with-extensions",
+      ticketId: ids.ticket,
+      request: { generation: 1, expectedLeaseVersion: 1, requestedTtlSec: 900 },
+    };
+    const fetcher = vi.fn(async () =>
+      response({
+        outcome: "confirmed",
+        renewalId: ids.renewal,
+        receipt: { ...receipt, nestedExtension: { trace: true } },
+        extension: { source: "future-server" },
+      }),
+    );
+    const client = new HitchletClient("http://localhost", { fetch: fetcher });
+
+    await expect(client.tickets.resume(command)).resolves.toMatchObject({
+      renewalId: ids.renewal,
+      leaseVersion: 2,
+    });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it("selects the extended direct renewal receipt before trying an outcome envelope", async () => {
+    const command: PreparedTicketCommand = {
+      schemaVersion: 1,
+      kind: "renew",
+      idempotencyKey: "direct-renew-with-extension",
+      ticketId: ids.ticket,
+      request: { generation: 1, expectedLeaseVersion: 1, requestedTtlSec: 900 },
+    };
+    const fetcher = vi.fn(async () =>
+      response({
+        renewalId: ids.renewal,
+        ticketId: ids.ticket,
+        generation: 1,
+        leaseId: ids.lease,
+        leaseVersion: 2,
+        claimedAt: at,
+        expiresAt: "2026-10-19T02:00:00.000Z",
+        renewUntil: "2026-10-20T00:00:00.000Z",
+        offlineEnforcement: "not_guaranteed",
+        guardAcknowledgementId: null,
+        extension: true,
+      }),
+    );
+    const client = new HitchletClient("http://localhost", { fetch: fetcher });
+
+    await expect(client.tickets.resume(command)).resolves.toMatchObject({
+      renewalId: ids.renewal,
+      leaseVersion: 2,
+    });
+  });
+
   it("keeps health available and injects bearer or cookie/CSRF auth without putting credentials in URLs", async () => {
     const bearerFetch = vi.fn(async () =>
       response({

@@ -5,6 +5,7 @@ import {
   type ApiErrorResponse,
 } from "@hitchlet/contracts";
 import type { PreparedTicketCommand } from "@hitchlet/contracts/public";
+import { parseResponse } from "./response.js";
 import {
   managementRequestContract,
   PreparedManagementRequestSchema,
@@ -401,9 +402,13 @@ export class HttpTransport {
       });
     }
     if (!response.ok) {
-      const error = ApiErrorResponseSchema.safeParse(json);
-      if (error.success) {
-        const payload: ApiErrorResponse["error"] = error.data.error;
+      let payload: ApiErrorResponse["error"] | undefined;
+      try {
+        payload = parseResponse(ApiErrorResponseSchema, json).error;
+      } catch {
+        // Keep the existing HTTP_ERROR path for malformed error responses.
+      }
+      if (payload) {
         throw new ComputeClientError({
           code: payload.code,
           message: payload.message,
@@ -511,7 +516,9 @@ export class HttpTransport {
             .map((line) => line.slice(5).trimStart())
             .join("\n");
           if (data)
-            onEvent(ResourceEventSchema.parse(JSON.parse(data) as unknown));
+            onEvent(
+              parseResponse(ResourceEventSchema, JSON.parse(data) as unknown),
+            );
         }
       }
     } finally {

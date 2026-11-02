@@ -1,3 +1,4 @@
+import { parseResponse } from "./response.js";
 import {
   AdminSchemas as S,
   type PortainerConnectionInput,
@@ -25,13 +26,13 @@ export class InventoryCommands {
       "/v1/admin/network-deny",
       "PUT",
       ManagementDenyUpdateSchema.parse(body),
-      (v) => S.AdminInstallationViewSchema.parse(v),
+      (v) => parseResponse(S.AdminInstallationViewSchema, v),
       { key, retry: false },
     );
   }
   installation() {
     return this.http.request("/v1/admin/installation", "GET", undefined, (v) =>
-      S.AdminInstallationViewSchema.parse(v),
+      parseResponse(S.AdminInstallationViewSchema, v),
     );
   }
   connections() {
@@ -39,7 +40,7 @@ export class InventoryCommands {
       "/v1/provider-connections",
       "GET",
       undefined,
-      (v) => S.ProviderConnectionViewSchema.array().parse(v),
+      (v) => parseResponse(S.ProviderConnectionViewSchema.array(), v),
     );
   }
   discover(body: PortainerConnectionInput, key: string) {
@@ -47,7 +48,7 @@ export class InventoryCommands {
       "/v1/provider-connections",
       "POST",
       S.PortainerConnectionInputSchema.parse(body),
-      (v) => S.ProviderOperationReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProviderOperationReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -56,7 +57,7 @@ export class InventoryCommands {
       `/v1/provider-discovery/${path(id)}`,
       "GET",
       undefined,
-      (v) => S.ProviderOperationReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProviderOperationReceiptSchema, v),
     );
   }
   retryDiscovery(id: string, key: string) {
@@ -64,7 +65,7 @@ export class InventoryCommands {
       `/v1/provider-discovery/${path(id)}/retry`,
       "POST",
       {},
-      (v) => S.ProviderOperationReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProviderOperationReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -73,7 +74,7 @@ export class InventoryCommands {
       `/v1/provider-connections/${path(id)}/revisions`,
       "POST",
       S.PortainerConnectionInputSchema.parse(body),
-      (v) => S.ProviderOperationReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProviderOperationReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -82,7 +83,7 @@ export class InventoryCommands {
       `/v1/provider-connection-proposals/${path(id)}`,
       "GET",
       undefined,
-      (v) => S.ProviderOperationReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProviderOperationReceiptSchema, v),
     );
   }
   retryProposal(id: string, key: string) {
@@ -90,7 +91,7 @@ export class InventoryCommands {
       `/v1/provider-connection-proposals/${path(id)}/retry`,
       "POST",
       {},
-      (v) => S.ProviderOperationReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProviderOperationReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -104,7 +105,7 @@ export class InventoryCommands {
       `/v1/provider-connections/${path(id)}/activate-revision`,
       "POST",
       S.ConnectionActivationSchema.parse({ revisionId }),
-      (v) => S.ConnectionActivationReceiptSchema.parse(v),
+      (v) => parseResponse(S.ConnectionActivationReceiptSchema, v),
       { key, expectedVersion, retry: false },
     );
   }
@@ -113,7 +114,7 @@ export class InventoryCommands {
       "/v1/machines",
       "POST",
       S.MachineInputSchema.parse(body),
-      (v) => S.MachineReceiptSchema.parse(v),
+      (v) => parseResponse(S.MachineReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -122,7 +123,7 @@ export class InventoryCommands {
       "/v1/nodes",
       "POST",
       S.NodeInputSchema.parse(body),
-      (v) => S.NodeReceiptSchema.parse(v),
+      (v) => parseResponse(S.NodeReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -136,7 +137,7 @@ export class InventoryCommands {
       `/v1/nodes/${path(id)}/runtime-config`,
       "PUT",
       S.NodeRuntimeConfigSchema.parse(body),
-      (v) => S.NodeRuntimeConfigReceiptSchema.parse(v),
+      (v) => parseResponse(S.NodeRuntimeConfigReceiptSchema, v),
       { key, expectedVersion, retry: false },
     );
   }
@@ -151,13 +152,13 @@ export class InventoryCommands {
       `/v1/nodes/${path(id)}/capability-attestations`,
       "POST",
       S.NodeCapabilityAttestationSchema.parse(body),
-      (v) => S.NodeCapabilityAttestationReceiptSchema.parse(v),
+      (v) => parseResponse(S.NodeCapabilityAttestationReceiptSchema, v),
       { key, expectedVersion, retry: false },
     );
   }
   storageProfiles() {
     return this.http.request("/v1/storage-profiles", "GET", undefined, (v) =>
-      S.AdminProfileViewSchema.array().parse(v),
+      parseResponse(S.AdminProfileViewSchema.array(), v),
     );
   }
   createNetwork(body: NetworkProfileInput, key: string) {
@@ -165,7 +166,7 @@ export class InventoryCommands {
       "/v1/network-profiles",
       "POST",
       S.NetworkProfileInputSchema.parse(body),
-      (v) => S.ProfileWriteReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProfileWriteReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -179,7 +180,7 @@ export class InventoryCommands {
       `/v1/network-profiles/${path(id)}/revisions`,
       "POST",
       S.NetworkProfileRevisionSchema.parse(body),
-      (v) => S.ProfileWriteReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProfileWriteReceiptSchema, v),
       { key, expectedVersion, retry: false },
     );
   }
@@ -188,7 +189,7 @@ export class InventoryCommands {
       "/v1/storage-profiles",
       "POST",
       S.StorageProfileInputSchema.parse(body),
-      (v) => S.ProfileWriteReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProfileWriteReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -202,7 +203,7 @@ export class InventoryCommands {
       `/v1/storage-profiles/${path(id)}/revisions`,
       "POST",
       S.StorageProfileRevisionSchema.parse(body),
-      (v) => S.ProfileWriteReceiptSchema.parse(v),
+      (v) => parseResponse(S.ProfileWriteReceiptSchema, v),
       { key, expectedVersion, retry: false },
     );
   }
@@ -211,7 +212,7 @@ export class InventoryCommands {
       "/v1/images",
       "POST",
       S.ImageDraftSchema.parse(body),
-      (v) => S.DraftCreationReceiptSchema.parse(v),
+      (v) => parseResponse(S.DraftCreationReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -220,7 +221,7 @@ export class InventoryCommands {
       `/v1/images/${path(id)}/versions`,
       "POST",
       S.ImageVersionDraftSchema.parse(body),
-      (v) => S.DraftCreationReceiptSchema.parse(v),
+      (v) => parseResponse(S.DraftCreationReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -229,7 +230,7 @@ export class InventoryCommands {
       `/v1/image-versions/${path(id)}/artifacts`,
       "POST",
       S.DraftArtifactSchema.parse(body),
-      (v) => S.ArtifactReceiptSchema.parse(v),
+      (v) => parseResponse(S.ArtifactReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -238,7 +239,7 @@ export class InventoryCommands {
       `/v1/nodes/${path(nodeId)}/image-cache/prewarm`,
       "POST",
       S.CacheArtifactSchema.parse({ artifactId }),
-      (v) => S.CachePlanReceiptSchema.parse(v),
+      (v) => parseResponse(S.CachePlanReceiptSchema, v),
       { key, retry: false },
     );
   }
@@ -247,7 +248,7 @@ export class InventoryCommands {
       `/v1/nodes/${path(nodeId)}/image-cache/gc`,
       "POST",
       S.CacheArtifactSchema.parse({ artifactId }),
-      (v) => S.CachePlanReceiptSchema.parse(v),
+      (v) => parseResponse(S.CachePlanReceiptSchema, v),
       { key, retry: false },
     );
   }

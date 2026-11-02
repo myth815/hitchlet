@@ -10,6 +10,16 @@ import { evaluateMachineAdmission } from "../domain/human-use.js";
 
 type Row = Record<string, string | number | bigint | null>;
 
+// These predicates serve both the snapshot explanation and the authoritative atomic reservation.
+const activeCount =
+  "(SELECT count(*) FROM tickets WHERE consumer_id=? AND phase IN ('reserved','provisioning','ready','releasing'))";
+const consumerUsage = (column: string) =>
+  `(SELECT coalesce(sum(c.${column}),0) FROM capacity_claims c JOIN allocations a ON a.id=c.allocation_id JOIN tickets t ON t.id=a.ticket_id WHERE t.consumer_id=? AND a.purpose='tenant' AND c.state<>'released')`;
+const frozenProfilesAvailable =
+  "NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=t.network_profile_revision_id) AND NOT EXISTS(SELECT 1 FROM ticket_storage_grants g JOIN profile_grant_revocations r ON r.storage_profile_revision_id=g.storage_profile_revision_id WHERE g.ticket_id=t.id)";
+const imageCacheAvailable =
+  "NOT EXISTS(SELECT 1 FROM image_caches ev JOIN image_artifacts ea ON ea.id=ev.image_artifact_id JOIN image_artifacts target ON target.id=? AND target.content_digest=ea.content_digest WHERE ev.node_id=? AND ev.observed_state='evicting')";
+
 export interface ReservationWrite {
   readonly allocationId: string;
   readonly claimId: string;
@@ -256,13 +266,17 @@ export class SQLiteTicketStore {
   }
   queuedTickets(now: number): Promise<Row[]> {
     return this.storage.all<Row>(
-      "SELECT * FROM tickets WHERE phase='queued' AND queue_deadline_ms>? ORDER BY created_at_ms,id",
+      `SELECT t.* FROM tickets t WHERE t.phase='queued' AND t.queue_deadline_ms>?
+       ORDER BY coalesce((SELECT max(e.rowid) FROM events e
+                          JOIN tickets r ON r.id=e.aggregate_id
+                          WHERE r.consumer_id=t.consumer_id
+                            AND e.aggregate_type='ticket' AND e.event_type='ticket.reserved'),0),
+                t.created_at_ms,t.id`,
       [now],
     );
   }
-  async eligibleCandidates(query: {
+  async schedulingCandidates(query: {
     imageVersion: string;
-    now: number;
     providers: readonly string[];
     siteIds: readonly string[];
     nodeIds: readonly string[];
@@ -272,34 +286,35 @@ export class SQLiteTicketStore {
   }): Promise<Row[]> {
     const candidates = await this.storage.all<Row>(
       `SELECT n.id AS node_id,n.version AS node_version,n.machine_id,n.runtime_identity_id,n.backend_kind,n.pool_id,n.capabilities_json,n.config_json,n.observed_at_ms,m.version AS machine_version,m.site_id,m.labels_json AS machine_labels,m.admission AS machine_admission,m.observed_power,m.power_lifecycle,m.power_cycle_id,m.power_transition_id,m.shutdown_operation_id,m.accepted_shutdown_receipt_id,m.out_of_band_evidence_id,m.wake_not_before_ms,m.shutdown_accepted_at_ms,m.power_transition_deadline_ms,m.wake_attempt_count,m.updated_at_ms AS machine_updated_at_ms,m.desired_power,m.capabilities_json AS machine_capabilities,power_policy.config_json AS power_policy_json,p.version AS pool_version,p.parent_allocation_id,p.total_cpu_millis,p.total_memory_mib,p.total_scratch_mib,p.system_cpu_millis,p.system_memory_mib,p.system_scratch_mib,a.id AS artifact_id,a.architecture,a.guest_os,a.environment_kind,a.requirements_json,a.minimum_cpu_millis,a.minimum_memory_mib,a.minimum_scratch_mib,a.access_recipe_json,pcr.id AS connection_revision_id,EXISTS(SELECT 1 FROM operations o JOIN agent_commands c ON c.operation_id=o.id AND c.kind='machine.shutdown' JOIN agents ag ON ag.id=c.agent_id AND ag.machine_id=m.id JOIN agent_receipts r ON r.command_id=c.id AND r.agent_id=c.agent_id WHERE o.id=m.shutdown_operation_id AND o.machine_id=m.id AND o.kind='machine.shutdown' AND o.state IN ('running','succeeded') AND r.id=m.accepted_shutdown_receipt_id AND r.phase='accepted' AND r.observed_at_ms>=m.shutdown_accepted_at_ms AND r.received_at_ms<=m.power_transition_deadline_ms) AS shutdown_evidence
-      FROM nodes n JOIN machines m ON m.id=n.machine_id LEFT JOIN policies power_policy ON power_policy.id=m.policy_id AND power_policy.kind='machine' JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.enabled=1 AND pc.runtime_identity_id=n.runtime_identity_id JOIN provider_connection_revisions pcr ON pcr.id=pc.current_revision_id AND pcr.verified_runtime_identity_id=n.runtime_identity_id JOIN capacity_pools p ON p.id=n.pool_id JOIN image_artifacts a ON a.image_version_id=? AND a.backend_kind=n.backend_kind WHERE n.admission='enabled' AND (n.observed_health='healthy' OR (n.observed_health='unknown' AND (m.observed_power IN ('off','sleeping') OR (m.observed_power='unknown' AND m.power_lifecycle='off_expected')))) AND m.admission='enabled' AND m.source='local' AND (m.observed_power IN ('on','off','sleeping') OR (m.observed_power='unknown' AND m.power_lifecycle='off_expected')) AND n.backend_kind IN (${query.providers.map(() => "?").join(",")}) AND m.site_id IN (${query.siteIds.map(() => "?").join(",")}) AND n.id IN (${query.nodeIds.map(() => "?").join(",")}) AND m.id IN (${query.machineIds.map(() => "?").join(",")}) AND a.environment_kind=? AND a.architecture IN (${query.architectures.map(() => "?").join(",")}) ORDER BY n.id,a.architecture`,
+      FROM nodes n JOIN machines m ON m.id=n.machine_id LEFT JOIN policies power_policy ON power_policy.id=m.policy_id AND power_policy.kind='machine' LEFT JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.enabled=1 AND pc.runtime_identity_id=n.runtime_identity_id LEFT JOIN provider_connection_revisions pcr ON pcr.id=pc.current_revision_id AND pcr.verified_runtime_identity_id=n.runtime_identity_id JOIN capacity_pools p ON p.id=n.pool_id LEFT JOIN image_artifacts a ON a.image_version_id=? AND a.backend_kind=n.backend_kind AND a.environment_kind=? AND a.architecture IN (${query.architectures.map(() => "?").join(",")}) WHERE m.source='local' AND n.backend_kind IN (${query.providers.map(() => "?").join(",")}) AND m.site_id IN (${query.siteIds.map(() => "?").join(",")}) AND n.id IN (${query.nodeIds.map(() => "?").join(",")}) AND m.id IN (${query.machineIds.map(() => "?").join(",")}) ORDER BY n.id,a.architecture`,
       [
         query.imageVersion,
+        query.kind,
+        ...query.architectures,
         ...query.providers,
         ...query.siteIds,
         ...query.nodeIds,
         ...query.machineIds,
-        query.kind,
-        ...query.architectures,
       ],
     );
-    const allowed: Row[] = [];
-    for (const candidate of candidates) {
-      const snapshot = await loadMachineAdmission(
-        this.storage,
-        String(candidate.machine_id),
-        query.now,
-      );
-      if (
-        evaluateMachineAdmission(
-          snapshot.context,
-          query.now,
-          String(candidate.node_id),
-        ).allowed
-      )
-        allowed.push(candidate);
-    }
-    return allowed;
+    return candidates;
+  }
+  async machineAdmission(
+    candidate: Row,
+    now: number,
+    requested: ReservationWrite["requested"],
+  ) {
+    const snapshot = await loadMachineAdmission(
+      this.storage,
+      String(candidate.machine_id),
+      now,
+    );
+    return evaluateMachineAdmission(
+      snapshot.context,
+      now,
+      String(candidate.node_id),
+      requested,
+    );
   }
   consumerQuota(consumerId: string): Promise<Row | undefined> {
     return this.storage.get<Row>(
@@ -311,11 +326,12 @@ export class SQLiteTicketStore {
     ticketId: string,
     ticketVersion: number,
     now: number,
+    assessment: { reasonCodes: readonly string[]; matchingNodeCount: number },
   ): Promise<unknown> {
     return this.storage.run(
       "UPDATE tickets SET scheduling_reason_json=?,version=version+1,updated_at_ms=? WHERE id=? AND version=? AND phase='queued'",
       [
-        JSON.stringify({ code: "capacity_or_eligibility_unavailable" }),
+        JSON.stringify({ ...assessment, checkedAtMs: now }),
         now,
         ticketId,
         ticketVersion,
@@ -538,13 +554,50 @@ export class SQLiteTicketStore {
     ];
   }
 
+  async reservationBlockers(
+    input: Pick<
+      ReservationWrite,
+      | "consumerId"
+      | "ticketId"
+      | "nodeId"
+      | "artifactId"
+      | "requested"
+      | "consumerLimits"
+    >,
+  ): Promise<string[]> {
+    const row = await this.storage.get<Row>(
+      `SELECT ${activeCount} >= ? AS consumer_active_quota_exceeded,
+       ${consumerUsage("cpu_millis")} + ? > ? OR ${consumerUsage("memory_mib")} + ? > ? OR ${consumerUsage("scratch_mib")} + ? > ? AS consumer_resource_quota_exceeded,
+       NOT (${frozenProfilesAvailable}) AS profile_grant_revoked,
+       NOT (${imageCacheAvailable}) AS image_cache_evicting
+       FROM tickets t WHERE t.id=?`,
+      [
+        input.consumerId,
+        input.consumerLimits.maxActiveTickets,
+        input.consumerId,
+        input.requested.cpuMillis,
+        input.consumerLimits.cpuMillis,
+        input.consumerId,
+        input.requested.memoryMiB,
+        input.consumerLimits.memoryMiB,
+        input.consumerId,
+        input.requested.scratchMiB,
+        input.consumerLimits.scratchMiB,
+        input.artifactId,
+        input.nodeId,
+        input.ticketId,
+      ],
+    );
+    return row
+      ? Object.entries(row)
+          .filter(([, blocked]) => Number(blocked) === 1)
+          .map(([code]) => code)
+      : ["reservation_conflict"];
+  }
+
   async reserve(input: ReservationWrite): Promise<void> {
-    const activeCount =
-      "(SELECT count(*) FROM tickets WHERE consumer_id=? AND phase IN ('reserved','provisioning','ready','releasing'))";
     const capCheck =
       "((SELECT coalesce(sum(cpu_millis),0) FROM capacity_claims WHERE pool_id=? AND state<>'released') + ?) <= p.total_cpu_millis-p.system_cpu_millis AND ((SELECT coalesce(sum(memory_mib),0) FROM capacity_claims WHERE pool_id=? AND state<>'released') + ?) <= p.total_memory_mib-p.system_memory_mib AND ((SELECT coalesce(sum(scratch_mib),0) FROM capacity_claims WHERE pool_id=? AND state<>'released') + ?) <= p.total_scratch_mib-p.system_scratch_mib";
-    const usage = (column: string) =>
-      `(SELECT coalesce(sum(c.${column}),0) FROM capacity_claims c JOIN allocations a ON a.id=c.allocation_id JOIN tickets t ON t.id=a.ticket_id WHERE t.consumer_id=? AND a.purpose='tenant' AND c.state<>'released')`;
     const request = input.requested;
     const limits = input.consumerLimits;
     const guardParams = [
@@ -578,9 +631,11 @@ export class SQLiteTicketStore {
       {
         kind: "run",
         sql:
-          "INSERT INTO allocations(id,purpose,ticket_id,machine_id,node_id,runtime_identity_id,resolved_provision_contract_id,image_artifact_id,generation,control_version,desired_state,observed_state,cleanup_status,resource_contract_json,ownership_json,version,created_at_ms,updated_at_ms) SELECT ?, 'tenant', ?, ?, ?, ?, NULL, ?, ?,1,'present','unknown','pending',?,'{}',1,?,? WHERE EXISTS(SELECT 1 FROM tickets t WHERE t.id=? AND t.phase='queued' AND t.version=? AND json_extract(t.request_json,'$.locality')='local_only' AND EXISTS(SELECT 1 FROM consumers c WHERE c.id=t.consumer_id AND c.version=? AND c.status='active' AND c.quota_json=?) AND NOT EXISTS(SELECT 1 FROM profile_grant_revocations r WHERE r.network_profile_revision_id=t.network_profile_revision_id) AND NOT EXISTS(SELECT 1 FROM ticket_storage_grants g JOIN profile_grant_revocations r ON r.storage_profile_revision_id=g.storage_profile_revision_id WHERE g.ticket_id=t.id)) AND EXISTS(SELECT 1 FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN capacity_pools p ON p.id=n.pool_id WHERE n.id=? AND n.version=? AND m.id=? AND m.version=? AND m.source='local' AND m.admission='enabled' AND n.admission='enabled' AND p.version=? AND p.id=? AND (p.parent_allocation_id IS NULL OR EXISTS(SELECT 1 FROM allocations pa JOIN image_artifacts pai ON pai.id=pa.image_artifact_id WHERE pa.id=p.parent_allocation_id AND pa.machine_id=m.id AND pa.purpose='infrastructure' AND pai.environment_kind='vm' AND pa.desired_state='present' AND pa.observed_state='running' AND pa.cleanup_status IN ('pending','running') AND p.total_cpu_millis<=(SELECT coalesce(sum(c.cpu_millis),0) FROM capacity_claims c WHERE c.allocation_id=pa.id AND c.state='committed') AND p.total_memory_mib<=(SELECT coalesce(sum(c.memory_mib),0) FROM capacity_claims c WHERE c.allocation_id=pa.id AND c.state='committed') AND p.total_scratch_mib<=(SELECT coalesce(sum(c.scratch_mib),0) FROM capacity_claims c WHERE c.allocation_id=pa.id AND c.state='committed'))) AND " +
+          "INSERT INTO allocations(id,purpose,ticket_id,machine_id,node_id,runtime_identity_id,resolved_provision_contract_id,image_artifact_id,generation,control_version,desired_state,observed_state,cleanup_status,resource_contract_json,ownership_json,version,created_at_ms,updated_at_ms) SELECT ?, 'tenant', ?, ?, ?, ?, NULL, ?, ?,1,'present','unknown','pending',?,'{}',1,?,? WHERE EXISTS(SELECT 1 FROM tickets t WHERE t.id=? AND t.phase='queued' AND t.version=? AND json_extract(t.request_json,'$.locality')='local_only' AND EXISTS(SELECT 1 FROM consumers c WHERE c.id=t.consumer_id AND c.version=? AND c.quota_json=?) AND " +
+          frozenProfilesAvailable +
+          ") AND EXISTS(SELECT 1 FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN capacity_pools p ON p.id=n.pool_id WHERE n.id=? AND n.version=? AND m.id=? AND m.version=? AND m.source='local' AND m.admission='enabled' AND n.admission='enabled' AND p.version=? AND p.id=? AND (p.parent_allocation_id IS NULL OR EXISTS(SELECT 1 FROM allocations pa JOIN image_artifacts pai ON pai.id=pa.image_artifact_id WHERE pa.id=p.parent_allocation_id AND pa.machine_id=m.id AND pa.purpose='infrastructure' AND pai.environment_kind='vm' AND pa.desired_state='present' AND pa.observed_state='running' AND pa.cleanup_status IN ('pending','running') AND p.total_cpu_millis<=(SELECT coalesce(sum(c.cpu_millis),0) FROM capacity_claims c WHERE c.allocation_id=pa.id AND c.state='committed') AND p.total_memory_mib<=(SELECT coalesce(sum(c.memory_mib),0) FROM capacity_claims c WHERE c.allocation_id=pa.id AND c.state='committed') AND p.total_scratch_mib<=(SELECT coalesce(sum(c.scratch_mib),0) FROM capacity_claims c WHERE c.allocation_id=pa.id AND c.state='committed'))) AND " +
           capCheck +
-          `) AND ${activeCount} < ? AND ${usage("cpu_millis")} + ? <= ? AND ${usage("memory_mib")} + ? <= ? AND ${usage("scratch_mib")} + ? <= ? AND NOT EXISTS(SELECT 1 FROM image_caches ev JOIN image_artifacts ea ON ea.id=ev.image_artifact_id JOIN image_artifacts target ON target.id=? AND target.content_digest=ea.content_digest WHERE ev.node_id=? AND ev.observed_state='evicting')`,
+          `) AND ${activeCount} < ? AND ${consumerUsage("cpu_millis")} + ? <= ? AND ${consumerUsage("memory_mib")} + ? <= ? AND ${consumerUsage("scratch_mib")} + ? <= ? AND ${imageCacheAvailable}`,
         params: [
           input.allocationId,
           input.ticketId,

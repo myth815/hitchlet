@@ -1,6 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { chmod, mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { chmod, mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { RuntimeStorageFacts, parseMountInfo } from "../src/storage.js";
 import {
@@ -8,14 +9,54 @@ import {
   type StorageRoot,
 } from "@hitchlet/contracts/internal";
 
+// These synthetic Host fixtures model administrator-owned bind sources. CI may
+// itself run as tenant uid 1000; keep real paths/modes/inodes while supplying the
+// Host ownership separately. Production ownership checks remain unchanged.
+const hostOwnership = vi.hoisted(() => ({
+  roots: new Set<string>(),
+  tenant: false,
+}));
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return {
+    ...actual,
+    lstat: vi.fn(async (...args: Parameters<typeof actual.lstat>) => {
+      const facts = await actual.lstat(...args);
+      if (
+        typeof args[0] === "string" &&
+        [...hostOwnership.roots].some(
+          (root) => args[0] === root || String(args[0]).startsWith(`${root}/`),
+        )
+      ) {
+        Object.defineProperty(facts, "uid", {
+          value:
+            typeof facts.uid === "bigint"
+              ? hostOwnership.tenant
+                ? 1000n
+                : 0n
+              : hostOwnership.tenant
+                ? 1000
+                : 0,
+        });
+      }
+      return facts;
+    }),
+  };
+});
+
 const dirs: string[] = [];
 afterEach(async () => {
   for (const dir of dirs.splice(0))
     await rm(dir, { recursive: true, force: true });
+  hostOwnership.roots.clear();
+  hostOwnership.tenant = false;
 });
 async function fixture(protocol: "local" | "nfs" | "smb" = "local") {
-  const dir = await mkdtemp("/private/tmp/hitchlet-storage-facts-");
+  const dir = await realpath(
+    await mkdtemp(join(tmpdir(), "hitchlet-storage-facts-")),
+  );
   dirs.push(dir);
+  hostOwnership.roots.add(dir);
   const root = join(dir, "approved"),
     imageRoot = join(dir, "images");
   await mkdir(join(root, "input"), { recursive: true });
@@ -230,6 +271,13 @@ describe("fixed Runtime Agent storage facts", () => {
   it("rejects tenant-writable ancestors even with no symlink", async () => {
     const f = await fixture();
     await chmod(f.root, 0o777);
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "Tenant-writable",
+    );
+  });
+  it("rejects tenant-owned ancestors even without group or world write", async () => {
+    const f = await fixture();
+    hostOwnership.tenant = true;
     await expect(f.worker.inspect(f.request())).rejects.toThrow(
       "Tenant-writable",
     );

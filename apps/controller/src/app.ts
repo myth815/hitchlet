@@ -1255,10 +1255,36 @@ export async function buildApp(
     };
     app.addHook("preClose", closeEventStreams);
     app.addHook("onClose", closeEventStreams);
+    // Disabling admission preserves the owner's existing Ticket lifecycle. All
+    // these routes bind queries/commands to actor.consumerId; management and
+    // catalog routes still require an active Consumer. POST /tickets retains
+    // idempotent recovery, while prepareAcquire rejects every new disabled request.
+    const existingTicketRoutes = new Set([
+      "GET /v1/auth/me",
+      "DELETE /v1/auth/session",
+      "GET /v1/tickets",
+      "POST /v1/tickets",
+      "GET /v1/tickets/:ticketId",
+      "POST /v1/tickets/:ticketId/release",
+      "POST /v1/tickets/:ticketId/cancel",
+      "POST /v1/tickets/:ticketId/renew",
+      "POST /v1/tickets/:ticketId/access",
+      "GET /v1/tickets/:ticketId/renewals/:renewalId",
+      "GET /v1/tickets/:ticketId/events",
+      "GET /v1/events",
+      "GET /v1/events/stream",
+    ]);
     const identify = async (
       request: Parameters<typeof auth.authenticate>[0],
       write = false,
-    ) => auth.authenticate(request, write);
+    ) =>
+      auth.authenticate(
+        request,
+        write,
+        existingTicketRoutes.has(
+          `${request.method} ${request.routeOptions.url}`,
+        ),
+      );
     app.post("/v1/auth/session", async (request, reply) => {
       const ip = request.ip;
       const now = Date.now();
@@ -1270,7 +1296,7 @@ export async function buildApp(
           .send(apiError(request.id, "login_rate_limited", true));
       let actor;
       try {
-        actor = await auth.bearerPrincipal(request);
+        actor = await auth.bearerPrincipal(request, true);
       } catch (error) {
         const active =
           failures && now - failures.since < 10 * 60_000

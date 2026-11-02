@@ -34,6 +34,7 @@ import type {
   WaitOptions,
 } from "@hitchlet/contracts/public";
 import { ComputeClientError, HttpTransport, queryString } from "./transport.js";
+import { parseResponse } from "./response.js";
 
 const ReadyTicketSchema = ReadyTicketViewSchema;
 const ReleasedTicketSchema = ReleasedTicketViewSchema;
@@ -59,6 +60,12 @@ function freezeDeep<T>(value: T): T {
 }
 function read<T>(schema: { parse(value: unknown): T }, value: unknown): T {
   return schema.parse(value);
+}
+function readResponse<T>(
+  schema: { parse(value: unknown): T; safeParse(value: unknown): unknown },
+  value: unknown,
+): T {
+  return parseResponse(schema, value);
 }
 function readRequest<T>(
   schema: { parse(value: unknown): T },
@@ -247,7 +254,7 @@ export class TicketCommands {
           "/v1/tickets",
           "POST",
           command.request,
-          (v) => read(AcquireReceiptSchema, v),
+          (v) => readResponse(AcquireReceiptSchema, v),
           context,
         );
         if (receipt.idempotencyKey !== command.idempotencyKey)
@@ -272,7 +279,7 @@ export class TicketCommands {
           `/v1/tickets/${encodeURIComponent(command.ticketId)}/release`,
           "POST",
           command.request,
-          (v) => read(TicketViewSchema, v),
+          (v) => readResponse(TicketViewSchema, v),
           context,
         )) as TicketCommandResult<typeof command>;
       case "cancel":
@@ -280,7 +287,7 @@ export class TicketCommands {
           `/v1/tickets/${encodeURIComponent(command.ticketId)}/cancel`,
           "POST",
           command.request,
-          (v) => read(TicketViewSchema, v),
+          (v) => readResponse(TicketViewSchema, v),
           context,
         )) as TicketCommandResult<typeof command>;
       case "access":
@@ -288,7 +295,7 @@ export class TicketCommands {
           `/v1/tickets/${encodeURIComponent(command.ticketId)}/access`,
           "POST",
           command.request,
-          (v) => read(AccessGrantSchema, v),
+          (v) => readResponse(AccessGrantSchema, v),
           context,
         )) as TicketCommandResult<typeof command>;
     }
@@ -315,12 +322,17 @@ export class TicketCommands {
       "POST",
       command.request,
       (value) => {
-        const receipt = RenewReceiptSchema.safeParse(value);
-        if (receipt.success)
-          return { kind: "receipt" as const, receipt: receipt.data };
+        try {
+          return {
+            kind: "receipt" as const,
+            receipt: readResponse(RenewReceiptSchema, value),
+          };
+        } catch {
+          // The other valid response shape is a renewal outcome envelope.
+        }
         return {
           kind: "outcome" as const,
-          outcome: read(RenewOutcomeSchema, value),
+          outcome: readResponse(RenewOutcomeSchema, value),
         };
       },
       {
@@ -353,7 +365,7 @@ export class TicketCommands {
         `/v1/tickets/${encodeURIComponent(command.ticketId)}/renewals/${encodeURIComponent(renewal.id)}`,
         "GET",
         undefined,
-        (v) => read(LeaseRenewalViewSchema, v),
+        (v) => readResponse(LeaseRenewalViewSchema, v),
         {
           ...this.context(command),
           renewalId: renewal.id,
@@ -456,7 +468,7 @@ export class TicketCommands {
       `/v1/tickets/${encodeURIComponent(ticketId)}`,
       "GET",
       undefined,
-      (v) => read(TicketViewSchema, v),
+      (v) => readResponse(TicketViewSchema, v),
       { ticketId },
     );
   }
@@ -470,7 +482,7 @@ export class TicketCommands {
       `/v1/tickets${queryString(checked)}`,
       "GET",
       undefined,
-      (v) => read(TicketSummaryPageSchema, v),
+      (v) => readResponse(TicketSummaryPageSchema, v),
     );
   }
 
@@ -526,7 +538,7 @@ export class TicketCommands {
           `/v1/tickets/${encodeURIComponent(ticketId)}`,
           "GET",
           undefined,
-          (value) => read(TicketViewSchema, value),
+          (value) => readResponse(TicketViewSchema, value),
           {
             ticketId,
             timeoutMilliseconds: Math.max(
@@ -550,7 +562,7 @@ export class TicketCommands {
       if (target === "ready") {
         if (ticket.phase === "ready") {
           try {
-            return read(ReadyTicketSchema, ticket);
+            return readResponse(ReadyTicketSchema, ticket);
           } catch (error) {
             throw new ComputeClientError({
               code: "INVALID_RESPONSE",
@@ -568,7 +580,7 @@ export class TicketCommands {
           });
       } else if (ticket.phase === "released") {
         try {
-          return read(ReleasedTicketSchema, ticket);
+          return readResponse(ReleasedTicketSchema, ticket);
         } catch (error) {
           throw new ComputeClientError({
             code: "INVALID_RESPONSE",
@@ -659,7 +671,7 @@ export class TicketCommands {
       `/v1/tickets/${encodeURIComponent(ticketId)}`,
       "GET",
       undefined,
-      (value) => read(TicketViewSchema, value),
+      (value) => readResponse(TicketViewSchema, value),
       { ticketId, timeoutMilliseconds: remainingBeforeRead },
     );
     if (!ticket.lease)
@@ -703,7 +715,7 @@ export class TicketCommands {
       `/v1/tickets/${encodeURIComponent(ticketId)}/renewals/${encodeURIComponent(renewalId)}`,
       "GET",
       undefined,
-      (v) => read(LeaseRenewalViewSchema, v),
+      (v) => readResponse(LeaseRenewalViewSchema, v),
       { ticketId, renewalId },
     );
   }
@@ -718,7 +730,7 @@ export class TicketCommands {
         `/v1/tickets/${encodeURIComponent(ticketId)}/access`,
         "POST",
         cached.request,
-        (v) => read(AccessGrantSchema, v),
+        (v) => readResponse(AccessGrantSchema, v),
         this.context(cached),
       );
     const ticket = await this.get(ticketId);
@@ -750,7 +762,7 @@ export class TicketCommands {
         `/v1/tickets/${encodeURIComponent(ticketId)}/release`,
         "POST",
         cached.request,
-        (v) => read(TicketViewSchema, v),
+        (v) => readResponse(TicketViewSchema, v),
         this.context(cached),
       );
     const ticket = await this.get(ticketId);

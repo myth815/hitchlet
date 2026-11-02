@@ -1118,6 +1118,195 @@ describe("independent D05 protocol and lease review", () => {
     }
   });
 
+  it.each(["bearer", "session"] as const)(
+    "keeps disabled %s holders on their own existing tickets while credential revocation still ends access",
+    async (source) => {
+      const f = await fixture();
+      const other = await f.storage.get<{ id: string }>(
+        "SELECT id FROM consumers WHERE id<>? LIMIT 1",
+        [f.consumerId],
+      );
+      if (!other) throw new Error("Missing second Simulator consumer");
+      const acquireBody = {
+        image: { versionId: f.versionId },
+        resources: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+        networkProfileId: f.networkProfileId,
+        lease: { requestedSeconds: 900, maximumLifetimeSeconds: 3600 },
+      };
+      const foreign = await f.tickets.acquire(
+        other.id,
+        "foreign-ticket",
+        acquireBody,
+      );
+      // Exercise the strongest role too: disabled admin credentials must not
+      // become a way to operate another owner's tickets or management APIs.
+      await f.storage.run("UPDATE consumers SET role='admin' WHERE id=?", [
+        f.consumerId,
+      ]);
+      await f.storage.run(
+        "UPDATE consumer_credentials SET scopes_json=? WHERE consumer_id=?",
+        [
+          JSON.stringify([
+            "tickets:read",
+            "tickets:write",
+            "tickets:revoke",
+            "images:read",
+            "events:read",
+          ]),
+          f.consumerId,
+        ],
+      );
+      const app = await buildApp(
+        loadConfig({
+          DATA_DIR: f.dataDir,
+          EXECUTION_MODE: "simulator",
+          SIMULATOR_DATA_DIR: join(f.dir, "external"),
+          LOG_LEVEL: "silent",
+        }),
+        { storage: f.storage },
+      );
+      cleanup.push(() => app.close());
+      const bearer = { authorization: `Bearer ${f.token}` };
+      expect(
+        (await app.inject({ url: "/v1/system/health", headers: bearer }))
+          .statusCode,
+      ).toBe(200);
+      const login = await app.inject({
+        method: "POST",
+        url: "/v1/auth/session",
+        headers: bearer,
+      });
+      expect(login.statusCode).toBe(201);
+      const cookie = (login.headers["set-cookie"] as string[])
+        .map((value) => value.split(";")[0])
+        .join("; ");
+      const headers =
+        source === "bearer"
+          ? bearer
+          : { cookie, "x-csrf-token": String(login.headers["x-csrf-token"]) };
+      await f.storage.run(
+        "UPDATE consumers SET status='disabled',version=version+1 WHERE id=?",
+        [f.consumerId],
+      );
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/v1/auth/session",
+            headers: bearer,
+          })
+        ).statusCode,
+      ).toBe(201);
+      expect(
+        (await app.inject({ url: `/v1/tickets/${f.ready.id}`, headers }))
+          .statusCode,
+      ).toBe(200);
+      const list = await app.inject({ url: "/v1/tickets", headers });
+      expect(list.statusCode).toBe(200);
+      expect(list.json().items.map((item: { id: string }) => item.id)).toEqual([
+        f.ready.id,
+      ]);
+      expect(
+        (await app.inject({ url: `/v1/tickets/${foreign.ticketId}`, headers }))
+          .statusCode,
+      ).toBe(404);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/v1/tickets/${foreign.ticketId}/renew`,
+            headers: { ...headers, "idempotency-key": "foreign-renew" },
+            payload: f.request,
+          })
+        ).statusCode,
+      ).toBe(404);
+      expect(
+        (await app.inject({ url: "/v1/system/health", headers })).statusCode,
+      ).toBe(403);
+      expect(
+        (await app.inject({ url: "/v1/admin/tickets", headers })).statusCode,
+      ).toBe(403);
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: "/v1/tickets",
+            headers: { ...headers, "idempotency-key": "new-after-disable" },
+            payload: acquireBody,
+          })
+        ).statusCode,
+      ).toBe(404);
+      const replay = await app.inject({
+        method: "POST",
+        url: "/v1/tickets",
+        headers: { ...headers, "idempotency-key": "fixture-acquire" },
+        payload: acquireBody,
+      });
+      expect(replay.statusCode).toBe(202);
+      expect(replay.json().ticket.id).toBe(f.ready.id);
+      const renew = await app.inject({
+        method: "POST",
+        url: `/v1/tickets/${f.ready.id}/renew`,
+        headers: { ...headers, "idempotency-key": "disabled-renew" },
+        payload: f.request,
+      });
+      expect(renew.statusCode).toBe(202);
+      const renewalId = renew.json().renewal.id as string;
+      const pending = await app.inject({
+        url: `/v1/tickets/${f.ready.id}`,
+        headers,
+      });
+      expect(pending.json().renewalPending).toMatchObject({
+        renewalId,
+        lastConfirmedExpiresAt: f.ready.lease?.expiresAt,
+      });
+      await new LeaseService(f.storage).reconcilePending();
+      const renewal = await app.inject({
+        url: `/v1/tickets/${f.ready.id}/renewals/${renewalId}`,
+        headers,
+      });
+      expect(renewal.statusCode).toBe(200);
+      expect(renewal.json().state).toBe("confirmed");
+      const access = await app.inject({
+        method: "POST",
+        url: `/v1/tickets/${f.ready.id}/access`,
+        headers: { ...headers, "idempotency-key": "disabled-access" },
+        payload: { generation: f.request.generation },
+      });
+      expect(access.statusCode).toBe(200);
+      expect(access.json().access.hostKeyFingerprint).toBe("SIMULATOR_ONLY");
+      expect(
+        (
+          await app.inject({
+            method: "POST",
+            url: `/v1/tickets/${f.ready.id}/release`,
+            headers: { ...headers, "idempotency-key": "disabled-release" },
+            payload: { generation: f.request.generation, reclaimable: true },
+          })
+        ).statusCode,
+      ).toBe(202);
+      f.setTime(Date.now());
+      await f.worker.reconcileBeforeScheduling();
+      expect(
+        (await app.inject({ url: `/v1/tickets/${f.ready.id}`, headers })).json()
+          .phase,
+      ).toBe("released");
+      expect(
+        await f.storage.get(
+          "SELECT count(*) AS count FROM capacity_claims WHERE state<>'released'",
+        ),
+      ).toEqual({ count: 0n });
+      await f.storage.run(
+        "UPDATE consumer_credentials SET revoked_at_ms=? WHERE consumer_id=?",
+        [Date.now(), f.consumerId],
+      );
+      expect(
+        (await app.inject({ url: `/v1/tickets/${f.ready.id}`, headers }))
+          .statusCode,
+      ).toBe(401);
+    },
+  );
+
   it("exchanges a full-scope bearer for a CSRF-protected HttpOnly session and revokes it", async () => {
     const f = await fixture();
     const app = await buildApp(

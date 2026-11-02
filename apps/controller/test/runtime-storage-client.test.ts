@@ -2,6 +2,7 @@ import { beforeAll, afterAll, describe, it, expect } from "vitest";
 import { execFileSync } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import https from "node:https";
 import { RuntimeNetworkHttpClient } from "../src/providers/runtime-network-client.js";
@@ -25,7 +26,7 @@ let sampleTime = 1,
   drip = false;
 const timers = new Set<ReturnType<typeof setInterval>>();
 beforeAll(async () => {
-  directory = await mkdtemp("/private/tmp/hitchlet-storage-client-tls-");
+  directory = await mkdtemp(join(tmpdir(), "hitchlet-storage-client-tls-"));
   const keyPath = join(directory, "key.pem"),
     certPath = join(directory, "cert.pem");
   execFileSync(

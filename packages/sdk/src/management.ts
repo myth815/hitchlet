@@ -1,3 +1,4 @@
+import { parseResponse } from "./response.js";
 import {
   ManagementSchemas as S,
   type ConsumerInput,
@@ -19,7 +20,7 @@ export class ManagementCommands {
   constructor(private readonly http: HttpTransport) {}
   overview() {
     return this.http.request("/v1/admin/overview", "GET", undefined, (v) =>
-      S.ManagementOverviewSchema.parse(v),
+      parseResponse(S.ManagementOverviewSchema, v),
     );
   }
   tickets(query: ManagementTicketQuery = {}) {
@@ -28,7 +29,7 @@ export class ManagementCommands {
       `/v1/admin/tickets${queryString(q)}`,
       "GET",
       undefined,
-      (v) => S.ManagementTicketPageSchema.parse(v),
+      (v) => parseResponse(S.ManagementTicketPageSchema, v),
     );
   }
   ticket(id: string) {
@@ -36,7 +37,7 @@ export class ManagementCommands {
       `/v1/admin/tickets/${path(id)}`,
       "GET",
       undefined,
-      (v) => TicketViewSchema.parse(v),
+      (v) => parseResponse(TicketViewSchema, v),
     );
   }
   timeline(id: string) {
@@ -44,12 +45,12 @@ export class ManagementCommands {
       `/v1/admin/tickets/${path(id)}/timeline`,
       "GET",
       undefined,
-      (v) => S.ManagementTimelineSchema.parse(v),
+      (v) => parseResponse(S.ManagementTimelineSchema, v),
     );
   }
   operations() {
     return this.http.request("/v1/admin/operations", "GET", undefined, (v) =>
-      S.ManagementOperationSchema.array().parse(v),
+      parseResponse(S.ManagementOperationSchema.array(), v),
     );
   }
   retryOperation(id: string, body: OperationRetry, key: string) {
@@ -57,7 +58,7 @@ export class ManagementCommands {
       `/v1/admin/operations/${path(id)}/retry`,
       "POST",
       S.OperationRetrySchema.parse(body),
-      (v) => S.ManagementOperationSchema.parse(v),
+      (v) => parseResponse(S.ManagementOperationSchema, v),
       { key, retry: false },
     );
   }
@@ -66,7 +67,7 @@ export class ManagementCommands {
       `/v1/tickets/${path(id)}/revoke`,
       "POST",
       RevokeRequestSchema.parse(body),
-      (v) => TicketViewSchema.parse(v),
+      (v) => parseResponse(TicketViewSchema, v),
       { key, retry: false },
     );
   }
@@ -80,13 +81,13 @@ export class ManagementCommands {
       `/v1/${kind}/${path(id)}/admission`,
       "PUT",
       S.AdmissionUpdateSchema.parse(body),
-      (v) => S.VersionReceiptSchema.parse(v),
+      (v) => parseResponse(S.VersionReceiptSchema, v),
       { key, retry: false },
     );
   }
   consumers() {
     return this.http.request("/v1/admin/consumers", "GET", undefined, (v) =>
-      S.ConsumerViewSchema.array().parse(v),
+      parseResponse(S.ConsumerViewSchema.array(), v),
     );
   }
   createConsumer(body: ConsumerInput, key: string) {
@@ -94,7 +95,7 @@ export class ManagementCommands {
       "/v1/admin/consumers",
       "POST",
       S.ConsumerInputSchema.parse(body),
-      (v) => S.ConsumerViewSchema.parse(v),
+      (v) => parseResponse(S.ConsumerViewSchema, v),
       { key, retry: false },
     );
   }
@@ -103,7 +104,7 @@ export class ManagementCommands {
       `/v1/admin/consumers/${path(id)}`,
       "PUT",
       S.ConsumerUpdateSchema.parse(body),
-      (v) => S.ConsumerViewSchema.parse(v),
+      (v) => parseResponse(S.ConsumerViewSchema, v),
       { key, retry: false },
     );
   }
@@ -113,13 +114,13 @@ export class ManagementCommands {
       "/v1/admin/credentials",
       "POST",
       S.IssueCredentialSchema.parse({ consumerId }),
-      (v) => S.IssuedCredentialSchema.parse(v),
+      (v) => parseResponse(S.IssuedCredentialSchema, v),
       { key, retry: false },
     );
   }
   policies() {
     return this.http.request("/v1/admin/policies", "GET", undefined, (v) =>
-      S.LifecyclePolicyViewSchema.array().parse(v),
+      parseResponse(S.LifecyclePolicyViewSchema.array(), v),
     );
   }
   createPolicy(name: string, key: string) {
@@ -127,7 +128,7 @@ export class ManagementCommands {
       "/v1/admin/policies",
       "POST",
       S.LifecyclePolicyInputSchema.parse({ name }),
-      (v) => S.LifecyclePolicyViewSchema.parse(v),
+      (v) => parseResponse(S.LifecyclePolicyViewSchema, v),
       { key, retry: false },
     );
   }
@@ -136,7 +137,7 @@ export class ManagementCommands {
       `/v1/admin/policies/${path(id)}`,
       "PUT",
       S.LifecyclePolicyUpdateSchema.parse({ name, expectedVersion }),
-      (v) => S.LifecyclePolicyViewSchema.parse(v),
+      (v) => parseResponse(S.LifecyclePolicyViewSchema, v),
       { key, retry: false },
     );
   }
@@ -150,13 +151,13 @@ export class ManagementCommands {
       `/v1/admin/image-versions/${path(id)}/retire`,
       "POST",
       S.ImageRetireSchema.parse({ expectedEntityVersion, reason }),
-      (v) => S.VersionReceiptSchema.parse(v),
+      (v) => parseResponse(S.VersionReceiptSchema, v),
       { key, retry: false },
     );
   }
   commandReceipts() {
     return this.http.request("/v1/admin/commands", "GET", undefined, (v) =>
-      S.AdminCommandReceiptSchema.array().parse(v),
+      parseResponse(S.AdminCommandReceiptSchema.array(), v),
     );
   }
   /** Records investigation, never turns an unknown operation into success or releases its Claim. */
@@ -165,7 +166,7 @@ export class ManagementCommands {
       "/v1/admin/commands/review",
       "POST",
       S.AdminCommandReviewSchema.parse(body),
-      (v) => S.AdminCommandReceiptSchema.parse(v),
+      (v) => parseResponse(S.AdminCommandReceiptSchema, v),
       { key: crypto.randomUUID(), retry: false },
     );
   }

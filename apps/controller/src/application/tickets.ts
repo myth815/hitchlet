@@ -355,9 +355,8 @@ export class TicketService {
       throw new RangeError("Accelerator requests are not supported");
     const { contract, frozen, versionId, network, now } =
       await this.prepareAcquire(consumerId, request);
-    const candidates = await this.store.eligibleCandidates({
+    const candidates = await this.store.schedulingCandidates({
       imageVersion: versionId,
-      now,
       providers: contract.allowedProviders,
       siteIds: contract.siteIds,
       nodeIds: contract.allowedNodeIds ?? [],
@@ -366,17 +365,19 @@ export class TicketService {
       architectures: contract.allowedArchitectures,
     });
     const eligibleNodeIds: string[] = [];
-    for (const candidate of candidates)
-      if (
-        await this.candidateEligible(
-          candidate,
-          contract,
-          String(network.id),
-          frozen,
-          now,
-        )
-      )
+    const reasonCodes = new Set<string>();
+    for (const candidate of candidates) {
+      const decision = await this.candidateDecision(
+        candidate,
+        contract,
+        String(network.id),
+        frozen,
+        now,
+      );
+      if (decision.reasonCodes.length === 0)
         eligibleNodeIds.push(String(candidate.node_id));
+      else decision.reasonCodes.forEach((code) => reasonCodes.add(code));
+    }
     return {
       observedAtMs: now,
       capacityGuaranteed: false as const,
@@ -384,7 +385,9 @@ export class TicketService {
       reasons: [
         ...(eligibleNodeIds.length
           ? []
-          : ["capacity_or_eligibility_unavailable"]),
+          : reasonCodes.size
+            ? [...reasonCodes]
+            : ["no_matching_nodes"]),
         "Eligibility snapshot only; live aggregate quota and capacity are checked atomically when reserving. No capacity is reserved.",
       ],
     };
@@ -395,7 +398,6 @@ export class TicketService {
     nodeId: string;
   } | null> {
     const now = this.now();
-    if (!(await admissionOpen(this.options.storage))) return null;
     const tickets = await this.store.queuedTickets(now);
     for (const ticket of tickets) {
       const contract = AcceptedAcquireRequestSchema.parse(
@@ -409,9 +411,8 @@ export class TicketService {
       const allowedArchitectures = contract.allowedArchitectures ?? [];
       const consumerId = String(ticket.consumer_id);
       const imageVersion = String(ticket.image_version_id);
-      const candidates = await this.store.eligibleCandidates({
+      const candidates = await this.store.schedulingCandidates({
         imageVersion,
-        now: this.now(),
         providers: contract.allowedProviders,
         siteIds: contract.siteIds,
         nodeIds: allowedNodes,
@@ -419,28 +420,29 @@ export class TicketService {
         kind: contract.kind,
         architectures: allowedArchitectures,
       });
+      const matchingNodes = new Set<string>();
+      const reasonCodes = new Set<string>();
       for (const candidate of candidates) {
-        if (
-          !(await this.candidateEligible(
-            candidate,
-            contract,
-            String(ticket.network_profile_revision_id),
-            frozen,
-            now,
-          ))
-        )
-          continue;
+        const decision = await this.candidateDecision(
+          candidate,
+          contract,
+          String(ticket.network_profile_revision_id),
+          frozen,
+          now,
+        );
+        if (decision.matches) matchingNodes.add(String(candidate.node_id));
+        decision.reasonCodes.forEach((code) => reasonCodes.add(code));
+        if (decision.reasonCodes.length) continue;
         const poolId = String(candidate.pool_id);
         const poolVersion = candidate.pool_version;
         const allocId = this.id();
         const claimId = this.id();
         const generation = 1;
         const quotaRow = await this.store.consumerQuota(consumerId);
-        if (
-          typeof quotaRow?.quota_json !== "string" ||
-          quotaRow.status !== "active"
-        )
+        if (typeof quotaRow?.quota_json !== "string") {
+          reasonCodes.add("consumer_quota_unavailable");
           continue;
+        }
         const quota = object(parseJson(quotaRow.quota_json, "consumer quota"));
         const limits = object(quota.maxResources);
         const maxActive = nonNegativeInteger(
@@ -461,6 +463,19 @@ export class TicketService {
             "maxResources.scratchMiB",
           ),
         };
+        const reservationCheck = {
+          consumerId,
+          ticketId: String(ticket.id),
+          nodeId: String(candidate.node_id),
+          artifactId: String(candidate.artifact_id),
+          requested: contract.resources.request,
+          consumerLimits: { maxActiveTickets: maxActive, ...resourceLimits },
+        };
+        const blockers = await this.store.reservationBlockers(reservationCheck);
+        if (blockers.length) {
+          blockers.forEach((code) => reasonCodes.add(code));
+          continue;
+        }
         try {
           await this.store.reserve({
             allocationId: allocId,
@@ -506,12 +521,33 @@ export class TicketService {
             error.code !== "STORAGE_CAS_FAILED"
           )
             throw error;
+          // Explain a live capacity/quota change using the same rules after an atomic fence loses.
+          const currentAdmission = await this.store.machineAdmission(
+            candidate,
+            now,
+            contract.resources.request,
+          );
+          const currentBlockers =
+            await this.store.reservationBlockers(reservationCheck);
+          const currentReasons = [
+            ...currentAdmission.reasonCodes,
+            ...currentBlockers,
+          ];
+          if (currentReasons.length)
+            currentReasons.forEach((code) => reasonCodes.add(code));
+          else reasonCodes.add("reservation_conflict");
         }
       }
       await this.store.setSchedulingReason(
         String(ticket.id),
         Number(ticket.version),
         now,
+        {
+          reasonCodes: reasonCodes.size
+            ? [...reasonCodes]
+            : ["no_matching_nodes"],
+          matchingNodeCount: matchingNodes.size,
+        },
       );
     }
     return null;
@@ -663,13 +699,16 @@ export class TicketService {
     }
   }
 
-  private async candidateEligible(
+  /** Static matching and live admission share this decision for preview and reservation.
+   * A matching Node satisfies the frozen request even when capacity or Host admission blocks it. */
+  private async candidateDecision(
     candidate: Row,
     contract: ReturnType<typeof AcceptedAcquireRequestSchema.parse>,
     networkRevisionId: string,
     frozen: Record<string, unknown>,
     now: number,
-  ): Promise<boolean> {
+  ): Promise<{ matches: boolean; reasonCodes: string[] }> {
+    const hardReasons = new Set<string>();
     const caps = object(
       parseJson(candidate.capabilities_json, "node capabilities"),
     );
@@ -680,97 +719,47 @@ export class TicketService {
       !contract.requiredLabels ||
       Object.entries(contract.requiredLabels).some(([k, v]) => labels[k] !== v)
     )
-      return false;
+      hardReasons.add("labels_unavailable");
+    if (candidate.artifact_id === null)
+      hardReasons.add("image_artifact_unavailable");
     if (
       !stringList(caps.resourceKinds).includes(contract.kind) ||
-      !stringList(caps.architectures).includes(
-        String(candidate.architecture),
-      ) ||
-      !stringList(caps.guestOs).includes(String(candidate.guest_os))
+      (candidate.artifact_id !== null &&
+        (!stringList(caps.architectures).includes(
+          String(candidate.architecture),
+        ) ||
+          !stringList(caps.guestOs).includes(String(candidate.guest_os))))
     )
-      return false;
+      hardReasons.add("capabilities_unavailable");
     const capabilityExpiry =
-      typeof caps.expiresAt === "string"
-        ? Date.parse(caps.expiresAt)
-        : Number.NaN;
+      typeof caps.expiresAt === "string" ? Date.parse(caps.expiresAt) : NaN;
     if (!Number.isFinite(capabilityExpiry) || capabilityExpiry <= now)
-      return false;
+      hardReasons.add("capabilities_expired");
     if (
       caps.cpuHardLimit !== "verified" ||
       caps.memoryHardLimit !== "verified" ||
-      caps.networkPolicyEnforcement !== "verified"
+      caps.networkPolicyEnforcement !== "verified" ||
+      (contract.resources.scratchEnforcement === "required" &&
+        caps.scratchHardLimit !== "verified") ||
+      contract.requiredCapabilities.some((cap) => caps[cap] !== "verified")
     )
-      return false;
-    if (
-      contract.resources.scratchEnforcement === "required" &&
-      caps.scratchHardLimit !== "verified"
-    )
-      return false;
-    if (
-      Number(candidate.minimum_cpu_millis) >
-        contract.resources.request.cpuMillis ||
-      Number(candidate.minimum_memory_mib) >
-        contract.resources.request.memoryMiB ||
-      Number(candidate.minimum_scratch_mib) >
-        contract.resources.request.scratchMiB
-    )
-      return false;
-    const artifactRequirements = object(
-      parseJson(candidate.requirements_json, "artifact requirements"),
-    );
-    if (
-      stringListOptional(
-        artifactRequirements.requiredCapabilities,
-        "artifact required capabilities",
-      ).some((name) => caps[name] !== "verified")
-    )
-      return false;
-    const accessRecipe = object(
-      parseJson(candidate.access_recipe_json, "artifact access recipe"),
-    );
-    if (
-      !stringListRequired(
-        accessRecipe.accessProtocols,
-        "artifact protocols",
-      ).includes(contract.access.protocol)
-    )
-      return false;
+      hardReasons.add("capabilities_unavailable");
     if (
       !stringListRequired(
         caps.supportedAccess,
         "node access protocols",
       ).includes(contract.access.protocol)
     )
-      return false;
-    if (contract.requiredCapabilities.some((cap) => caps[cap] !== "verified"))
-      return false;
+      hardReasons.add("access_unavailable");
     if (
       !stringList(caps.verifiedNetworkProfileRevisionIds).includes(
         networkRevisionId,
       )
     )
-      return false;
-    if (candidate.observed_power !== "on" && !canSafelyWake(candidate, now))
-      return false;
-    if (
-      !(await admissionOpen(
-        this.options.storage,
-        String(candidate.node_id),
-        now,
-      ))
-    )
-      return false;
+      hardReasons.add("network_profile_unverified");
     const frozenStorage = Array.isArray(frozen.storage)
       ? frozen.storage.map((item) => object(item))
       : [];
-    if (
-      executionMode(candidate.config_json) === "portainer" &&
-      !supportsNodeSshRecipe(
-        { bootstrap: artifactRequirements.bootstrap },
-        accessRecipe,
-      )
-    )
-      return false;
     if (
       frozenStorage.some(
         (item) =>
@@ -779,9 +768,60 @@ export class TicketService {
           ),
       )
     )
-      return false;
-    if (Number(candidate.observed_at_ms ?? 0) + 120_000 < now) return false;
-    return true;
+      hardReasons.add("storage_profile_unverified");
+    if (candidate.artifact_id !== null) {
+      if (
+        Number(candidate.minimum_cpu_millis) >
+          contract.resources.request.cpuMillis ||
+        Number(candidate.minimum_memory_mib) >
+          contract.resources.request.memoryMiB ||
+        Number(candidate.minimum_scratch_mib) >
+          contract.resources.request.scratchMiB
+      )
+        hardReasons.add("image_minimum_resources_unmet");
+      const requirements = object(
+        parseJson(candidate.requirements_json, "artifact requirements"),
+      );
+      if (
+        stringListOptional(
+          requirements.requiredCapabilities,
+          "artifact required capabilities",
+        ).some((name) => caps[name] !== "verified")
+      )
+        hardReasons.add("image_capabilities_unavailable");
+      const recipe = object(
+        parseJson(candidate.access_recipe_json, "artifact access recipe"),
+      );
+      if (
+        !stringListRequired(
+          recipe.accessProtocols,
+          "artifact protocols",
+        ).includes(contract.access.protocol) ||
+        (executionMode(candidate.config_json) === "portainer" &&
+          !supportsNodeSshRecipe({ bootstrap: requirements.bootstrap }, recipe))
+      )
+        hardReasons.add("image_access_unavailable");
+    }
+    const reasons = new Set(hardReasons);
+    if (candidate.connection_revision_id === null)
+      reasons.add("provider_connection_unavailable");
+    if (candidate.observed_power !== "on" && !canSafelyWake(candidate, now))
+      reasons.add("machine_power_unavailable");
+    if (
+      !(await admissionOpen(
+        this.options.storage,
+        String(candidate.node_id),
+        now,
+      ))
+    )
+      reasons.add("admission_closed");
+    const admission = await this.store.machineAdmission(
+      candidate,
+      now,
+      contract.resources.request,
+    );
+    admission.reasonCodes.forEach((code) => reasons.add(code));
+    return { matches: hardReasons.size === 0, reasonCodes: [...reasons] };
   }
   private replay(row: Row, hash: string): AcquireResult {
     if (row.request_hash !== hash) throw conflict("idempotency_key_reused");

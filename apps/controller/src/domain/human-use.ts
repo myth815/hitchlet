@@ -120,6 +120,11 @@ export function evaluateMachineAdmission(
   requested = zeroResources(),
 ) {
   const reasons: string[] = [];
+  const reasonCodes: string[] = [];
+  const block = (code: string, detail: string) => {
+    reasonCodes.push(code);
+    reasons.push(detail);
+  };
   const roots = context.pools.filter((p) => p.parentAllocationId === null);
   const root = roots[0];
   const node = context.nodes.find((n) => n.id === nodeId);
@@ -203,65 +208,96 @@ export function evaluateMachineAdmission(
     sessionsComplete: snapshot?.sessionsComplete ?? null,
     interactiveSessionCount: snapshot?.sessions.length ?? null,
   };
-  if (context.source !== "local") reasons.push("Machine source is not local");
+  if (context.source !== "local")
+    block("locality_unavailable", "Machine source is not local");
   if (context.admission !== "enabled")
-    reasons.push(`Machine admission is ${context.admission}`);
-  if (context.power !== "on") reasons.push(`Machine power is ${context.power}`);
+    block(
+      "machine_admission_blocked",
+      `Machine admission is ${context.admission}`,
+    );
+  if (context.power !== "on")
+    block("machine_power_unavailable", `Machine power is ${context.power}`);
   if (roots.length !== 1)
-    reasons.push("Machine must have exactly one physical root pool");
+    block(
+      "capacity_topology_invalid",
+      "Machine must have exactly one physical root pool",
+    );
   if (!policy || context.policyInvalid)
-    reasons.push("Human-use policy is missing or invalid");
-  if (nodeId && !node) reasons.push("Node is not owned by this Machine");
+    block("human_use_policy_invalid", "Human-use policy is missing or invalid");
+  if (nodeId && !node)
+    block("capacity_topology_invalid", "Node is not owned by this Machine");
   if (node && node.admission !== "enabled")
-    reasons.push(`Node admission is ${node.admission}`);
+    block("node_admission_blocked", `Node admission is ${node.admission}`);
   if (node && node.observedHealth !== "healthy")
-    reasons.push(`Node health is ${node.observedHealth}`);
+    block("node_health_unavailable", `Node health is ${node.observedHealth}`);
   if (node && !isNodeObservationFresh(node.observedAtMs, now))
-    reasons.push("Node observation is stale or unknown");
+    block("node_observation_stale", "Node observation is stale or unknown");
   if (
     node &&
     (node.capabilityExpiresAtMs === null ||
       !Number.isFinite(node.capabilityExpiresAtMs) ||
       node.capabilityExpiresAtMs <= now)
   )
-    reasons.push("Node capabilities are expired or unverified");
+    block(
+      "capabilities_expired",
+      "Node capabilities are expired or unverified",
+    );
   // A current, positive Host safety signal always vetoes even the static trial path.
-  if (snapshot?.probeStatus === "failed") reasons.push("Host probe failed");
+  if (snapshot?.probeStatus === "failed")
+    block("host_probe_failed", "Host probe failed");
   if (snapshot?.unmanagedActivityHold === true)
-    reasons.push("Unmanaged activity is held");
+    block("unmanaged_activity_held", "Unmanaged activity is held");
   if (!manual) {
-    if (!fresh) reasons.push(`Host observation is ${hostObservation.state}`);
+    if (!fresh)
+      block(
+        `host_observation_${hostObservation.state}`,
+        `Host observation is ${hostObservation.state}`,
+      );
     if (snapshot?.probeStatus !== "complete" && !boundedPartial)
-      reasons.push("Host workload observation is incomplete");
-    if (humanPresence === "unknown") reasons.push("Human presence is unknown");
+      block(
+        "host_observation_incomplete",
+        "Host workload observation is incomplete",
+      );
+    if (humanPresence === "unknown")
+      block("human_presence_unknown", "Human presence is unknown");
     if (snapshot?.unmanagedActivityHold !== false && !boundedPartial)
-      reasons.push("Unmanaged activity is unknown or held");
+      block(
+        "unmanaged_activity_unknown",
+        "Unmanaged activity is unknown or held",
+      );
   }
   if (policy) {
     if (
       humanPresence === "present" &&
       policy.admissionDuringInteraction === "block_new"
     )
-      reasons.push("Interactive session blocks new allocations");
+      block(
+        "human_presence_blocked",
+        "Interactive session blocks new allocations",
+      );
     // Unknown human use in a static trial always receives the attended (smaller) ceiling.
     if (
       manual &&
       policy.admissionDuringInteraction !== "within_reserved_budget"
     )
-      reasons.push(
+      block(
+        "human_use_policy_invalid",
         "Manual inventory trial requires an explicit attended budget",
       );
     if (
       (!manual || cpuPercent !== null) &&
       (cpuPercent === null || cpuPercent >= policy.cpuPressureLimitPercent)
     )
-      reasons.push("CPU pressure is unknown or above policy");
+      block("cpu_pressure_blocked", "CPU pressure is unknown or above policy");
     if (
       (!manual || memoryPercent !== null) &&
       (memoryPercent === null ||
         memoryPercent >= policy.memoryPressureLimitPercent)
     )
-      reasons.push("Memory pressure is unknown or above policy");
+      block(
+        "memory_pressure_blocked",
+        "Memory pressure is unknown or above policy",
+      );
     for (const p of context.pools)
       for (const k of resourceKeys) {
         if (
@@ -269,24 +305,30 @@ export function evaluateMachineAdmission(
           !Number.isSafeInteger(p.reserve[k]) ||
           p.reserve[k] > p.capacity[k]
         )
-          reasons.push(`Invalid pool ${p.id} ${k} budget`);
+          block("capacity_budget_invalid", `Invalid pool ${p.id} ${k} budget`);
       }
     if (root)
       for (const k of resourceKeys) {
         if (policy.systemReserve[k] !== root.reserve[k])
-          reasons.push(`Root ${k} reserve does not match policy`);
+          block(
+            "capacity_budget_invalid",
+            `Root ${k} reserve does not match policy`,
+          );
         if (
           policy.systemReserve[k] + policy.attendedMaximum[k] >
             root.capacity[k] ||
           policy.systemReserve[k] + policy.unattendedMaximum[k] >
             root.capacity[k]
         )
-          reasons.push(`Policy ${k} ceiling exceeds physical budget`);
+          block(
+            "capacity_budget_invalid",
+            `Policy ${k} ceiling exceeds physical budget`,
+          );
       }
   }
   for (const hold of context.holds)
     if (["maintenance", "recovery"].includes(hold.kind))
-      reasons.push(`Hold: ${hold.reason}`);
+      block("machine_hold", `Hold: ${hold.reason}`);
   const active = context.claims.filter((c) => c.state !== "released");
   const usage = new Map(context.pools.map((p) => [p.id, zeroResources()]));
   let workloadUsage = zeroResources();
@@ -296,7 +338,7 @@ export function evaluateMachineAdmission(
     );
     const pool = context.pools.find((p) => p.id === claim.poolId);
     if (!pool || !allocation) {
-      reasons.push("Claim ownership is inconsistent");
+      block("capacity_topology_invalid", "Claim ownership is inconsistent");
       continue;
     }
     usage.set(pool.id, addResources(usage.get(pool.id)!, claim.resources));
@@ -306,7 +348,10 @@ export function evaluateMachineAdmission(
     if (
       context.nodes.find((n) => n.id === allocation.nodeId)?.poolId !== pool.id
     )
-      reasons.push("Claim is outside its allocation Node pool");
+      block(
+        "capacity_topology_invalid",
+        "Claim is outside its allocation Node pool",
+      );
   }
   // Only a requested/occupied subtree needs a running base. An unused, stopped base
   // may retain its child-pool definition and disk without disabling unrelated Nodes.
@@ -328,7 +373,7 @@ export function evaluateMachineAdmission(
         !Number.isSafeInteger(used[k]) ||
         used[k] + pool.reserve[k] > pool.capacity[k]
       )
-        reasons.push(`Pool ${pool.id} ${k} is over budget`);
+        block("capacity_exhausted", `Pool ${pool.id} ${k} is over budget`);
     if (pool.parentAllocationId !== null) {
       const parent = context.allocations.find(
         (a) => a.id === pool.parentAllocationId,
@@ -348,7 +393,8 @@ export function evaluateMachineAdmission(
           parent.observedState !== "running" ||
           parent.cleanupStatus === "complete")
       )
-        reasons.push(
+        block(
+          "infrastructure_unavailable",
           `Infrastructure dependency ${pool.parentAllocationId} is not running`,
         );
       if (
@@ -356,7 +402,8 @@ export function evaluateMachineAdmission(
         (parentClaims.length === 0 ||
           resourceKeys.some((k) => pool.capacity[k] > backing[k]))
       )
-        reasons.push(
+        block(
+          "infrastructure_capacity_unavailable",
           `Child pool ${pool.id} exceeds committed infrastructure backing`,
         );
       const siblings = context.pools
@@ -366,7 +413,8 @@ export function evaluateMachineAdmission(
         requiredPools.has(pool.id) &&
         resourceKeys.some((k) => siblings[k] > backing[k])
       )
-        reasons.push(
+        block(
+          "infrastructure_capacity_unavailable",
           `Child pools exceed infrastructure ${pool.parentAllocationId} backing`,
         );
       // Walk ownership through Node pools. Missing parents and cycles fail closed.
@@ -374,7 +422,7 @@ export function evaluateMachineAdmission(
       const seen = new Set<string>();
       while (cursor?.parentAllocationId) {
         if (seen.has(cursor.id)) {
-          reasons.push("Capacity dependency cycle");
+          block("capacity_topology_invalid", "Capacity dependency cycle");
           break;
         }
         seen.add(cursor.id);
@@ -385,7 +433,10 @@ export function evaluateMachineAdmission(
         cursor = context.pools.find((p) => p.id === ownerNode?.poolId);
       }
       if (cursor?.id !== root?.id)
-        reasons.push(`Pool ${pool.id} is not rooted in this Machine`);
+        block(
+          "capacity_topology_invalid",
+          `Pool ${pool.id} is not rooted in this Machine`,
+        );
     }
   }
   const physicalUsage = root ? usage.get(root.id)! : zeroResources();
@@ -396,7 +447,7 @@ export function evaluateMachineAdmission(
         usage.get(targetPool.id)![k] + targetPool.reserve[k] + requested[k] >
         targetPool.capacity[k]
       )
-        reasons.push(`Insufficient ${k} in Node pool`);
+        block("capacity_exhausted", `Insufficient ${k} in Node pool`);
   }
   const ceiling = policy
     ? humanPresence === "absent" && !manual && !boundedPartial
@@ -410,7 +461,8 @@ export function evaluateMachineAdmission(
   if (policy)
     for (const k of resourceKeys)
       if (proposedPhysical[k] > ceiling[k])
-        reasons.push(
+        block(
+          "machine_capacity_exhausted",
           `Machine ${k} exceeds ${humanPresence === "absent" && !manual && !boundedPartial ? "unattended" : "attended"} ceiling`,
         );
   const available = Object.fromEntries(
@@ -445,6 +497,7 @@ export function evaluateMachineAdmission(
     limitations,
     allowed: reasons.length === 0,
     reasons: [...new Set(reasons)],
+    reasonCodes: [...new Set(reasonCodes)],
     hostObservation,
     policy,
     manual,

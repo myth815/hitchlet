@@ -151,12 +151,21 @@ export class TicketQueries {
         this.now(),
       ),
       scheduling: {
-        checkedAt: iso(row.updated_at_ms),
+        checkedAt: iso(isRecord(reason) ? reason.checkedAtMs : null),
         reasonCodes:
-          isRecord(reason) && typeof reason.code === "string"
-            ? [reason.code]
-            : [],
-        matchingNodeCount: 0,
+          isRecord(reason) &&
+          Array.isArray(reason.reasonCodes) &&
+          reason.reasonCodes.every((code) => typeof code === "string")
+            ? reason.reasonCodes
+            : isRecord(reason) && typeof reason.code === "string"
+              ? [reason.code]
+              : [],
+        matchingNodeCount:
+          isRecord(reason) &&
+          Number.isSafeInteger(reason.matchingNodeCount) &&
+          Number(reason.matchingNodeCount) >= 0
+            ? reason.matchingNodeCount
+            : 0,
         nextCheckAt: null,
       },
       renewalPending: pending,

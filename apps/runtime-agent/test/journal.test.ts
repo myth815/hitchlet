@@ -1,9 +1,10 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { expect, it } from "vitest";
 import { FileJournal } from "../src/journal.js";
 it("expires completed receipts but preserves unknown effects and active/revoked fences", async () => {
-  const dir = await mkdtemp("/private/tmp/hitchlet-journal-retention-");
+  const dir = await mkdtemp(join(tmpdir(), "hitchlet-journal-retention-"));
   try {
     const journal = new FileJournal(join(dir, "journal.json"));
     await journal.initialize();

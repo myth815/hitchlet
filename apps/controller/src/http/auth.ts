@@ -52,17 +52,22 @@ export class Authenticator {
     }
     await this.store.revokeSession(digest(token), this.now());
   }
-  async bearerPrincipal(request: FastifyRequest): Promise<Principal> {
+  async bearerPrincipal(
+    request: FastifyRequest,
+    allowDisabled = false,
+  ): Promise<Principal> {
     const auth = request.headers.authorization;
     if (!auth?.startsWith("Bearer ")) throw new AuthFailure("unauthenticated");
-    return this.bearer(auth.slice(7));
+    return this.bearer(auth.slice(7), allowDisabled);
   }
   async authenticate(
     request: FastifyRequest,
     write: boolean,
+    allowDisabled = false,
   ): Promise<Principal> {
     const auth = request.headers.authorization;
-    if (auth?.startsWith("Bearer ")) return this.bearer(auth.slice(7));
+    if (auth?.startsWith("Bearer "))
+      return this.bearer(auth.slice(7), allowDisabled);
     const cookie = request.headers.cookie
       ?.split(";")
       .map((part) => part.trim())
@@ -76,8 +81,7 @@ export class Authenticator {
     }
     const hash = digest(token);
     const row = await this.store.session(hash);
-    if (!row || row.status !== "active")
-      throw new AuthFailure("unauthenticated");
+    requireConsumer(row, allowDisabled);
     if (write) {
       const csrf = request.headers["x-csrf-token"];
       const csrfCookie = request.headers.cookie
@@ -102,18 +106,32 @@ export class Authenticator {
     }
     return principal(row, "session", String(row.csrf_token_hash));
   }
-  private async bearer(token: string): Promise<Principal> {
+  private async bearer(
+    token: string,
+    allowDisabled: boolean,
+  ): Promise<Principal> {
     if (token.length < 32 || token.length > 4096)
       throw new AuthFailure("unauthenticated");
     const prefix = token.slice(0, 12);
     const row = await this.store.bearer(prefix, digest(token));
-    if (!row || row.status !== "active")
-      throw new AuthFailure("unauthenticated");
+    requireConsumer(row, allowDisabled);
     const raw = JSON.parse(String(row.scopes_json)) as unknown;
     if (!Array.isArray(raw) || !raw.every((item) => typeof item === "string"))
       throw new AuthFailure("unauthenticated");
     return principal(row, "bearer", undefined, raw);
   }
+}
+function requireConsumer(
+  row: Row | undefined,
+  allowDisabled: boolean,
+): asserts row is Row {
+  if (!row) throw new AuthFailure("unauthenticated");
+  if (row.status === "active") return;
+  if (row.status === "disabled") {
+    if (allowDisabled) return;
+    throw new AuthFailure("forbidden");
+  }
+  throw new AuthFailure("unauthenticated");
 }
 function digest(value: string): string {
   return createHash("sha256").update(value).digest("hex");

@@ -1,5 +1,6 @@
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm } from "node:fs/promises";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   runtimeStorageResultSchema,
@@ -77,7 +78,9 @@ afterEach(() => {
 });
 
 it("projects only storage identity from the complete deployed Agent configuration at the real entry point", async () => {
-  const directory = await mkdtemp("/private/tmp/hitchlet-main-storage-");
+  const directory = await realpath(
+    await mkdtemp(join(tmpdir(), "hitchlet-main-storage-")),
+  );
   const before = new Map(
     ["SIGTERM", "SIGINT"].map((event) => [event, process.listeners(event)]),
   );

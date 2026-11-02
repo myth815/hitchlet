@@ -368,6 +368,294 @@ describe("independent admission review", () => {
   });
 });
 
+describe("queued ticket fairness", () => {
+  it("rotates consumers by the latest durable reservation event and keeps FIFO within each consumer", async () => {
+    const { service, storage, now } = await fixture();
+    const a1 = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "fair-a1",
+      request(),
+    );
+    const a2 = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "fair-a2",
+      request(),
+    );
+    const b1 = await service.acquire(
+      "10000000-0000-4000-8000-000000000002",
+      "fair-b1",
+      request(),
+    );
+    await storage.run("UPDATE tickets SET created_at_ms=? WHERE id=?", [
+      now - 3,
+      a1.ticketId,
+    ]);
+    await storage.run("UPDATE tickets SET created_at_ms=? WHERE id=?", [
+      now - 2,
+      a2.ticketId,
+    ]);
+    await storage.run("UPDATE tickets SET created_at_ms=? WHERE id=?", [
+      now - 1,
+      b1.ticketId,
+    ]);
+    expect((await service.reserveNext())?.ticketId).toBe(a1.ticketId);
+    // Consumer B gets its turn even though A's second request is older.
+    expect((await service.reserveNext())?.ticketId).toBe(b1.ticketId);
+    expect((await service.reserveNext())?.ticketId).toBe(a2.ticketId);
+    expect(await service.reserveNext()).toBeNull();
+  });
+
+  it("continues reserving an accepted queued ticket after its consumer is disabled", async () => {
+    const { service, storage } = await fixture();
+    const ticket = await service.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "disabled-after-acceptance",
+      request(),
+    );
+    await storage.run(
+      "UPDATE consumers SET status='disabled',version=version+1 WHERE id='10000000-0000-4000-8000-000000000001'",
+    );
+    expect((await service.reserveNext())?.ticketId).toBe(ticket.ticketId);
+  });
+});
+
+describe("queued scheduling explanations", () => {
+  const consumerId = "10000000-0000-4000-8000-000000000001";
+
+  it.each([
+    ["pause", "UPDATE system_maintenance SET paused=1"],
+    ["disk", "UPDATE system_maintenance SET disk_state='low'"],
+    ["recovery", "UPDATE system_maintenance SET recovery_json='{}'"],
+    [
+      "node-health",
+      "UPDATE nodes SET observed_health='degraded',version=version+1",
+    ],
+    [
+      "node-admission",
+      "UPDATE nodes SET admission='draining',version=version+1",
+    ],
+  ])(
+    "preserves the %s admission gate while explaining a matching Node",
+    async (gate, mutation) => {
+      const { service, storage, now } = await fixture();
+      const waiting = await service.acquire(consumerId, gate, request());
+      await storage.run(mutation);
+      expect(await service.reserveNext()).toBeNull();
+      const code =
+        gate === "node-health"
+          ? "node_health_unavailable"
+          : gate === "node-admission"
+            ? "node_admission_blocked"
+            : "admission_closed";
+      expect(
+        (
+          await new TicketQueries(storage, () => now).get(
+            consumerId,
+            waiting.ticketId,
+          )
+        )?.scheduling,
+      ).toMatchObject({
+        matchingNodeCount: 1,
+        reasonCodes: expect.arrayContaining([code]),
+      });
+      expect(
+        await storage.get("SELECT count(*) AS n FROM allocations"),
+      ).toMatchObject({ n: 0n });
+      expect(
+        await storage.get("SELECT count(*) AS n FROM capacity_claims"),
+      ).toMatchObject({ n: 0n });
+    },
+  );
+
+  it("reports a matching Node blocked by retained capacity and clears its explanation after capacity returns", async () => {
+    const { service, storage, now } = await fixture();
+    await service.acquire(consumerId, "capacity-first", heavierRequest(2000));
+    const reserved = await service.reserveNext();
+    expect(reserved).not.toBeNull();
+    const waiting = await service.acquire(
+      consumerId,
+      "capacity-waiting",
+      heavierRequest(2000),
+    );
+    expect(await service.reserveNext()).toBeNull();
+    const queries = new TicketQueries(storage, () => now);
+    expect(
+      (await queries.get(consumerId, waiting.ticketId))?.scheduling,
+    ).toMatchObject({
+      checkedAt: new Date(now).toISOString(),
+      matchingNodeCount: 1,
+      reasonCodes: expect.arrayContaining(["capacity_exhausted"]),
+    });
+    await service.cancel(reserved!.ticketId, consumerId);
+    // Cancellation keeps the claim occupied until cleanup confirms removal.
+    expect(await service.reserveNext()).toBeNull();
+    expect(
+      (await queries.get(consumerId, waiting.ticketId))?.scheduling
+        .matchingNodeCount,
+    ).toBe(1);
+    await storage.run(
+      "UPDATE capacity_pools SET total_cpu_millis=5000,version=version+1",
+    );
+    expect((await service.reserveNext())?.ticketId).toBe(waiting.ticketId);
+    expect(
+      (await queries.get(consumerId, waiting.ticketId))?.scheduling.reasonCodes,
+    ).toEqual([]);
+  });
+
+  it("counts distinct matching Nodes when multiple image variants are blocked", async () => {
+    const { service, storage, now } = await fixture();
+    const waiting = await service.acquire(consumerId, "variants", request());
+    await storage.run(`INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,variant,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms)
+      SELECT 'a0000000-0000-4000-8000-000000000002',image_version_id,backend_kind,environment_kind,architecture,guest_os,'second',artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms FROM image_artifacts`);
+    await storage.run(
+      "UPDATE machines SET admission='draining',version=version+1",
+    );
+    expect(await service.reserveNext()).toBeNull();
+    expect(
+      (
+        await new TicketQueries(storage, () => now).get(
+          consumerId,
+          waiting.ticketId,
+        )
+      )?.scheduling,
+    ).toMatchObject({
+      matchingNodeCount: 1,
+      reasonCodes: ["machine_admission_blocked"],
+    });
+  });
+
+  it("keeps hard matching separate from unavailable Host evidence and draining admission", async () => {
+    const { service, storage, now } = await fixture();
+    await storage.run(
+      "UPDATE nodes SET capabilities_json=json_remove(capabilities_json,'$.admissionMode'),version=version+1",
+    );
+    const waiting = await service.acquire(
+      consumerId,
+      "host-waiting",
+      request(),
+    );
+    expect(await service.reserveNext()).toBeNull();
+    const queries = new TicketQueries(storage, () => now);
+    expect(
+      (await queries.get(consumerId, waiting.ticketId))?.scheduling,
+    ).toMatchObject({
+      matchingNodeCount: 1,
+      reasonCodes: expect.arrayContaining(["host_observation_missing"]),
+    });
+    await storage.run(
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.admissionMode','constant_online_manual_inventory'),version=version+1",
+    );
+    await storage.run(
+      "UPDATE machines SET admission='draining',version=version+1",
+    );
+    expect(await service.reserveNext()).toBeNull();
+    expect(
+      (await queries.get(consumerId, waiting.ticketId))?.scheduling,
+    ).toMatchObject({
+      matchingNodeCount: 1,
+      reasonCodes: ["machine_admission_blocked"],
+    });
+    await storage.run(
+      "UPDATE machines SET admission='enabled',version=version+1",
+    );
+    expect((await service.reserveNext())?.ticketId).toBe(waiting.ticketId);
+  });
+
+  it.each([
+    [
+      "capability",
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.memoryHardLimit','unverified'),version=version+1",
+      "capabilities_unavailable",
+    ],
+    ["image", "DELETE FROM image_artifacts", "image_artifact_unavailable"],
+    [
+      "provider",
+      "UPDATE provider_connections SET enabled=0",
+      "provider_connection_unavailable",
+    ],
+  ])(
+    "reports the actual %s exclusion instead of silently dropping the candidate",
+    async (name, mutation, code) => {
+      const { service, storage, now } = await fixture();
+      const waiting = await service.acquire(consumerId, name, request());
+      await storage.run(mutation);
+      expect(await service.reserveNext()).toBeNull();
+      expect(
+        (
+          await new TicketQueries(storage, () => now).get(
+            consumerId,
+            waiting.ticketId,
+          )
+        )?.scheduling,
+      ).toMatchObject({
+        matchingNodeCount: name === "provider" ? 1 : 0,
+        reasonCodes: [code],
+      });
+      expect(
+        await storage.get("SELECT count(*) AS n FROM allocations"),
+      ).toMatchObject({ n: 0n });
+    },
+  );
+
+  it("reports missing verification for the frozen storage revision and reserves only after it is verified", async () => {
+    const { service, storage, now } = await fixture();
+    const waiting = await service.acquire(consumerId, "storage-waiting", {
+      ...request(),
+      storage: [
+        {
+          storageProfileId: "b0000000-0000-4000-8000-000000000001",
+          authorizedSubpath: "project-a/work",
+          mountPath: "/workspace/data",
+          mode: "read_write",
+        },
+      ],
+    });
+    expect(await service.reserveNext()).toBeNull();
+    expect(
+      (
+        await new TicketQueries(storage, () => now).get(
+          consumerId,
+          waiting.ticketId,
+        )
+      )?.scheduling,
+    ).toMatchObject({
+      matchingNodeCount: 0,
+      reasonCodes: ["storage_profile_unverified"],
+    });
+    await storage.run(
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.verifiedStorageProfileRevisionIds',json('[\"b0000000-0000-4000-8000-000000000002\"]')),version=version+1",
+    );
+    expect((await service.reserveNext())?.ticketId).toBe(waiting.ticketId);
+  });
+
+  it("reports the live active-ticket quota with matching capacity still available", async () => {
+    const { service, storage, now } = await fixture();
+    await storage.run(
+      "UPDATE consumers SET quota_json=json_set(quota_json,'$.maxActiveTickets',1) WHERE id=?",
+      [consumerId],
+    );
+    await service.acquire(consumerId, "quota-first", request());
+    expect(await service.reserveNext()).not.toBeNull();
+    const waiting = await service.acquire(
+      consumerId,
+      "quota-waiting",
+      request(),
+    );
+    expect(await service.reserveNext()).toBeNull();
+    expect(
+      (
+        await new TicketQueries(storage, () => now).get(
+          consumerId,
+          waiting.ticketId,
+        )
+      )?.scheduling,
+    ).toMatchObject({
+      matchingNodeCount: 1,
+      reasonCodes: ["consumer_active_quota_exceeded"],
+    });
+  });
+});
+
 describe("SQLite Ticket admission", () => {
   it("replays by consumer/key, rejects changed bodies, and isolates owners", async () => {
     const { service, storage } = await fixture();

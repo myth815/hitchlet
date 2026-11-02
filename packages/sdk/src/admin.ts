@@ -1,3 +1,4 @@
+import { parseResponse } from "./response.js";
 import {
   PowerExecutionSchema,
   PowerExecutionViewSchema,
@@ -44,7 +45,7 @@ export class AdminCommands {
       parsed.path,
       parsed.method,
       parsed.body,
-      (v) => contract.response.parse(v),
+      (v) => parseResponse(contract.response, v),
       {
         key: parsed.idempotencyKey,
         retry: false,
@@ -60,25 +61,25 @@ export class AdminCommands {
       `/v1/system/credentials${consumerId ? `?consumerId=${encodeURIComponent(consumerId)}` : ""}`,
       "GET",
       undefined,
-      (v) => CredentialListSchema.parse(v),
+      (v) => parseResponse(CredentialListSchema, v),
     );
   }
   /** Deliberately limited to operational summaries; no tokens, source paths, raw sessions or secret files. */
   diagnostics() {
     return this.http.request("/v1/system/diagnostics", "GET", undefined, (v) =>
-      DiagnosticsSchema.parse(v),
+      parseResponse(DiagnosticsSchema, v),
     );
   }
   /** Reads local and Runtime capacity gates without initiating maintenance work. */
   systemHealth() {
     return this.http.request("/v1/system/health", "GET", undefined, (v) =>
-      SystemHealthSchema.parse(v),
+      parseResponse(SystemHealthSchema, v),
     );
   }
   /** Lists verified online snapshots; restoring requires the offline CLI. */
   backups() {
     return this.http.request("/v1/system/backups", "GET", undefined, (v) =>
-      BackupListSchema.parse(v),
+      parseResponse(BackupListSchema, v),
     );
   }
   /** Reuse the key after a lost response to retrieve the original backup result. */
@@ -87,7 +88,7 @@ export class AdminCommands {
       "/v1/system/backups",
       "POST",
       BackupCreateSchema.parse({}),
-      (v) => BackupViewSchema.parse(v),
+      (v) => parseResponse(BackupViewSchema, v),
       { key, retry: false },
     );
   }
@@ -97,7 +98,7 @@ export class AdminCommands {
       "/v1/system/admission/pause",
       "POST",
       AdmissionPauseSchema.parse({ reason }),
-      (v) => SystemHealthSchema.parse(v),
+      (v) => parseResponse(SystemHealthSchema, v),
       { key: crypto.randomUUID(), retry: false },
     );
   }
@@ -107,7 +108,7 @@ export class AdminCommands {
       "/v1/system/admission/resume",
       "POST",
       AdmissionPauseSchema.parse({ reason }),
-      (v) => SystemHealthSchema.parse(v),
+      (v) => parseResponse(SystemHealthSchema, v),
       { key: crypto.randomUUID(), retry: false },
     );
   }
@@ -117,7 +118,7 @@ export class AdminCommands {
       "/v1/system/recovery/approve",
       "POST",
       RecoveryApprovalSchema.parse(body),
-      (v) => SystemHealthSchema.parse(v),
+      (v) => parseResponse(SystemHealthSchema, v),
       { key: crypto.randomUUID(), retry: false },
     );
   }
@@ -129,7 +130,7 @@ export class AdminCommands {
       "/v1/system/credentials/rotate",
       "POST",
       CredentialRotationSchema.parse(body),
-      (v) => CredentialReceiptSchema.parse(v),
+      (v) => parseResponse(CredentialReceiptSchema, v),
       { key: crypto.randomUUID(), retry: false },
     );
   }
@@ -138,7 +139,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-executions`,
       "GET",
       undefined,
-      (v) => PowerExecutionViewSchema.parse(v),
+      (v) => parseResponse(PowerExecutionViewSchema, v),
       {},
     );
   }
@@ -150,7 +151,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-executions`,
       "POST",
       PowerExecutionStartSchema.parse(body),
-      (v) => PowerExecutionSchema.parse(v),
+      (v) => parseResponse(PowerExecutionSchema, v),
       { key: crypto.randomUUID(), retry: false },
     );
   }
@@ -163,7 +164,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-executions/${encodeURIComponent(cycleId)}/command`,
       "POST",
       PowerExecutionCommandSchema.parse(body),
-      (v) => PowerExecutionSchema.parse(v),
+      (v) => parseResponse(PowerExecutionSchema, v),
       { key: crypto.randomUUID(), retry: false },
     );
   }
@@ -173,7 +174,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power`,
       "GET",
       undefined,
-      (v) => PowerSchemas.PowerConfigurationSchema.parse(v),
+      (v) => parseResponse(PowerSchemas.PowerConfigurationSchema, v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -187,7 +188,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-policy/dry-run`,
       "POST",
       PowerSchemas.PowerConfigurationUpdateSchema.parse(body),
-      (v) => PowerSchemas.PowerPolicyPreviewSchema.parse(v),
+      (v) => parseResponse(PowerSchemas.PowerPolicyPreviewSchema, v),
       {
         key: crypto.randomUUID(),
         retry: false,
@@ -206,7 +207,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-policy`,
       "PUT",
       PowerSchemas.PowerConfigurationUpdateSchema.parse(body),
-      (v) => PowerSchemas.PowerConfigurationSchema.parse(v),
+      (v) => parseResponse(PowerSchemas.PowerConfigurationSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -221,7 +222,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-capabilities`,
       "PUT",
       PowerSchemas.PowerCapabilityUpdateSchema.parse(body),
-      (v) => PowerSchemas.PowerConfigurationSchema.parse(v),
+      (v) => parseResponse(PowerSchemas.PowerConfigurationSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -236,7 +237,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/smart-plug-binding`,
       "PUT",
       PowerSchemas.SmartPlugBindingUpdateSchema.parse(body),
-      (v) => PowerSchemas.PowerConfigurationSchema.parse(v),
+      (v) => parseResponse(PowerSchemas.PowerConfigurationSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -246,7 +247,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-previews`,
       "GET",
       undefined,
-      (v) => PowerSchemas.PowerPreviewStateSchema.array().parse(v),
+      (v) => parseResponse(PowerSchemas.PowerPreviewStateSchema.array(), v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -260,7 +261,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-previews/${encodeURIComponent(previewId)}`,
       "GET",
       undefined,
-      (v) => PowerSchemas.PowerPreviewStateSchema.parse(v),
+      (v) => parseResponse(PowerSchemas.PowerPreviewStateSchema, v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -275,7 +276,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-previews`,
       "POST",
       PowerSchemas.PowerPreviewStartSchema.parse(body),
-      (v) => PowerSchemas.PowerPreviewStateSchema.parse(v),
+      (v) => parseResponse(PowerSchemas.PowerPreviewStateSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -291,7 +292,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/power-previews/${encodeURIComponent(previewId)}/advance`,
       "POST",
       PowerSchemas.PowerPreviewAdvanceSchema.parse(body),
-      (v) => PowerSchemas.PowerPreviewStateSchema.parse(v),
+      (v) => parseResponse(PowerSchemas.PowerPreviewStateSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -300,7 +301,7 @@ export class AdminCommands {
       "/v1/nodes",
       "GET",
       undefined,
-      (v) => AdminSchemas.NodeViewSchema.array().parse(v),
+      (v) => parseResponse(AdminSchemas.NodeViewSchema.array(), v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -309,7 +310,7 @@ export class AdminCommands {
       "/v1/machines",
       "GET",
       undefined,
-      (v) => AdminSchemas.MachineDependencyViewSchema.array().parse(v),
+      (v) => parseResponse(AdminSchemas.MachineDependencyViewSchema.array(), v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -318,7 +319,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/dry-run`,
       "GET",
       undefined,
-      (v) => AdminSchemas.MachineDependencyViewSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.MachineDependencyViewSchema, v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -335,7 +336,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/human-use-policy/dry-run`,
       "POST",
       input,
-      (v) => AdminSchemas.MachinePolicyDryRunSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.MachinePolicyDryRunSchema, v),
       {
         key: crypto.randomUUID(),
         retry: false,
@@ -357,7 +358,7 @@ export class AdminCommands {
       `/v1/machines/${encodeURIComponent(machineId)}/human-use-policy`,
       "PUT",
       input,
-      (v) => AdminSchemas.MachinePolicyReceiptSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.MachinePolicyReceiptSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -371,7 +372,7 @@ export class AdminCommands {
       `/v1/nodes/${encodeURIComponent(nodeId)}/admission-mode`,
       "PUT",
       AdminSchemas.NodeAdmissionModeSchema.parse(body),
-      (v) => AdminSchemas.NodeAdmissionModeReceiptSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.NodeAdmissionModeReceiptSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -385,7 +386,7 @@ export class AdminCommands {
       `/v1/${kind}-profiles/${encodeURIComponent(profileId)}/revisions`,
       "GET",
       undefined,
-      (v) => AdminSchemas.ProfileRevisionViewSchema.array().parse(v),
+      (v) => parseResponse(AdminSchemas.ProfileRevisionViewSchema.array(), v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -398,7 +399,7 @@ export class AdminCommands {
       "/v1/admin/profile-grants/revoke/preview",
       "POST",
       AdminSchemas.ProfileGrantRevokeRequestSchema.parse(body),
-      (v) => AdminSchemas.RevocationImpactSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.RevocationImpactSchema, v),
       {
         key: crypto.randomUUID(),
         retry: false,
@@ -416,7 +417,7 @@ export class AdminCommands {
       "/v1/admin/profile-grants/revoke",
       "POST",
       AdminSchemas.ProfileGrantRevokeRequestSchema.parse(body),
-      (v) => AdminSchemas.ProfileGrantRevocationSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.ProfileGrantRevocationSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -425,7 +426,7 @@ export class AdminCommands {
       "/v1/network-profiles",
       "GET",
       undefined,
-      (v) => AdminSchemas.AdminProfileViewSchema.array().parse(v),
+      (v) => parseResponse(AdminSchemas.AdminProfileViewSchema.array(), v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -434,7 +435,8 @@ export class AdminCommands {
       "/v1/admin/image-versions",
       "GET",
       undefined,
-      (v) => AdminSchemas.AdminImageVersionSummarySchema.array().parse(v),
+      (v) =>
+        parseResponse(AdminSchemas.AdminImageVersionSummarySchema.array(), v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -443,7 +445,7 @@ export class AdminCommands {
       `/v1/admin/image-versions/${encodeURIComponent(id)}`,
       "GET",
       undefined,
-      (v) => AdminSchemas.DraftVersionViewSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.DraftVersionViewSchema, v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -452,7 +454,8 @@ export class AdminCommands {
       `/v1/admin/image-versions/${encodeURIComponent(versionId)}/validations`,
       "GET",
       undefined,
-      (v) => AdminSchemas.AdminValidationHistoryItemSchema.array().parse(v),
+      (v) =>
+        parseResponse(AdminSchemas.AdminValidationHistoryItemSchema.array(), v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -461,7 +464,7 @@ export class AdminCommands {
       `/v1/admin/images/${encodeURIComponent(imageId)}/aliases`,
       "GET",
       undefined,
-      (v) => AdminSchemas.AdminImageAliasViewSchema.array().parse(v),
+      (v) => parseResponse(AdminSchemas.AdminImageAliasViewSchema.array(), v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -474,7 +477,7 @@ export class AdminCommands {
       `/v1/nodes/${encodeURIComponent(nodeId)}/image-cache/operations/${encodeURIComponent(operationId)}`,
       "GET",
       undefined,
-      (v) => AdminSchemas.AdminCacheOperationReceiptSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.AdminCacheOperationReceiptSchema, v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -489,7 +492,7 @@ export class AdminCommands {
       `/v1/image-versions/${encodeURIComponent(versionId)}/validate`,
       "POST",
       request,
-      (v) => AdminSchemas.ValidationScheduleReceiptSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.ValidationScheduleReceiptSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -498,7 +501,7 @@ export class AdminCommands {
       `/v1/image-validations/${encodeURIComponent(id)}`,
       "GET",
       undefined,
-      (v) => AdminSchemas.AdminValidationViewSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.AdminValidationViewSchema, v),
       isCancelled ? { isCancelled } : {},
     );
   }
@@ -507,7 +510,7 @@ export class AdminCommands {
       `/v1/image-validations/${encodeURIComponent(id)}/cancel`,
       "POST",
       {},
-      (v) => AdminSchemas.AdminValidationViewSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.AdminValidationViewSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -524,7 +527,7 @@ export class AdminCommands {
       `/v1/image-versions/${encodeURIComponent(versionId)}/publish`,
       "POST",
       body,
-      (v) => AdminSchemas.ImagePublishReceiptSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.ImagePublishReceiptSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }
@@ -544,7 +547,7 @@ export class AdminCommands {
       `/v1/images/${encodeURIComponent(imageId)}/aliases/${encodeURIComponent(AdminSchemas.ImageAliasNameSchema.parse(alias))}`,
       "PUT",
       body,
-      (v) => AdminSchemas.ImageAliasReceiptSchema.parse(v),
+      (v) => parseResponse(AdminSchemas.ImageAliasReceiptSchema, v),
       { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
     );
   }

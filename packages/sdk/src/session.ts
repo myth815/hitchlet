@@ -1,3 +1,4 @@
+import { parseResponse } from "./response.js";
 import { AuthenticatedPrincipalSchema } from "@hitchlet/contracts";
 import type { AuthenticatedPrincipal } from "@hitchlet/contracts/public";
 import { ComputeClientError, HttpTransport } from "./transport.js";
@@ -21,7 +22,7 @@ export class SessionCommands {
       "POST",
       undefined,
       (value, response) => {
-        const principal = AuthenticatedPrincipalSchema.parse(value);
+        const principal = parseResponse(AuthenticatedPrincipalSchema, value);
         if (
           response.status !== 201 ||
           principal.source !== "session" ||
@@ -39,7 +40,7 @@ export class SessionCommands {
   /** Read the principal associated with the configured bearer or cookie credentials. */
   async me(): Promise<AuthenticatedPrincipal> {
     return this.http.request("/v1/auth/me", "GET", undefined, (value) =>
-      AuthenticatedPrincipalSchema.parse(value),
+      parseResponse(AuthenticatedPrincipalSchema, value),
     );
   }
 

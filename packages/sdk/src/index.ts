@@ -1,3 +1,4 @@
+import { parseResponse } from "./response.js";
 import {
   HealthResponseSchema,
   ImageSummaryPageSchema,
@@ -126,7 +127,7 @@ export class HitchletClient implements ComputeClient {
           `/v1/images${suffix}`,
           "GET",
           undefined,
-          (value) => ImageSummaryPageSchema.parse(value),
+          (value) => parseResponse(ImageSummaryPageSchema, value),
         );
       },
       getVersion: (versionId) =>
@@ -134,7 +135,7 @@ export class HitchletClient implements ComputeClient {
           `/v1/image-versions/${encodeURIComponent(versionId)}`,
           "GET",
           undefined,
-          (value) => ImageVersionViewSchema.parse(value),
+          (value) => parseResponse(ImageVersionViewSchema, value),
         ),
     };
   }
@@ -142,7 +143,7 @@ export class HitchletClient implements ComputeClient {
   /** Read the shared health contract; this does not authenticate or expose lease data. */
   async health(): Promise<HealthResponse> {
     return this.http.request("/healthz", "GET", undefined, (value) =>
-      HealthResponseSchema.parse(value),
+      parseResponse(HealthResponseSchema, value),
     );
   }
   /** Creates an independent client using the same transport/auth configuration and a per-workflow persistence hook. */
@@ -159,7 +160,7 @@ export class HitchletClient implements ComputeClient {
   /** Safe authorized choices; no host source, secret version or backend address reaches the consumer. */
   catalog() {
     return this.http.request("/v1/catalog", "GET", undefined, (v) =>
-      ManagementSchemas.AuthorizedCatalogSchema.parse(v),
+      parseResponse(ManagementSchemas.AuthorizedCatalogSchema, v),
     );
   }
   /** Read-only feasibility. It does not reserve capacity or change a Ticket. */
@@ -168,7 +169,7 @@ export class HitchletClient implements ComputeClient {
       "/v1/catalog/preview",
       "POST",
       AcquireRequestSchema.parse(request),
-      (v) => ManagementSchemas.FeasibilitySchema.parse(v),
+      (v) => parseResponse(ManagementSchemas.FeasibilitySchema, v),
       { key: crypto.randomUUID(), retry: false },
     );
   }
