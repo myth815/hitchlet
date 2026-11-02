@@ -1,6 +1,6 @@
 import { resourceManifest } from "../domain/resource-manifest.js";
 import { createHash, randomUUID } from "node:crypto";
-import { Client } from "ssh2";
+import { probeSsh } from "./ssh-readiness.js";
 import type {
   RuntimeStorageRequest,
   RuntimeStorageResult,
@@ -2050,66 +2050,4 @@ function readTarFile(archive: Buffer, wanted: string): Buffer {
     offset = start + Math.ceil(size / 512) * 512;
   }
   throw new Error(`Docker archive is missing ${wanted}`);
-}
-async function probeSsh(input: {
-  host: string;
-  port: number;
-  username: string;
-  privateKey: string;
-  expectedHostKey: Buffer;
-}) {
-  await new Promise<void>((resolve, reject) => {
-    const client = new Client();
-    let settled = false;
-    const done = (error?: Error) => {
-      if (settled) return;
-      settled = true;
-      client.end();
-      if (error) reject(error);
-      else resolve();
-    };
-    client.once("ready", () => {
-      client.exec(
-        "id -un && node --version && test -w /workspace",
-        (error, stream) => {
-          if (error) return done(error);
-          let stdout = "";
-          let stderr = "";
-          stream.on("data", (chunk: Buffer) => {
-            stdout += chunk.toString("utf8");
-          });
-          stream.stderr.on("data", (chunk: Buffer) => {
-            stderr += chunk.toString("utf8");
-          });
-          stream.once("close", (code: number | null) => {
-            if (
-              code !== 0 ||
-              !stdout.split(/\r?\n/).includes(input.username) ||
-              !stdout.includes("v24.")
-            )
-              done(
-                new Error(
-                  `Authenticated SSH bootstrap probe failed${stderr ? ` (${stderr.slice(0, 128)})` : ""}`,
-                ),
-              );
-            else done();
-          });
-        },
-      );
-    });
-    client.once("error", (error) => done(error));
-    client.connect({
-      host: input.host,
-      port: input.port,
-      username: input.username,
-      privateKey: input.privateKey,
-      readyTimeout: 8_000,
-      hostVerifier: (key: Buffer) => key.equals(input.expectedHostKey),
-    });
-    const timeout = setTimeout(
-      () => done(new Error("SSH readiness probe timed out")),
-      10_000,
-    );
-    timeout.unref();
-  });
 }

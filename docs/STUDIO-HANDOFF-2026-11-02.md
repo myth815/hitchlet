@@ -6,7 +6,7 @@
 
 Hitchlet 是独立、业务无关的通用计算环境供给平台。Docker/Portainer 优先；Vesta 与影音整理是潜在消费者。本轮不实现媒体消费者业务或 Vesta 适配。保持已有账本、容量、镜像、授权、回收、Ticket 与 Claim 合同和模块化单体架构。
 
-本轮只使用临时账本、localhost Simulator 和自有测试资源。不得操作实际 Portainer、NAS/媒体、付费模型、真实凭据配置、VPN、电源/WOL、VM/云；不得重试被拒绝的 InstallService/defragsvc 扩权。
+前一阶段仅使用临时账本、localhost Simulator 和自有测试资源，该阶段的验收与清理记录保留如下。用户随后单独授权 Studio 专属 Colima profile、独立 Portainer/registry/Runtime Agent、新建本地测试凭据及一张通用 SSH 租客 Ticket；后续真实容器结果见 [Studio 真实验收](STUDIO-REAL-ACCEPTANCE-2026-11-02.md)。这次扩展仍不包含 NAS/媒体、MBP 原栈及秘密、VPN/宿主防火墙、实际电源/WOL、其他 VM/云或生产部署；不得重试被拒绝的 InstallService/defragsvc 扩权。
 
 ## 原始成果来源与保全
 

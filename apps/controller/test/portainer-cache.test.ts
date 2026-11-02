@@ -31,6 +31,95 @@ const operation: ClaimedImageCacheOperation = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("Portainer image-cache adapter", () => {
+  it.each([
+    "application/vnd.oci.image.manifest.v1+json",
+    "application/vnd.docker.distribution.manifest.v2+json",
+  ])(
+    "accepts a pinned single manifest without Platforms, retaining local platform checks: %s",
+    async (mediaType) => {
+      let architecture = "arm64";
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: URL | RequestInfo) => {
+          const url = String(input);
+          if (url.endsWith("/docker/info"))
+            return Response.json({ ID: "expected-engine" });
+          if (url.includes("/distribution/"))
+            return Response.json({ Descriptor: { digest, mediaType } });
+          return Response.json({
+            Id: "sha256:local-image-id",
+            RepoDigests: [operation.artifactRef],
+            Architecture: architecture,
+            Os: "linux",
+            Size: 18 * 1024 * 1024,
+          });
+        }),
+      );
+      const provider = new PortainerImageCacheProvider(async () => ({
+        endpointUrl: "https://portainer.example",
+        environmentId: "8",
+        apiKey: "unit-test-api-key",
+        engineId: "expected-engine",
+      }));
+      await expect(
+        provider.verifyRegistryManifest(operation),
+      ).resolves.toBeUndefined();
+      await expect(provider.inspectLocal(operation)).resolves.toMatchObject({
+        presence: "present",
+        localRef: digest,
+        architecture: "arm64",
+        os: "linux",
+      });
+      architecture = "amd64";
+      await expect(provider.inspectLocal(operation)).rejects.toMatchObject({
+        code: "artifact_verification_failed",
+      });
+    },
+  );
+
+  it.each([
+    {
+      Descriptor: {
+        digest,
+        mediaType: "application/vnd.docker.distribution.manifest.list.v2+json",
+      },
+    },
+    {
+      Descriptor: {
+        digest: `sha256:${"d".repeat(64)}`,
+        mediaType: "application/vnd.oci.image.manifest.v1+json",
+      },
+    },
+    {
+      Descriptor: {
+        digest,
+        mediaType: "application/vnd.oci.image.manifest.v1+json",
+      },
+      Platforms: [{ os: "linux", architecture: "amd64" }],
+    },
+  ])(
+    "rejects missing index platforms, mismatched digest or explicit wrong platform: %#",
+    async (distribution) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (input: URL | RequestInfo) =>
+          String(input).endsWith("/docker/info")
+            ? Response.json({ ID: "expected-engine" })
+            : Response.json(distribution),
+        ),
+      );
+      const provider = new PortainerImageCacheProvider(async () => ({
+        endpointUrl: "https://portainer.example",
+        environmentId: "8",
+        apiKey: "unit-test-api-key",
+        engineId: "expected-engine",
+      }));
+      await expect(
+        provider.verifyRegistryManifest(operation),
+      ).rejects.toMatchObject({ code: "artifact_verification_failed" });
+    },
+  );
+
   it("requires the frozen engine identity and inspects exact digest, platform, and actual size", async () => {
     const calls: string[] = [];
     vi.stubGlobal(

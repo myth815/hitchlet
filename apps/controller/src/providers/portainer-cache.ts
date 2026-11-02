@@ -106,17 +106,26 @@ export class PortainerImageCacheProvider implements ImageCacheExecutionPort {
     );
     const descriptor = record(value.Descriptor);
     const platforms = Array.isArray(value.Platforms) ? value.Platforms : [];
+    // Docker 29 may omit Platforms for a single-platform OCI manifest. The
+    // worker always verifies the exact local RepoDigest, OS and architecture
+    // before recording ready (also after a pull); an index still needs its
+    // registry platform list here.
+    const singleManifest = [
+      "application/vnd.oci.image.manifest.v1+json",
+      "application/vnd.docker.distribution.manifest.v2+json",
+    ].includes(String(descriptor.mediaType));
     if (
       descriptor.digest !== op.digest ||
       typeof descriptor.mediaType !== "string" ||
       !descriptor.mediaType.includes("manifest") ||
-      platforms.length === 0 ||
-      !platforms.some((item) => {
-        const platform = record(item);
-        return (
-          platform.os === "linux" && platform.architecture === op.architecture
-        );
-      })
+      (platforms.length === 0 && !singleManifest) ||
+      (platforms.length > 0 &&
+        !platforms.some((item) => {
+          const platform = record(item);
+          return (
+            platform.os === "linux" && platform.architecture === op.architecture
+          );
+        }))
     )
       throw new ImageCachePortError(
         "artifact_verification_failed",
