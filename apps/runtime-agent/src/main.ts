@@ -42,6 +42,7 @@ async function start(): Promise<void> {
     ipv6SysctlRoot: parsed.ipv6SysctlRoot,
   });
   await engine.assertEngine();
+  process.stdout.write(`Hitchlet Runtime Agent Docker mode: ${engine.mode}\n`);
   await new IptablesRunner().requireChain("DOCKER-USER");
   const journal = new FileJournal(parsed.journalFile);
   await journal.initialize();
@@ -85,11 +86,9 @@ async function start(): Promise<void> {
 
 start().catch((error: unknown) => {
   if (error instanceof EnginePreflightError) {
-    const diagnostic =
-      error.code === "DOCKER_ROOTLESS_UNSUPPORTED"
-        ? "Hitchlet Runtime Agent startup failed: rootless Docker Engine is not supported"
-        : "Hitchlet Runtime Agent startup failed: Docker Engine security capabilities cannot be verified";
-    process.stderr.write(`${diagnostic}\n`);
+    process.stderr.write(
+      "Hitchlet Runtime Agent startup failed: Docker Engine info cannot be verified\n",
+    );
   } else {
     process.stderr.write("Hitchlet Runtime Agent startup failed\n");
   }

@@ -9,10 +9,9 @@ const execute = promisify(execFile);
 const LABEL = "io.hitchlet";
 type Json = Record<string, any>;
 
-export type EnginePreflightErrorCode =
-  | "DOCKER_ENGINE_INFO_UNVERIFIABLE"
-  | "DOCKER_SECURITY_OPTIONS_UNVERIFIABLE"
-  | "DOCKER_ROOTLESS_UNSUPPORTED";
+export type EnginePreflightErrorCode = "DOCKER_ENGINE_INFO_UNVERIFIABLE";
+
+export type DockerMode = "rootless" | "rootful" | "unknown";
 
 export class EnginePreflightError extends Error {
   constructor(
@@ -33,6 +32,9 @@ export type EngineConfig = Readonly<{
 
 /** Talks only to the configured local daemon through fixed Docker subcommands; never invokes a shell. */
 export class LocalEngine {
+  /** Fixed diagnostic only; actual Engine and firewall checks determine eligibility. */
+  mode: DockerMode = "unknown";
+
   constructor(private readonly config: EngineConfig) {
     if (!config.dockerHost.startsWith("unix://"))
       throw new Error("Runtime Agent requires a local Unix Docker socket");
@@ -57,14 +59,7 @@ export class LocalEngine {
     const id = typeof info.ID === "string" ? info.ID : "";
     if (!id || id !== this.config.nativeEngineId)
       throw new Error("Native Engine identity mismatch");
-    const securityOptions = parseDockerSecurityOptions(info.SecurityOptions);
-    if (
-      securityOptions.some((entry) => entry.split(",")[0] === "name=rootless")
-    )
-      throw new EnginePreflightError(
-        "DOCKER_ROOTLESS_UNSUPPORTED",
-        "Rootless Docker Engine is not supported",
-      );
+    this.mode = parseDockerSecurityOptions(info.SecurityOptions);
     const backend = parseFirewallBackend(JSON.stringify(info.FirewallBackend));
     if (backend.driver !== "iptables")
       throw new Error("Docker iptables firewall backend is required");
@@ -487,18 +482,19 @@ export function parseFirewallBackend(raw: string): {
   return { driver: backend.Driver, userlandProxy: userlandProxy === "true" };
 }
 
-/** SecurityOptions is Docker's public []string field, e.g. name=seccomp,... . */
-export function parseDockerSecurityOptions(value: unknown): string[] {
+/** SecurityOptions supplies a fixed mode diagnostic, never a capability gate. */
+export function parseDockerSecurityOptions(value: unknown): DockerMode {
   if (
     !Array.isArray(value) ||
+    value.length === 0 ||
     value.some(
       (entry) =>
         typeof entry !== "string" || !/^name=[^,\s]+(?:,.+)?$/.test(entry),
     )
-  )
-    throw new EnginePreflightError(
-      "DOCKER_SECURITY_OPTIONS_UNVERIFIABLE",
-      "Cannot verify Docker Engine security options",
-    );
-  return value;
+  ) {
+    return "unknown";
+  }
+  return value.some((entry) => entry.split(",")[0] === "name=rootless")
+    ? "rootless"
+    : "rootful";
 }

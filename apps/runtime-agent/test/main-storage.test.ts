@@ -32,19 +32,18 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 vi.mock("../src/engine.js", () => {
   class EnginePreflightError extends Error {
     constructor(
-      readonly code:
-        | "DOCKER_ROOTLESS_UNSUPPORTED"
-        | "DOCKER_SECURITY_OPTIONS_UNVERIFIABLE",
+      readonly code: "DOCKER_ENGINE_INFO_UNVERIFIABLE",
       message: string,
     ) {
       super(message);
     }
   }
   class LocalEngine {
+    mode = "unknown";
     async assertEngine() {
       if (state.failEnginePreflight)
         throw new EnginePreflightError(
-          "DOCKER_ROOTLESS_UNSUPPORTED",
+          "DOCKER_ENGINE_INFO_UNVERIFIABLE",
           "PRIVATE_DOCKER_DETAIL",
         );
       return "fixture-engine";
@@ -180,7 +179,7 @@ it("projects only storage identity from the complete deployed Agent configuratio
   }
 });
 
-it("prints a fixed rootless diagnostic from startup preflight without exposing Engine details", async () => {
+it("prints a fixed Engine-info diagnostic without exposing raw daemon details", async () => {
   const config = {
     host: "127.0.0.1",
     port: 17222,
@@ -210,7 +209,7 @@ it("prints a fixed rootless diagnostic from startup preflight without exposing E
     await new Promise<void>((resolve) => setImmediate(resolve));
 
     expect(stderr).toHaveBeenCalledWith(
-      "Hitchlet Runtime Agent startup failed: rootless Docker Engine is not supported\n",
+      "Hitchlet Runtime Agent startup failed: Docker Engine info cannot be verified\n",
     );
     expect(stderr.mock.calls.flat().join(" ")).not.toContain(
       "PRIVATE_DOCKER_DETAIL",

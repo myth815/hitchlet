@@ -95,7 +95,7 @@ describe("local Engine startup preflight", () => {
     });
   };
 
-  it("rejects Docker's rootless SecurityOptions shape with a fixed diagnostic using one info call", async () => {
+  it("reports rootless mode without bypassing required firewall checks using one info call", async () => {
     mockInfo(
       response({
         SecurityOptions: [
@@ -103,15 +103,12 @@ describe("local Engine startup preflight", () => {
           "name=rootless",
           "name=cgroupns",
         ],
-        FirewallBackend: { Driver: "unsupported", Info: [] },
       }),
     );
     const engine = new LocalEngine(config);
 
-    await expect(engine.assertEngine()).rejects.toMatchObject({
-      code: "DOCKER_ROOTLESS_UNSUPPORTED",
-      message: "Rootless Docker Engine is not supported",
-    });
+    await expect(engine.assertEngine()).resolves.toBe(config.nativeEngineId);
+    expect(engine.mode).toBe("rootless");
     expect(dockerExec.execFile).toHaveBeenCalledTimes(1);
     expect(dockerExec.execFile.mock.calls[0]?.[1]).toEqual([
       "--host",
@@ -120,6 +117,24 @@ describe("local Engine startup preflight", () => {
       "--format",
       "{{json .}}",
     ]);
+  });
+
+  it("still rejects a rootless Engine when a required backend check fails", async () => {
+    mockInfo(
+      response({
+        SecurityOptions: ["name=rootless"],
+        FirewallBackend: {
+          Driver: "unsupported",
+          Info: [["EnableUserlandProxy", "true"]],
+        },
+      }),
+    );
+    const engine = new LocalEngine(config);
+
+    await expect(engine.assertEngine()).rejects.toThrow(
+      "Docker iptables firewall backend is required",
+    );
+    expect(engine.mode).toBe("rootless");
   });
 
   it("keeps Engine identity mismatch ahead of SecurityOptions parsing", async () => {
@@ -134,28 +149,34 @@ describe("local Engine startup preflight", () => {
     );
   });
 
-  it("fails closed on missing or malformed SecurityOptions but accepts other names", async () => {
-    expect(() => parseDockerSecurityOptions(undefined)).toThrow(
-      "Cannot verify Docker Engine security options",
-    );
-    expect(() => parseDockerSecurityOptions(["name=seccomp", 7])).toThrow(
-      "Cannot verify Docker Engine security options",
-    );
+  it("treats missing or malformed SecurityOptions as unknown diagnostics only", async () => {
+    expect(parseDockerSecurityOptions(undefined)).toBe("unknown");
+    expect(parseDockerSecurityOptions([])).toBe("unknown");
+    expect(parseDockerSecurityOptions(["name=seccomp", 7])).toBe("unknown");
     expect(
       parseDockerSecurityOptions([
         "name=seccomp,profile=builtin",
         "name=cgroupns",
         "name=future-engine-feature",
       ]),
-    ).toEqual([
-      "name=seccomp,profile=builtin",
-      "name=cgroupns",
-      "name=future-engine-feature",
-    ]);
+    ).toBe("rootful");
 
-    mockInfo(response());
-    await expect(new LocalEngine(config).assertEngine()).resolves.toBe(
-      config.nativeEngineId,
+    mockInfo(response({ SecurityOptions: undefined }));
+    const engine = new LocalEngine(config);
+    await expect(engine.assertEngine()).resolves.toBe(config.nativeEngineId);
+    expect(engine.mode).toBe("unknown");
+
+    mockInfo(
+      response({
+        SecurityOptions: ["name=rootless", 7],
+        FirewallBackend: {
+          Driver: "unsupported",
+          Info: [["EnableUserlandProxy", "true"]],
+        },
+      }),
+    );
+    await expect(new LocalEngine(config).assertEngine()).rejects.toThrow(
+      "Docker iptables firewall backend is required",
     );
   });
 });
