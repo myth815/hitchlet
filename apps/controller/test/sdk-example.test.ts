@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
 import { openStorage } from "../dist/storage/index.js";
 import { buildApp } from "../src/app.js";
 import { loadConfig } from "../src/config.js";
@@ -113,6 +114,7 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     let syntheticHostKey = false;
     const hostKey = Buffer.from("synthetic-server-public-key-blob");
     const fingerprint = `SHA256:${createHash("sha256").update(hostKey).digest("base64").replace(/=+$/, "")}`;
+    const syntheticPrivateKey = "SYNTHETIC_PRIVATE_KEY_MATERIAL_NOT_A_REAL_KEY";
     const posts: { path: string; key: string | undefined }[] = [];
     const proxy = createServer((req, res) => {
       const url = req.url ?? "/";
@@ -153,6 +155,10 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
             response.on("end", () => {
               const grant = JSON.parse(body);
               grant.access.hostKeyFingerprint = fingerprint;
+              grant.authentication = {
+                kind: "ephemeral_private_key",
+                privateKey: syntheticPrivateKey,
+              };
               res.writeHead(200, {
                 "content-type": "application/json",
                 "cache-control": "no-store",
@@ -332,6 +338,35 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
         })
       ).code,
     ).toBe(0);
+    // Compose the lifecycle CLI with the reference factory and a controlled
+    // Client. This wrapper never constructs a socket or parses an actual key.
+    const referenceUrl = pathToFileURL(
+      resolve("../../packages/sdk/examples/ssh-access-adapter.mjs"),
+    ).href;
+    await writeFile(
+      adapter,
+      `
+      import { EventEmitter } from 'node:events';
+      import { createSshAdapter } from ${JSON.stringify(referenceUrl)};
+      let owned;
+      class Client extends EventEmitter {
+        constructor(){super();owned=this;}
+        connect(options){this.options=options;queueMicrotask(()=>{if(options.hostVerifier(Buffer.from('synthetic-server-public-key-blob')))this.emit('ready');else this.emit('error',Error('unverified'));});return this;}
+        exec(_command,callback){const stream=new EventEmitter();stream.stderr=new EventEmitter();stream.destroy=()=>stream;callback(null,stream);queueMicrotask(()=>{stream.emit('data',Buffer.from('workspace\\n1000\\n1000\\nv24.22.2\\n'));stream.emit('close',0);});return this;}
+        end(){this.emit('error',Error(this.options.privateKey));return this;}
+        destroy(){this.destroyed=true;return this;}
+      }
+      export default async context=>{const probe=await createSshAdapter({Client})(context);if(probe.uid!==1000||!owned.destroyed)throw Error('adapter composition failed');};
+    `,
+      { mode: 0o600 },
+    );
+    expect(
+      (
+        await cli(["access-with-adapter", "--adapter", adapter], {
+          HITCHLET_DEMO_MODE: "",
+        })
+      ).code,
+    ).toBe(0);
     syntheticHostKey = false;
 
     pauseRenewals = true;
@@ -414,6 +449,7 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
       token,
       adminToken,
       "SIMULATOR_ONLY_NO_NETWORK_ENDPOINT",
+      syntheticPrivateKey,
     ]) {
       expect(stateText).not.toContain(secret);
       expect(output.join("\n")).not.toContain(secret);
@@ -432,6 +468,7 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
       missingOutputConfirmationPreventedRelease: true,
       releaseUnknownRecovered: true,
       syntheticKeyComparisonOnly: true,
+      referenceAdapterComposedWithControlledClient: true,
       realSsh: false,
       rawAccessMaterialPersistedOrLogged: false,
       activeClaims: 0,

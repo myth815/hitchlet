@@ -108,7 +108,52 @@ OpenSSH `SHA256:` fingerprint from those raw key bytes and compares it exactly t
 the API-provided `grant.access.hostKeyFingerprint`; a missing/malformed API
 fingerprint or mismatch fails closed. The adapter is trusted consumer code. Access
 materials are held in memory for the callback, never printed or written to state.
-This example does not include an SSH implementation or SSH dependency.
+The reusable reference adapter is a separate file and does not import or add an
+SSH dependency to the SDK.
+
+### Optional ssh2 reference adapter
+
+`ssh-access-adapter.mjs` exports `createSshAdapter({ Client, readyTimeoutMs,
+commandTimeoutMs })`. The consumer's wrapper supplies its existing `ssh2` client
+constructor and default-exports the returned callback:
+
+```js
+import { Client } from "ssh2";
+import { createSshAdapter } from "./ssh-access-adapter.mjs";
+
+export default createSshAdapter({
+  Client,
+  readyTimeoutMs: 10_000,
+  commandTimeoutMs: 10_000,
+});
+```
+
+Place that wrapper beside a copy of `ssh-access-adapter.mjs` in the consumer's
+adapter directory so the relative import resolves there. The `ssh2` dependency
+must be provided by the consumer project containing the wrapper; the SDK and
+controller do not supply it. If the reference adapter is kept elsewhere, change
+the wrapper import to a path that resolves from the wrapper module. Pass the
+wrapper's absolute path to the CLI's `--adapter` option.
+
+The factory accepts only `ssh` grants with `ephemeral_private_key` authentication.
+It passes the grant's host, port, username, and private-key string to `ssh2`,
+provides the raw-key verifier callback without `hostHash`, and runs only the fixed
+read-only probe `id -un && id -u && id -g && node --version`. Its result contains
+only the numeric uid/gid and Node version. On completion, timeout, or the earlier
+confirmed lease/access deadline, it closes the local channel and calls the
+client's protocol `end()` followed by socket `destroy()`. That does not kill
+remote work or provide strict offline enforcement. The adapter was exercised only with the
+controlled fake `Client` test; no real SSH connection was made or verified. The
+earlier Simulator ticket workflow does not constitute live Host or SSH evidence.
+
+Run the focused adapter tests with:
+
+```sh
+pnpm --filter @hitchlet/sdk exec vitest run test/ssh-access-adapter.test.ts
+```
+
+These tests use a controlled fake `Client`; they do not open a network connection
+or authenticate to an SSH server.
 
 ## Persisted state and recovery boundary
 
