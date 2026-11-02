@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
@@ -14,6 +14,10 @@ import { FileJournal } from "../src/journal.js";
 import type { LocalEngine } from "../src/engine.js";
 import type { Firewall } from "../src/firewall.js";
 import { NetworkWorker } from "../src/worker.js";
+import {
+  runFixedCommand,
+  FixedCommandTimeoutError,
+} from "../src/command-exec.js";
 
 const root = await mkdtemp(join(tmpdir(), "hitchlet-runtime-agent-test-"));
 afterEach(async () => rm(root, { recursive: true, force: true }));
@@ -72,6 +76,7 @@ function command(
   kind: RuntimeNetworkCommand["kind"],
   plan: RuntimeNetworkPlan,
   controllerEpoch = 1,
+  deadline = new Date(Date.now() + 60_000).toISOString(),
 ): RuntimeNetworkCommand {
   const raw = {
     kind,
@@ -84,7 +89,7 @@ function command(
     generation: plan.generation,
     controlVersion: plan.controlVersion,
     controllerEpoch,
-    deadline: new Date(Date.now() + 60_000).toISOString(),
+    deadline,
     plan,
   };
   return runtimeNetworkCommandSchema.parse({ ...raw, contentHash: hash(raw) });
@@ -118,8 +123,20 @@ class FakeEngine {
 class FakeFirewall implements Firewall {
   calls: string[] = [];
   failApply = false;
+  hangPidFile: string | undefined;
+  private async hangIfRequested() {
+    const pidFile = this.hangPidFile;
+    if (!pidFile) return;
+    this.hangPidFile = undefined;
+    await runFixedCommand(process.execPath, [
+      "-e",
+      'require("node:fs").writeFileSync(process.argv[1], String(process.pid)); process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);',
+      pidFile,
+    ]);
+  }
   async apply(plan: RuntimeNetworkPlan) {
     this.calls.push(`apply:${plan.expectedRulesetHash}`);
+    await this.hangIfRequested();
     if (this.failApply) throw new Error("apply failed");
     return plan.expectedRulesetHash;
   }
@@ -129,6 +146,7 @@ class FakeFirewall implements Firewall {
   }
   async revoke(plan: RuntimeNetworkPlan) {
     this.calls.push("revoke");
+    await this.hangIfRequested();
     return plan.expectedRulesetHash;
   }
   async remove() {
@@ -297,6 +315,52 @@ describe("runtime network command journal and fencing", () => {
     await expect(worker.execute(original)).resolves.toMatchObject({
       status: "installed",
     });
+  });
+
+  it("keeps a timed-out revoke pending with its tombstone and releases the serialized queue", async () => {
+    const path = join(root, "revoke-timeout.json");
+    const plan = makePlan();
+    const { worker, journal, firewall } = harness(path);
+    await worker.execute(command("network.ensure", plan));
+
+    await mkdir(root, { recursive: true });
+    const pidFile = join(root, "timed-out-child.pid");
+    firewall.hangPidFile = pidFile;
+    const revoke = command(
+      "network.revoke",
+      plan,
+      1,
+      new Date(Date.now() + 750).toISOString(),
+    );
+    const timedOut = worker.execute(revoke);
+    const inspect = worker.execute(command("network.inspect", plan));
+
+    await expect(timedOut).rejects.toBeInstanceOf(FixedCommandTimeoutError);
+    const childPid = Number(await readFile(pidFile, "utf8"));
+    expect(() => process.kill(childPid, 0)).toThrow();
+    expect(journal.commandMap[revoke.commandId]).toMatchObject({
+      hash: revoke.contentHash,
+      allocationId: plan.allocationId,
+    });
+    expect(journal.commandMap[revoke.commandId]?.result).toBeUndefined();
+    expect(journal.allocationMap[plan.allocationId]?.state).toBe("revoked");
+    const durable = JSON.parse(await readFile(path, "utf8")) as {
+      commands: Record<string, { hash: string; result?: unknown }>;
+      allocations: Record<string, { state: string }>;
+    };
+    expect(durable.commands[revoke.commandId]).toMatchObject({
+      hash: revoke.contentHash,
+    });
+    expect(durable.commands[revoke.commandId]?.result).toBeUndefined();
+    expect(durable.allocations[plan.allocationId]?.state).toBe("revoked");
+    await expect(inspect).resolves.toMatchObject({ status: "present" });
+
+    await expect(
+      worker.execute(command("network.revoke", plan)),
+    ).resolves.toMatchObject({
+      status: "revoked",
+    });
+    expect(journal.commandMap[revoke.commandId]?.result).toBeUndefined();
   });
 
   it("removes rules only after engine-local absence confirmation", async () => {

@@ -111,6 +111,8 @@ function emptyState() {
     request: null,
     acquireIdempotencyKey: null,
     prepared: null,
+    lastDecision: null,
+    decisionHistory: [],
     ticketId: null,
     lastConfirmedLeaseExpiresAt: null,
     outputConfirmation: null,
@@ -132,6 +134,10 @@ async function readState(dir) {
       request: state.request ?? null,
       acquireIdempotencyKey: state.acquireIdempotencyKey ?? null,
       prepared: state.prepared ?? null,
+      lastDecision: state.lastDecision ?? null,
+      decisionHistory: Array.isArray(state.decisionHistory)
+        ? state.decisionHistory
+        : [],
       ticketId: state.ticketId ?? null,
       lastConfirmedLeaseExpiresAt: state.lastConfirmedLeaseExpiresAt ?? null,
       outputConfirmation: state.outputConfirmation ?? null,
@@ -519,6 +525,8 @@ async function main() {
           phase: ticket?.phase ?? null,
           lastConfirmedLeaseExpiresAt: state.lastConfirmedLeaseExpiresAt,
           preparedKind: state.prepared?.kind ?? null,
+          lastDecision: state.lastDecision,
+          decisionHistory: state.decisionHistory,
           outputConfirmed: Boolean(state.outputConfirmation),
         });
         return;
@@ -618,13 +626,103 @@ async function main() {
         return;
       }
       case "resume": {
+        if (!state.prepared && state.lastDecision) {
+          const ticket = await client.tickets.get(ticketIdRequired());
+          safeOutput({
+            ticketId: ticket.id,
+            phase: ticket.phase,
+            preparedCommandClosed: true,
+            lastDecision: state.lastDecision,
+            decisionHistory: state.decisionHistory,
+          });
+          return;
+        }
         if (!state.prepared)
           throw new ExampleError(
             "INVALID_ARGUMENTS",
             "No prepared command is saved.",
           );
         const prepared = state.prepared;
-        const result = await client.tickets.resume(prepared);
+        if (
+          ["access", "renew", "release", "cancel"].includes(prepared.kind) &&
+          prepared.ticketId
+        ) {
+          if (prepared.ticketId !== state.ticketId)
+            throw new ExampleError(
+              "PREPARED_TICKET_MISMATCH",
+              "The prepared command targets a different Ticket than the saved consumer state.",
+            );
+          const ticket = await client.tickets.get(prepared.ticketId);
+          if (
+            ticket.id !== prepared.ticketId ||
+            ticket.consumerId !== identity.consumerId
+          )
+            throw new ExampleError(
+              "PREPARED_TICKET_MISMATCH",
+              "The Ticket returned for the prepared command does not match this saved owner and Ticket ID.",
+            );
+          if (ticket.phase === "released") {
+            if (state.lastDecision)
+              state.decisionHistory = [state.lastDecision];
+            state.lastDecision = {
+              kind: "ticket-released",
+              ticketId: ticket.id,
+              ownerId: identity.consumerId,
+              command: prepared,
+              recordedAt: new Date().toISOString(),
+            };
+            state.prepared = null;
+            await persist();
+            safeOutput({
+              ticketId: ticket.id,
+              phase: ticket.phase,
+              preparedCommandClosed: true,
+              ...(prepared.kind === "release" || prepared.kind === "cancel"
+                ? { cleanupConfirmed: true }
+                : {}),
+              lastDecision: state.lastDecision,
+              decisionHistory: state.decisionHistory,
+            });
+            return;
+          }
+        }
+        let result;
+        try {
+          result = await client.tickets.resume(prepared);
+        } catch (error) {
+          if (
+            prepared.kind === "renew" &&
+            error instanceof ComputeClientError &&
+            error.recovery.ticketId === prepared.ticketId &&
+            error.recovery.command?.kind === "renew" &&
+            error.recovery.command.ticketId === prepared.ticketId &&
+            error.recovery.command?.idempotencyKey ===
+              prepared.idempotencyKey &&
+            error.recovery.renewalId
+          ) {
+            const renewal = await client.tickets.getRenewal(
+              prepared.ticketId,
+              error.recovery.renewalId,
+            );
+            if (
+              renewal.id === error.recovery.renewalId &&
+              (renewal.state === "rejected" || renewal.state === "cancelled")
+            ) {
+              state.lastDecision = {
+                kind: "renewal-rejected",
+                state: renewal.state,
+                renewalId: renewal.id,
+                reasonCode: renewal.reasonCode,
+                ticketId: prepared.ticketId,
+                command: prepared,
+                recordedAt: new Date().toISOString(),
+              };
+              state.prepared = null;
+              await persist();
+            }
+          }
+          throw error;
+        }
         if (prepared.kind === "acquire") {
           state.ticketId = result.ticket.id;
         } else if (prepared.kind === "renew") {

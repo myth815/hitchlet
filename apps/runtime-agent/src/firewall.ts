@@ -1,5 +1,8 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import {
+  FixedCommandFailureError,
+  isFixedCommandTimeout,
+  runFixedCommand,
+} from "./command-exec.js";
 import { createHash } from "node:crypto";
 import type { RuntimeNetworkPlan } from "@hitchlet/contracts/internal";
 import {
@@ -8,7 +11,6 @@ import {
   type RuntimeNetworkRuleSet,
 } from "@hitchlet/contracts/internal";
 
-const execute = promisify(execFile);
 const digest = (value: unknown): string =>
   `sha256:${createHash("sha256").update(canonicalRuntimeNetworkValue(value)).digest("hex")}`;
 export type Rule = readonly string[];
@@ -87,7 +89,8 @@ export class IptablesFirewall implements Firewall {
         canonicalRuntimeNetworkValue(normalizeRuleSet(rules.rules))
         ? expected
         : null;
-    } catch {
+    } catch (error) {
+      if (isFixedCommandTimeout(error)) throw error;
       return null;
     }
   }
@@ -268,11 +271,12 @@ export class IptablesRunner {
     allowFailure = false,
   ): Promise<string> {
     try {
-      const result = await execute(binary, [...args], {
+      const result = await runFixedCommand(binary, args, {
         maxBuffer: 1024 * 1024,
       });
       return result.stdout.trim();
     } catch (error) {
+      if (isFixedCommandTimeout(error)) throw error;
       if (allowFailure) return "";
       throw new Error(`${binary} operation failed`);
     }
@@ -289,7 +293,8 @@ export class IptablesRunner {
   async ensureChain(chain: string): Promise<void> {
     try {
       await this.command(["-S", chain]);
-    } catch {
+    } catch (error) {
+      if (isFixedCommandTimeout(error)) throw error;
       await this.command(["-N", chain]);
     }
   }
@@ -405,7 +410,8 @@ export class IptablesRunner {
     const check = ["-C", chain, ...rule];
     try {
       await this.command(check);
-    } catch {
+    } catch (error) {
+      if (isFixedCommandTimeout(error)) throw error;
       await this.command(["-I", chain, "1", ...rule]);
     }
   }
@@ -415,7 +421,8 @@ export class IptablesRunner {
   async requireConntrack(): Promise<void> {
     try {
       await this.run("conntrack", ["-V"]);
-    } catch {
+    } catch (error) {
+      if (isFixedCommandTimeout(error)) throw error;
       throw new Error(
         "conntrack-tools is required to revoke existing connections",
       );
@@ -429,21 +436,19 @@ export class IptablesRunner {
   }
   private async deleteConntrack(filter: readonly string[]): Promise<void> {
     try {
-      await execute("conntrack", ["-D", "-f", "ipv4", ...filter], {
+      await runFixedCommand("conntrack", ["-D", "-f", "ipv4", ...filter], {
         maxBuffer: 1024 * 1024,
       });
     } catch (error) {
-      const processError = error as {
-        code?: number | string;
-        stdout?: string | Buffer;
-        stderr?: string | Buffer;
-      };
-      const output = `${processError.stdout ?? ""}\n${processError.stderr ?? ""}`;
-      if (
-        processError.code === 1 &&
-        /0 flow entries have been deleted\.?/i.test(output)
-      )
-        return;
+      if (isFixedCommandTimeout(error)) throw error;
+      if (error instanceof FixedCommandFailureError) {
+        const output = `${error.stdout}\n${error.stderr}`;
+        if (
+          error.exitCode === 1 &&
+          /0 flow entries have been deleted\.?/i.test(output)
+        )
+          return;
+      }
       throw new Error("conntrack flow deletion failed");
     }
   }

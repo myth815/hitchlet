@@ -1,11 +1,9 @@
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { isFixedCommandTimeout, runFixedCommand } from "./command-exec.js";
 import { isIPv4 } from "node:net";
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { RuntimeNetworkPlan } from "@hitchlet/contracts/internal";
 
-const execute = promisify(execFile);
 const LABEL = "io.hitchlet";
 type Json = Record<string, any>;
 
@@ -43,13 +41,10 @@ export class LocalEngine {
   private async docker(args: readonly string[]): Promise<string> {
     const { DOCKER_CONTEXT: inheritedContext, ...environment } = process.env;
     void inheritedContext;
-    const { stdout } = await execute(
+    const { stdout } = await runFixedCommand(
       "docker",
       ["--host", this.config.dockerHost, ...args],
-      {
-        env: { ...environment, DOCKER_HOST: this.config.dockerHost },
-        maxBuffer: 4 * 1024 * 1024,
-      },
+      { env: { ...environment, DOCKER_HOST: this.config.dockerHost } },
     );
     return stdout.trim();
   }
@@ -70,7 +65,8 @@ export class LocalEngine {
     let info: unknown;
     try {
       info = JSON.parse(await this.docker(["info", "--format", "{{json .}}"]));
-    } catch {
+    } catch (error) {
+      if (isFixedCommandTimeout(error)) throw error;
       throw new EnginePreflightError(
         "DOCKER_ENGINE_INFO_UNVERIFIABLE",
         "Cannot verify Docker Engine info",
@@ -357,7 +353,7 @@ export type IpCommand = (args: readonly string[]) => Promise<string>;
 export async function enableAndVerifyBridgeNetfilter(
   bridge: string,
   runIp: IpCommand = async (args) => {
-    const { stdout } = await execute("ip", [...args], {
+    const { stdout } = await runFixedCommand("ip", args, {
       maxBuffer: 1024 * 1024,
     });
     return stdout.trim();
@@ -382,7 +378,7 @@ export async function enableAndVerifyBridgeNetfilter(
 export async function verifyBridgeNetfilter(
   bridge: string,
   runIp: IpCommand = async (args) => {
-    const { stdout } = await execute("ip", [...args], {
+    const { stdout } = await runFixedCommand("ip", args, {
       maxBuffer: 1024 * 1024,
     });
     return stdout.trim();

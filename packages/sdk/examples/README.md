@@ -71,7 +71,21 @@ original key are resumed; the example will not make a second logical Acquire.
 For a pending or unknown renewal, `status` leaves the original prepared command
 and confirmed expiry in the state file. Run `resume` explicitly to query/replay
 that same proposal. Only a confirmed SDK receipt advances
-`lastConfirmedLeaseExpiresAt`.
+`lastConfirmedLeaseExpiresAt`. If the SDK reports a renewal error, the example
+checks the owner-visible renewal record before recording a rejected or cancelled
+decision. It moves the original command and key to a durable decision record,
+clears the now-resolved prepared command, and leaves the confirmed expiry
+unchanged. It does not replay a recorded final decision. You can then use the
+same CLI's normal output-confirmation and release workflow. `resume` after that
+queries the Ticket and reports the final decision without sending another
+renewal.
+
+If an access, renewal, release, or cancel command remains prepared after its
+Ticket has already reached `released` through the owner workflow, `resume` first
+queries that same Ticket. It archives and clears the command only when the
+authenticated owner query returns the matching released Ticket. A failed or
+unknown read leaves the prepared command untouched; `acquire` is never started
+automatically. Once cleared, an explicit `preview` can begin another lifecycle.
 
 Renew well before the saved confirmed expiry, leaving enough time for network
 retries and any pending server-side renewal decision. For example, after the
@@ -167,8 +181,10 @@ mode, creates the state file and exclusive process lock with mode `0600`, fsyncs
 and atomically renames each update. Only one process may
 use a state directory at a time. If a process is killed while holding the lock,
 first verify it has exited, then remove `.tenant-state.lock` manually. The state
-contains the request, prepared command, Ticket ID, last confirmed lease expiry,
-and an explicit output-saved confirmation. The bearer token, access grant,
+contains the request, prepared command, the latest owner-verified terminal
+decision (and a replaced prior decision), Ticket ID, last confirmed lease expiry,
+and an explicit output-saved confirmation.
+The bearer token, access grant,
 passwords, private keys and other authentication materials are never persisted or
 logged. Supply the token through the environment on each invocation.
 The mode-bit protection described here targets POSIX-like systems.

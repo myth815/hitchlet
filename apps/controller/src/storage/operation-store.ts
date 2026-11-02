@@ -136,7 +136,7 @@ export class SQLiteOperationStore {
 
   expiredTickets(now: number): Promise<Row[]> {
     return this.db.all<Row>(
-      "SELECT t.id,t.phase,t.version,t.queue_deadline_ms,t.provision_deadline_ms,l.state AS lease_state,l.claim_by_ms,l.claimed_at_ms,l.expires_at_ms FROM tickets t LEFT JOIN leases l ON l.ticket_id=t.id WHERE (t.phase='queued' AND t.queue_deadline_ms<=?) OR (t.phase IN ('reserved','provisioning') AND t.provision_deadline_ms<=?) OR (t.phase='ready' AND ((l.claimed_at_ms IS NULL AND l.claim_by_ms<=?) OR l.expires_at_ms<=?)) ORDER BY t.id",
+      "SELECT t.id,t.phase,t.version,t.queue_deadline_ms,t.provision_deadline_ms,l.state AS lease_state,l.claim_by_ms,l.claimed_at_ms,l.expires_at_ms FROM tickets t LEFT JOIN leases l ON l.ticket_id=t.id WHERE (t.phase='queued' AND t.queue_deadline_ms<=?) OR (t.phase IN ('reserved','provisioning') AND t.provision_deadline_ms<=?) OR (t.phase='ready' AND ((l.claimed_at_ms IS NULL AND l.claim_by_ms<=?) OR l.expires_at_ms<=?)) ORDER BY t.id LIMIT 100",
       [now, now, now, now],
     );
   }

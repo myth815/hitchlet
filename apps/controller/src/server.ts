@@ -26,7 +26,10 @@ import { ImageCacheWorker } from "./application/image-cache.js";
 import { SQLiteImageCacheStore } from "./storage/image-cache-store.js";
 import { PortainerImageCacheProvider } from "./providers/portainer-cache.js";
 import type { ProvisionPlan } from "./providers/port.js";
-import { PortainerBackgroundLoops } from "./application/portainer-background.js";
+import {
+  ControllerBackgroundLoops,
+  reconcileLeaseAndExpiryIntents,
+} from "./application/portainer-background.js";
 
 const config = loadConfig(process.env);
 const storage = await openStorage(config.DATA_DIR);
@@ -93,8 +96,7 @@ const secrets = config.HITCHLET_SECRET_KEY_FILE
 let recoveryState: "ready" | "recovering" | "unavailable" = controlsReady
   ? "ready"
   : "recovering";
-let timer: NodeJS.Timeout | undefined;
-let backgroundLoops: PortainerBackgroundLoops | undefined;
+let backgroundLoops: ControllerBackgroundLoops | undefined;
 let app: Awaited<ReturnType<typeof buildApp>> | undefined;
 try {
   // Every serving process owns a new controller epoch, including observation-only mode.
@@ -144,8 +146,7 @@ try {
       reconciling = true;
       try {
         await tickets.refreshSimulatorFixtureObservation();
-        await worker.reconcileBeforeScheduling();
-        await leases.reconcilePending();
+        await worker.reconcileScheduledWork();
         for (let index = 0; index < 32; index++)
           if (!(await tickets.reserveNext())) break;
         await worker.reconcile();
@@ -155,16 +156,38 @@ try {
     };
     await tick();
     recoveryState = "ready";
-    timer = setInterval(() => {
-      void tick().catch((error: unknown) => {
-        recoveryState = "unavailable";
+    let mainWorkHealthy = true;
+    let intentWorkHealthy = true;
+    const refreshSimulatorRecovery = () => {
+      recoveryState =
+        mainWorkHealthy && intentWorkHealthy ? "ready" : "unavailable";
+    };
+    backgroundLoops = new ControllerBackgroundLoops({
+      refreshObservations: async () => undefined,
+      reconcile: tick,
+      reconcileLeaseIntents: () =>
+        reconcileLeaseAndExpiryIntents(leases, worker),
+      onReconcileSuccess: () => {
+        mainWorkHealthy = true;
+        refreshSimulatorRecovery();
+      },
+      onLeaseSuccess: () => {
+        intentWorkHealthy = true;
+        refreshSimulatorRecovery();
+      },
+      onFailure: (kind, error) => {
+        if (kind === "reconcile") mainWorkHealthy = false;
+        if (kind === "lease") intentWorkHealthy = false;
+        refreshSimulatorRecovery();
         app?.log.error(
-          { errorName: error instanceof Error ? error.name : "UnknownError" },
-          "Simulator reconciliation failed",
+          {
+            kind,
+            errorName: error instanceof Error ? error.name : "UnknownError",
+          },
+          "Simulator background work failed",
         );
-      });
-    }, 2_000);
-    timer.unref();
+      },
+    });
   } else if (config.EXECUTION_MODE === "portainer" && controlsReady) {
     recoveryState = "recovering";
     if (!secrets)
@@ -255,7 +278,13 @@ try {
       controllerEpoch: epoch,
     });
     const leases = new LeaseService(storage);
-    backgroundLoops = new PortainerBackgroundLoops({
+    let mainWorkHealthy = false;
+    let intentWorkHealthy = false;
+    const refreshPortainerRecovery = () => {
+      recoveryState =
+        mainWorkHealthy && intentWorkHealthy ? "ready" : "unavailable";
+    };
+    backgroundLoops = new ControllerBackgroundLoops({
       refreshObservations: async () => {
         await admin.refreshPortainerObservations();
         const nodes = await storage.all<{
@@ -324,18 +353,26 @@ try {
         );
       },
       reconcile: async () => {
-        await worker.reconcileBeforeScheduling();
-        await leases.reconcilePending();
+        await worker.reconcileScheduledWork();
         for (let index = 0; index < 32; index++)
           if (!(await tickets.reserveNext())) break;
         await worker.reconcile();
-        await imageCache.reconcile();
       },
+      reconcileCache: () => imageCache.reconcile(),
+      reconcileLeaseIntents: () =>
+        reconcileLeaseAndExpiryIntents(leases, worker),
       onReconcileSuccess: () => {
-        recoveryState = "ready";
+        mainWorkHealthy = true;
+        refreshPortainerRecovery();
+      },
+      onLeaseSuccess: () => {
+        intentWorkHealthy = true;
+        refreshPortainerRecovery();
       },
       onFailure: (kind, error) => {
-        if (kind === "reconcile") recoveryState = "unavailable";
+        if (kind === "reconcile") mainWorkHealthy = false;
+        if (kind === "lease") intentWorkHealthy = false;
+        refreshPortainerRecovery();
         app?.log.error(
           {
             kind,
@@ -343,7 +380,11 @@ try {
           },
           kind === "observation"
             ? "Portainer observation refresh failed"
-            : "Portainer reconciliation failed",
+            : kind === "cache"
+              ? "Portainer image-cache reconciliation failed"
+              : kind === "lease"
+                ? "Portainer lease and expiry reconciliation failed"
+                : "Portainer reconciliation failed",
         );
       },
     });
@@ -358,15 +399,13 @@ try {
   app.addHook("onClose", async () => {
     clearInterval(maintenanceTimer);
     await maintenanceRunning;
-    logStream.end();
-    if (timer) clearInterval(timer);
     await backgroundLoops?.close();
+    logStream.end();
     await storage.close();
   });
   backgroundLoops?.start();
   maintenanceTick();
 } catch (error) {
-  if (timer) clearInterval(timer);
   await backgroundLoops?.close();
   await storage.close().catch(() => undefined);
   throw error;
@@ -469,7 +508,6 @@ process.once("SIGTERM", () => {
 try {
   await app!.listen({ host: config.HOST, port: config.PORT });
 } catch (error) {
-  if (timer) clearInterval(timer);
   await backgroundLoops?.close();
   await storage.close().catch(() => undefined);
   throw error;

@@ -504,7 +504,7 @@ export class SQLiteValidationStore {
 
   async expireDue(now: number) {
     const rows = await this.db.all<Row>(
-      "SELECT id FROM image_validations WHERE state IN ('queued','running') AND deadline_ms<=?",
+      "SELECT id FROM image_validations WHERE state IN ('queued','running') AND deadline_ms<=? ORDER BY deadline_ms,id LIMIT 100",
       [now],
     );
     for (const row of rows)

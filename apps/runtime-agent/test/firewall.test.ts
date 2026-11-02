@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { delimiter, join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canonicalRuntimeNetworkValue,
@@ -384,4 +387,26 @@ describe("Docker iptables rule model", () => {
       ),
     ).rejects.toThrow("Unexpected allocation firewall references");
   });
+});
+
+it("accepts conntrack's exit-one response when zero flows matched", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "hitchlet-conntrack-test-"));
+  const previousPath = process.env.PATH;
+  try {
+    const binary = join(directory, "conntrack");
+    await writeFile(
+      binary,
+      `#!${process.execPath}\nprocess.stdout.write("0 flow entries have been deleted.\\n"); process.exit(1);\n`,
+    );
+    await chmod(binary, 0o755);
+    process.env.PATH = `${directory}${delimiter}${previousPath ?? ""}`;
+    await new IptablesRunner().flushConntrack(
+      "172.30.77.0/24",
+      "192.0.2.30/32",
+    );
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    await rm(directory, { recursive: true, force: true });
+  }
 });

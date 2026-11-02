@@ -136,6 +136,7 @@ function harness(
     authPrincipal?: AuthenticatedPrincipal;
     renewalPending?: TicketView["renewalPending"];
     accessFingerprint?: string | null;
+    recoveryState?: "ready" | "recovering" | "unavailable";
   } = {},
 ) {
   let authPrincipal = options.authPrincipal ?? principal;
@@ -188,7 +189,7 @@ function harness(
         status: "ok",
         stage: "D05",
         executionMode: "simulator",
-        recoveryState: "ready",
+        recoveryState: options.recoveryState ?? "ready",
       });
     if (url.pathname === "/v1/auth/me")
       return authenticated
@@ -922,6 +923,41 @@ describe("consumer console", () => {
     expect(element.querySelector(".access-card")).toBeNull();
     expect(element.textContent).not.toContain("short-secret");
     expect(element.textContent).not.toContain("fixtureHostKeyFingerprint");
+  });
+
+  it("allows an authorized consumer to submit durable cancel intent while recovery is unavailable", async () => {
+    const h = harness({ initialTicket: true, recoveryState: "unavailable" });
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "token");
+    await submit(element, ".login-card form");
+    await click(element, "环境就绪");
+    const cancel = [...element.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes("取消 Ticket"),
+    ) as HTMLButtonElement;
+    expect(cancel.disabled).toBe(false);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    await click(element, "取消 Ticket");
+    expect(h.calls.some((item) => item.url.endsWith("/cancel"))).toBe(true);
+    expect(element.textContent).toContain("取消请求已受理");
+  });
+
+  it("allows an authorized consumer to submit durable release intent while recovery is unavailable", async () => {
+    const h = harness({ initialTicket: true, recoveryState: "unavailable" });
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "token");
+    await submit(element, ".login-card form");
+    await click(element, "环境就绪");
+    const checks = [
+      ...element.querySelectorAll("input[type=checkbox]"),
+    ] as HTMLInputElement[];
+    await act(async () => checks.forEach((input) => input.click()));
+    const release = [...element.querySelectorAll("button")].find((item) =>
+      item.textContent?.includes("确认归还并删除"),
+    ) as HTMLButtonElement;
+    expect(release.disabled).toBe(false);
+    await click(element, "确认归还并删除");
+    expect(h.calls.some((item) => item.url.endsWith("/release"))).toBe(true);
+    expect(element.textContent).toContain("归还已请求，环境正在回收");
   });
 
   it("shows an unavailable SSH host fingerprint explicitly and renders pending renewal deadlines without claiming success", async () => {

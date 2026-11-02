@@ -7,6 +7,7 @@ import {
   type RuntimeNetworkResult,
 } from "@hitchlet/contracts/internal";
 import { FileJournal } from "./journal.js";
+import { isFixedCommandTimeout, withCommandDeadline } from "./command-exec.js";
 import { LocalEngine } from "./engine.js";
 import type { Firewall } from "./firewall.js";
 
@@ -27,7 +28,11 @@ export class NetworkWorker {
   ) {}
 
   execute(command: RuntimeNetworkCommand): Promise<RuntimeNetworkResult> {
-    return this.journal.serialize(() => this.run(command));
+    return this.journal.serialize(() =>
+      withCommandDeadline(Date.parse(command.deadline), () =>
+        this.run(command),
+      ),
+    );
   }
 
   private async run(
@@ -85,6 +90,7 @@ export class NetworkWorker {
     await this.journal.save();
     let resultStatus: RuntimeNetworkResult["status"];
     let rulesetHash: string | null = null;
+    let preservePendingCommand = false;
     if (command.kind === "network.ensure") {
       await this.engine.assertEngine();
       if (
@@ -125,7 +131,8 @@ export class NetworkWorker {
           local.gateway,
         );
         resultStatus = rulesetHash ? "present" : "unknown";
-      } catch {
+      } catch (error) {
+        preservePendingCommand = isFixedCommandTimeout(error);
         resultStatus = "unknown";
       }
     } else if (command.kind === "network.revoke") {
@@ -194,7 +201,8 @@ export class NetworkWorker {
       });
       await this.journal.save();
     } else {
-      this.journal.removeCommand(command.commandId);
+      if (!preservePendingCommand)
+        this.journal.removeCommand(command.commandId);
       await this.journal.save();
     }
     return value;

@@ -241,8 +241,16 @@ export class OperationWorker {
   }
   /** Run before scheduling on startup and periodically; deadlines are strict (equality is expired). */
   async reconcileBeforeScheduling(): Promise<number> {
+    await this.reconcileExpiries();
+    return this.reconcileScheduledWork();
+  }
+  /** Lightweight durable deadline work, kept outside external operation I/O. */
+  async reconcileExpiries(): Promise<number> {
     await this.validations.expireDue(this.now());
-    await this.expireDue();
+    return this.expireDue();
+  }
+  /** Retry blocked validation admission and process operations without scanning deadlines. */
+  async reconcileScheduledWork(): Promise<number> {
     await new ImageValidationService(this.validations, () =>
       this.now(),
     ).retryBlocked();

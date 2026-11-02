@@ -111,11 +111,14 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     let dropAcquire = false;
     let dropRenewalReads = false;
     let dropRelease = false;
+    let dropAccess = false;
+    let dropTicketReads = false;
     let syntheticHostKey = false;
     const hostKey = Buffer.from("synthetic-server-public-key-blob");
     const fingerprint = `SHA256:${createHash("sha256").update(hostKey).digest("base64").replace(/=+$/, "")}`;
     const syntheticPrivateKey = "SYNTHETIC_PRIVATE_KEY_MATERIAL_NOT_A_REAL_KEY";
     const posts: { path: string; key: string | undefined }[] = [];
+    const ticketReads: string[] = [];
     const proxy = createServer((req, res) => {
       const url = req.url ?? "/";
       if (req.method === "POST")
@@ -123,6 +126,8 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
           path: url,
           key: req.headers["idempotency-key"] as string | undefined,
         });
+      if (req.method === "GET" && /^\/v1\/tickets\/[^/]+$/.test(url))
+        ticketReads.push(url);
       const upstream = httpRequest(
         {
           hostname: "127.0.0.1",
@@ -137,7 +142,13 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
             (dropRenewalReads &&
               req.method === "GET" &&
               url.includes("/renewals/")) ||
-            (dropRelease && req.method === "POST" && url.endsWith("/release"))
+            (dropRelease &&
+              req.method === "POST" &&
+              url.endsWith("/release")) ||
+            (dropAccess && req.method === "POST" && url.endsWith("/access")) ||
+            (dropTicketReads &&
+              req.method === "GET" &&
+              /^\/v1\/tickets\/[^/]+$/.test(url))
           ) {
             // Consume the accepted response, then drop it. The real ledger keeps the effect.
             response.resume();
@@ -399,6 +410,63 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     expect(await count("SELECT count(*) n FROM lease_renewals")).toBe(
       proposals,
     );
+
+    // Simulate a server-side final rejection after this public consumer has
+    // durably prepared the exact renewal. The SDK error alone is not enough:
+    // the CLI must verify the owner-visible renewal record before recording it.
+    pauseRenewals = true;
+    dropRenewalReads = true;
+    const uncertainFinalRenewal = await cli(["renew", "600"]);
+    expect(uncertainFinalRenewal.code).not.toBe(0);
+    expect(uncertainFinalRenewal.stderr).toContain("NETWORK_RESULT_UNKNOWN");
+    const preparedRenewalState = await readState();
+    expect(preparedRenewalState.prepared.kind).toBe("renew");
+    const rejectedPrepared = preparedRenewalState.prepared;
+    const rejectedKey = rejectedPrepared.idempotencyKey;
+    const rejectedRequest = rejectedPrepared.request;
+    dropRenewalReads = false;
+    const pendingRenewal = await db.get<{
+      id: string;
+    }>(
+      "SELECT r.id FROM lease_renewals r JOIN idempotency_keys i ON i.renewal_id=r.id WHERE i.idempotency_key=? AND r.state='pending'",
+      [rejectedKey],
+    );
+    expect(pendingRenewal).toBeTruthy();
+    await db.batchTransaction([
+      {
+        kind: "run",
+        sql: "UPDATE lease_renewals SET state='rejected',rejection_json=?,version=version+1,updated_at_ms=? WHERE id=? AND state='pending'",
+        params: [
+          JSON.stringify({ code: "focused_rejection" }),
+          Date.now(),
+          pendingRenewal!.id,
+        ],
+        expectChanges: 1,
+      },
+    ]);
+    const rejectedResult = await cli(["resume"]);
+    expect(rejectedResult.code).not.toBe(0);
+    expect(rejectedResult.stderr).toContain("focused_rejection");
+    const adjudicated = await readState();
+    expect(adjudicated.prepared).toBeNull();
+    expect(adjudicated.lastDecision).toMatchObject({
+      kind: "renewal-rejected",
+      state: "rejected",
+      renewalId: pendingRenewal!.id,
+      reasonCode: "focused_rejection",
+      ticketId: acquired!.id,
+      command: rejectedPrepared,
+    });
+    expect(adjudicated.lastConfirmedLeaseExpiresAt).toBe(
+      renewed.lastConfirmedLeaseExpiresAt,
+    );
+    expect(
+      posts.filter((p) => p.path.endsWith("/renew")).map((p) => p.key),
+    ).toContain(rejectedKey);
+    expect(posts.filter((p) => p.path.endsWith("/release"))).toHaveLength(0);
+
+    // The same CLI can now follow its normal output-confirmation and release
+    // path; it does not need another consumer or a hand-edited state file.
     const unconfirmedOutput = await cli(["confirm-output-and-release"]);
     expect(unconfirmedOutput.code).not.toBe(0);
     expect(unconfirmedOutput.stderr).toContain("OUTPUT_CONFIRMATION_REQUIRED");
@@ -423,7 +491,131 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
       phase: "released",
       cleanupConfirmed: true,
     });
-    expect(await count("SELECT count(*) n FROM tickets")).toBe(1);
+    const closedRejected = await cli(["resume"]);
+    expect(closedRejected.code).toBe(0);
+    expect(JSON.parse(closedRejected.stdout)).toMatchObject({
+      phase: "released",
+      preparedCommandClosed: true,
+    });
+    expect((await readState()).prepared).toBeNull();
+    pauseRenewals = false;
+    await tick();
+
+    // Start a second normal CLI lifecycle to prove a lost access response does
+    // not pin a Ticket forever after its owner later releases it.
+    const secondPreview = await cli([
+      "preview",
+      "--version",
+      versionId,
+      "--node",
+      nodeId,
+      "--network",
+      networkId,
+    ]);
+    expect(secondPreview.code).toBe(0);
+    const secondAcquire = await cli(["acquire-or-resume"]);
+    expect(secondAcquire.code).toBe(0);
+    const secondTicketId = JSON.parse(secondAcquire.stdout).ticketId as string;
+    expect(secondTicketId).not.toBe(acquired!.id);
+    expect((await cli(["wait-ready"])).code).toBe(0);
+    const secondClaim = await cli(["claim"]);
+    expect(secondClaim).toMatchObject({ code: 0 });
+
+    dropAccess = true;
+    const lostAccess = await cli(["access-with-adapter"]);
+    expect(lostAccess.code).not.toBe(0);
+    expect(lostAccess.stderr).toContain("NETWORK_RESULT_UNKNOWN");
+    const preparedAccess = await readState();
+    expect(preparedAccess.prepared.kind).toBe("access");
+    expect(preparedAccess.prepared.ticketId).toBe(secondTicketId);
+
+    dropTicketReads = true;
+    const ticketReadsBeforeUnknown = ticketReads.length;
+    const unknownTicketRead = await cli(["resume"]);
+    expect(unknownTicketRead.code).not.toBe(0);
+    expect(unknownTicketRead.stderr).toContain("NETWORK_RESULT_UNKNOWN");
+    expect((await readState()).prepared).toEqual(preparedAccess.prepared);
+    expect(ticketReads.length).toBeGreaterThan(ticketReadsBeforeUnknown);
+    dropTicketReads = false;
+    dropAccess = false;
+
+    const ticketResponse = await fetch(
+      `${origin}/v1/tickets/${secondTicketId}`,
+      {
+        headers: { Authorization: `Bearer ${token}` },
+      },
+    );
+    expect(ticketResponse.status).toBe(200);
+    const liveTicket = (await ticketResponse.json()) as {
+      lease: { generation: number };
+    };
+    const ownerRelease = await fetch(
+      `${origin}/v1/tickets/${secondTicketId}/release`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          "Idempotency-Key": "focused-owner-release-access-recovery",
+        },
+        body: JSON.stringify({
+          generation: liveTicket.lease.generation,
+          reclaimable: true,
+        }),
+      },
+    );
+    expect([200, 202]).toContain(ownerRelease.status);
+    let releasedPhase = "";
+    for (let attempt = 0; attempt < 100; attempt++) {
+      await tick();
+      const current = await fetch(`${origin}/v1/tickets/${secondTicketId}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      expect(current.status).toBe(200);
+      releasedPhase = ((await current.json()) as { phase: string }).phase;
+      if (releasedPhase === "released") break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    expect(releasedPhase).toBe("released");
+    const accessPostsBeforeClose = posts.filter((post) =>
+      post.path.endsWith("/access"),
+    ).length;
+    const ticketsBeforeClose = await count("SELECT count(*) n FROM tickets");
+    const closedAccess = await cli(["resume"]);
+    expect(closedAccess.code).toBe(0);
+    expect(JSON.parse(closedAccess.stdout)).toMatchObject({
+      ticketId: secondTicketId,
+      phase: "released",
+      preparedCommandClosed: true,
+      lastDecision: {
+        kind: "ticket-released",
+        ticketId: secondTicketId,
+        command: preparedAccess.prepared,
+      },
+    });
+    expect((await readState()).prepared).toBeNull();
+    expect(posts.filter((post) => post.path.endsWith("/access"))).toHaveLength(
+      accessPostsBeforeClose,
+    );
+    expect(await count("SELECT count(*) n FROM tickets")).toBe(
+      ticketsBeforeClose,
+    );
+    const ticketsBeforePreview = await count("SELECT count(*) n FROM tickets");
+    expect(ticketsBeforePreview).toBe(2);
+    const nextPreview = await cli([
+      "preview",
+      "--version",
+      versionId,
+      "--node",
+      nodeId,
+      "--network",
+      networkId,
+    ]);
+    expect(nextPreview.code).toBe(0);
+    expect(await count("SELECT count(*) n FROM tickets")).toBe(
+      ticketsBeforePreview,
+    );
+
     expect(
       await count(
         "SELECT count(*) n FROM allocations WHERE desired_state!='absent' OR observed_state!='absent' OR cleanup_status!='complete'",
@@ -459,7 +651,7 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     expect(tickError).toBeUndefined();
     Object.assign(evidence, {
       result: "passed",
-      ticketCount: 1,
+      ticketCount: 2,
       sameTicketAfterProcessRestart: true,
       sameAcquireKey: true,
       identityAndFrozenRequestEnforced: true,

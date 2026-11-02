@@ -27,7 +27,9 @@ const principal = await browser.session.me();
 await browser.session.logout();
 ```
 
-`readCsrfCookie()` 是调用者读取 `hitchlet_csrf` 的函数，仓库 GUI 已实现。HTTPS 下保留 `COOKIE_SECURE=true`；只有本地原生服务 `HOST=127.0.0.1` 才允许关闭安全 cookie。会话默认 8 小时；退出、源凭据撤销和消费者停用会使认证失效。写入的真实角色、scope、对象范围和 cookie CSRF 均由服务端再次校验。
+`readCsrfCookie()` 是调用者读取 `hitchlet_csrf` 的函数，仓库 GUI 已实现。HTTPS 下保留 `COOKIE_SECURE=true`；只有本地原生服务 `HOST=127.0.0.1` 才允许关闭安全 cookie。会话默认 8 小时。退出会话和撤销源凭据会使对应认证失效；cookie 写入仍要求 CSRF。
+
+消费者停用关闭新准入，但不等于凭据撤销。控制器的 `allowDisabled` 白名单保留本人 Ticket 查询，以及当前凭据和 scope 允许的续租、归还、取消、接用、续租结果和 Ticket 事件查询；每个接口仍按调用者 `consumerId` 和所需 scope 校验。`access` 还要求 Ticket 处于可接用状态。`POST /v1/tickets` 只允许原幂等键恢复，不允许新申请。`/v1/catalog`、管理接口和其他不在白名单的路由仍要求 Consumer 为 active。凭据被撤销、会话被注销、scope 被收窄或对象授权改变时，各自的拒绝规则仍生效；停用不会扩大凭据权限。
 
 | 角色     | 读写边界                                                                                          |
 | -------- | ------------------------------------------------------------------------------------------------- |

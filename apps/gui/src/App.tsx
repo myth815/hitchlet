@@ -495,6 +495,11 @@ export function App({ client: injected }: { client?: HitchletClient }) {
     principal.scopes.includes("tickets:write") &&
     !healthError &&
     health?.recoveryState === "ready";
+  const canRequestTermination =
+    !!principal &&
+    principal.role !== "viewer" &&
+    principal.scopes.includes("tickets:write") &&
+    ticket?.consumerId === principal.consumerId;
   const canClaim =
     canOperate &&
     ticket?.phase === "ready" &&
@@ -513,9 +518,13 @@ export function App({ client: injected }: { client?: HitchletClient }) {
     lease?.state === "active" &&
     !!lease.claimedAt;
   const canCancel =
-    canOperate && !!ticket && !["releasing", "released"].includes(ticket.phase);
+    canRequestTermination &&
+    !!ticket &&
+    !["releasing", "released"].includes(ticket.phase);
   const canRelease =
-    canOperate && ticket?.phase === "ready" && lease?.state === "active";
+    canRequestTermination &&
+    ticket?.phase === "ready" &&
+    lease?.state === "active";
   const pendingFor = (kind: PreparedTicketCommand["kind"], ticketId?: string) =>
     commands.some((item) => {
       const hint = preparedHint(item.command);
