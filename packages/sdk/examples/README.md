@@ -142,9 +142,13 @@ read-only probe `id -un && id -u && id -g && node --version`. Its result contain
 only the numeric uid/gid and Node version. On completion, timeout, or the earlier
 confirmed lease/access deadline, it closes the local channel and calls the
 client's protocol `end()` followed by socket `destroy()`. That does not kill
-remote work or provide strict offline enforcement. The adapter was exercised only with the
-controlled fake `Client` test; no real SSH connection was made or verified. The
-earlier Simulator ticket workflow does not constitute live Host or SSH evidence.
+remote work or provide strict offline enforcement. In addition to the controlled
+fake `Client` tests, this factory completed a real API-fingerprint-verified SSH
+probe through the public SDK/CLI on the isolated Studio stack on 2026-11-02. The
+single Ticket was released with verified cleanup. See the
+[exact environment, receipt, and limits](../../../docs/STUDIO-SSH-ADAPTER-REAL-2026-11-02.md).
+The repeatable Simulator workflow remains synthetic; its results do not replace
+the separate real-connection evidence or establish other platforms as tested.
 
 Run the focused adapter tests with:
 
