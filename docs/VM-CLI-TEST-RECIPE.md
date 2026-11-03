@@ -91,3 +91,7 @@ node "$EXAMPLE" cancel --reason 'test no longer needed'
 影音线确认现有 catalog/preview、正常 Ticket/confirmed renew/getAccess、SSH/SFTP、持久存储和 release 接口足够，不需要平台业务 API。镜像按实际 Engine 可达的固定 manifest 使用，loopback registry 不当跨主机地址。源码修正后需重新制品化，不能沿旧 digest 宣称包含新代码。
 
 工具与任务仍由 AI/消费者选择：FFmpeg/ffprobe、FLAC/metaflac、sacd_extract、需要时的 MKVToolNix/MakeMKV，或既有 MediaToolbox 六个 CLI。大媒体留持久位置，收小报告与流式 hash；真实 NAS、外部服务和凭据只按具体任务授予。本次没有访问媒体、更新镜像或创建真实挂载。
+
+## 已验证的新CLI单元格
+
+`5e6dba54f3fcd2f52f2c66fda6a6d2dd86946c3d`的`tools/cli/test/governance.test.ts`、pattern=`governance text`已在保留Ubuntu ARM模板的真实票内通过3项，见[新用例验收](VESTA-GOVERNANCE-VM-2026-11-04.md)。这与上文旧固定commit的一项domain-flow证据分开。复用封存模板内基线bundle，只传4512-byte增量；下一任务仍固定自己的源码和测试，不把这个临时测试输入扩成平台业务编排。

@@ -25,3 +25,5 @@ Ubuntu 24.04.5 Linux ARM 也已完成固定初始化与真实资格/发布/单�
 Windows x86_64 / Hyper-V 后置；WSL Linux 不等于 Windows 原生。其他 Linux 发行版、完整 Vesta 应用/GUI矩阵、VM 平台挂载、Softnet 强隔离、长期部署和 Controller 离线严格到期强停均未因 macOS 单票而完成。每批一个实际交付和明确边界即可收口，不先做快照池或通用编排框架。
 
 已实现原Studio启动入口的--check/--resume复用行为与当前consumer catalog交接，见 [可重复启动](STUDIO-REPEATABLE-START.md)。Hyper-V的实际组件状态及唯一系统前置见 [Windows核查](HYPERV-PREPARATION-2026-11-04.md)，未擅自启用。
+
+Vesta新版本`5e6dba54f`的governance text三项已在真实Ubuntu ARM VM完成，见[新单元格](VESTA-GOVERNANCE-VM-2026-11-04.md)。原票回收、Claim0、临时服务/认证清理均完成；不用继续等选测试或重跑旧用例。后续以实际新消费者需求与部署收口为准。

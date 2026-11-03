@@ -40,3 +40,5 @@ Docker 的 guest OS 当前为 Linux，宿主 macOS 或 Windows 不改变容器 g
 ## 2026-11-04 后续落地
 
 已增加 [可重复启动与消费者接力入口](STUDIO-REPEATABLE-START.md)，实际在线check/reuse没有重启服务；原服务仍是明确标识的0039+d0128a8兼容包。Windows已完成准确节点与组件只读核对，见 [Hyper-V最小路线](HYPERV-PREPARATION-2026-11-04.md)：功能Disabled、vmms/Get-VM不可用；系统功能启用和可能重启未执行，不妨碍上述源码交付。
+
+Vesta的下一格也已实际推进：[新CLI 5e6dba54f / Linux ARM VM治理文本3项](VESTA-GOVERNANCE-VM-2026-11-04.md)真实通过并查实回收，临时服务/认证已清理。新版本的macOS VM、Windows和完整CI仍不从该结果外推。
