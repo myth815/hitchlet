@@ -826,7 +826,7 @@ export class TartLocalDriver {
       new URL("./tart-guest-bootstrap.cjs", import.meta.url),
       "utf8",
     );
-    const script = `${helperSource}\n;let __input="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>__input+=c);process.stdin.on("end",()=>{try{const __result=module.exports.runGuestBootstrap(JSON.parse(__input));process.stdout.write(JSON.stringify(__result)+"\\n")}catch(__error){const __code=__error&&__error.code==="guest_ssh_port_22_in_use"?__error.code:"guest_bootstrap_failed";process.stderr.write(__code+"\\n");process.exitCode=1}});`;
+    const script = tartGuestBootstrapProgram(helperSource);
     const result = await this.runInteractive(
       [
         "exec",
@@ -2376,4 +2376,9 @@ function commandBudget(
         : actionDeadline - Date.now(),
     ),
   );
+}
+
+/** Capture the lexical helper in node -e; its ambient module export changes after stdin resumes. */
+export function tartGuestBootstrapProgram(helperSource: string): string {
+  return `${helperSource}\n;let __input="";process.stdin.setEncoding("utf8");process.stdin.on("data",c=>__input+=c);process.stdin.on("end",()=>{try{const __result=runGuestBootstrap(JSON.parse(__input));process.stdout.write(JSON.stringify(__result)+"\\n")}catch(__error){const __code=__error&&__error.code==="guest_ssh_port_22_in_use"?__error.code:"guest_bootstrap_failed";process.stderr.write(__code+"\\n");process.exitCode=1}});`;
 }

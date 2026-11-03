@@ -1,22 +1,22 @@
-# Tart 接入：管理接线与受控验证阶段
+# Tart 接入：Studio NAT 实机验收与边界
 
-2026-11-03：家庭受信任任务默认 NAT；Softnet 强隔离按 Profile 显式选择。NAT 的基本资格、无控制 FD 恢复回收和不提供强网络隔离的边界见 [网络模式](TART-NETWORK.md)。原文中的网络策略/回执门槛仅适用于 Softnet；独立环境、身份、资源、SSH 与查实回收共同保留。已按用户明确批准移除无条件 server 启动拒绝，未增加替代总闸，真实 VM 未验。
+2026-11-03：家庭受信任任务默认 NAT；Softnet 强隔离按 Profile 显式选择。NAT 的基本资格、无控制 FD 恢复回收和不提供强网络隔离的边界见 [网络模式](TART-NETWORK.md)。原文中的网络策略/回执门槛仅适用于 Softnet；独立环境、身份、资源、SSH 与查实回收共同保留。已按用户明确批准移除无条件 server 启动拒绝，未增加替代总闸。Studio macOS ARM 的默认 NAT 实机闭环已验，见 [验收记录](TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md)；Softnet 仍未实机验证。
 
-Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。当前已补可信 Runtime 通道、固定 guest 初始化、真实 SSH 探针源码，以及正常管理 API/SDK 的发现、注册、资格登记、验证与发布。本批继续补了冻结网络计划、Softnet 控制 FD/策略读回、显式网络回收和正式 server composition 的受控接线。正常入口可显式配置 `EXECUTION_MODE=tart`，默认仍为 `disabled`；**真实 Tart 租用尚未验收**，不能将配置枚举或合成测试当作已有可租 VM。
+Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。当前已补可信 Runtime 通道、固定 guest 初始化、真实 SSH 探针源码，以及正常管理 API/SDK 的发现、注册、资格登记、验证与发布。本批继续补了冻结网络计划、Softnet 控制 FD/策略读回、显式网络回收和正式 server composition 的受控接线。正常入口可显式配置 `EXECUTION_MODE=tart`，默认仍为 `disabled`；**已完成 Studio Tahoe macOS ARM 单票 CLI 实机验收**，不能将其扩大为所有 guest OS、Softnet、GUI 或长期部署已验。此次临时服务已关闭、认证已清理，当前没有常驻可租 VM 服务。
 
 影音和 Vesta 的业务属于各自租客工程。Linux guest、Windows 原生、Hyper-V、快照池、Orchard 和云扩容均不是本批交付。
 
 ## 当前接线与证据
 
-| 层次           | 已有源码                                                                                                                                       | 已验证边界                                                                        |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| 本机驱动       | local template clone/set/run/IP、持久归属、inspect/reconcile、终止 tombstone、停止删除与完整盘点                                               | Studio 上假 CLI/临时文件；未执行 Tart                                             |
-| Runtime 入口   | 独立 `dist/tart-main.js`、显式 namespace 初始化、模板封存、mTLS+Bearer、epoch/nonce/deadline                                                   | 临时证书/loopback HTTPS fixture；非真实部署认证                                   |
-| guest 初始化   | 固定 GuestAgent exec，macOS arm64/Node 24，按分配身份持久初始化、生成 guest 内 host key、独立 sshd、幂等回执                                   | 受控依赖夹具；未在真实 guest 运行                                                 |
-| Controller     | 精确冻结 Operation/Node/revision/native namespace，可信 facts/template 校验，bootstrap RPC 后读回 applied receipt，SSH 指纹及账户/OS/arch 检查 | 同账本生命周期、HTTP client、mock ssh2；没有真实 VM 握手                          |
-| 管理发布       | 发现→禁用/unknown 注册→配置→独立资格报告→草稿→持久验证和回收→重新核模板→发布                                                                   | 真实服务/SQLite/worker/provider 配合合成 native 端口；没有 SQL 直接伪造已发布状态 |
-| 租客 UI        | 目录可含 `kind: vm`，VM 请求用整 vCPU、virtual_machine、best_effort，无挂载                                                                    | GUI 测试；没有浏览器操作真实 VM                                                   |
-| 网络与正式启动 | 冻结 CIDR/访问/拒绝计划，Softnet 编译/控制 FD/策略读回，显式 revoke 后回收，共用 worker/lease 的 server composition                            | 假 CLI/自有子进程/合成账本；无条件启动拒绝已移除，真实 VM/网络尚未验收          |
+| 层次           | 已有源码                                                                                                                                       | 已验证边界                                                                  |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| 本机驱动       | local template clone/set/run/IP、持久归属、inspect/reconcile、终止 tombstone、停止删除与完整盘点                                               | Studio 默认 NAT 真实 clone/set/run/IP、归属、重连与 absent；另有假 CLI 回归 |
+| Runtime 入口   | 独立 `dist/tart-main.js`、显式 namespace 初始化、模板封存、mTLS+Bearer、epoch/nonce/deadline                                                   | 专属 loopback mTLS+Bearer 实机通道；临时认证结束清理，非长期部署            |
+| guest 初始化   | 固定 GuestAgent exec，macOS arm64/Node 24，按分配身份持久初始化、生成 guest 内 host key、独立 sshd、幂等回执                                   | 真实 macOS 26.6.2 / arm64 / Node 24.21.0 guest 初始化与 SSH 通过            |
+| Controller     | 精确冻结 Operation/Node/revision/native namespace，可信 facts/template 校验，bootstrap RPC 后读回 applied receipt，SSH 指纹及账户/OS/arch 检查 | 真实管理、验证与租客票生命周期；API 指纹核验 SSH、续租和归还通过            |
+| 管理发布       | 发现→禁用/unknown 注册→配置→独立资格报告→草稿→持久验证和回收→重新核模板→发布                                                                   | 真实发现、资格、验证、回收和发布；正常 API，无 SQL 伪造                     |
+| 租客 UI        | 目录可含 `kind: vm`，VM 请求用整 vCPU、virtual_machine、best_effort，无挂载                                                                    | GUI 测试；没有浏览器操作真实 VM                                             |
+| 网络与正式启动 | 冻结 CIDR/访问/拒绝计划，Softnet 编译/控制 FD/策略读回，显式 revoke 后回收，共用 worker/lease 的 server composition                            | 默认 NAT 实机通过；无条件总闸已移除，Softnet/强隔离仍仅受控验证             |
 
 ## Runtime 入口与模板
 

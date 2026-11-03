@@ -13,7 +13,10 @@ import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { afterEach, expect, it } from "vitest";
 import { spawn, type ChildProcess } from "node:child_process";
-import { TartLocalDriver } from "../src/drivers/tart.js";
+import {
+  TartLocalDriver,
+  tartGuestBootstrapProgram,
+} from "../src/drivers/tart.js";
 import {
   canonicalTartNetworkPlan,
   type TartNetworkPlan,
@@ -961,3 +964,36 @@ async function readEvents(
     return [];
   }
 }
+
+it("delivers guest bootstrap through the actual Node eval stdin boundary", async () => {
+  const script = tartGuestBootstrapProgram(
+    "function runGuestBootstrap(input) { return { status: 'applied', nonce: input.nonce }; }\nmodule.exports = { runGuestBootstrap };",
+  );
+  const result = await new Promise<{
+    code: number | null;
+    stdout: string;
+    stderr: string;
+  }>((resolve, reject) => {
+    const child = spawn(process.execPath, ["-e", script], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "",
+      stderr = "";
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("close", (code) => resolve({ code, stdout, stderr }));
+    child.stdin.end(JSON.stringify({ nonce: "actual-stdin-boundary" }) + "\n");
+  });
+  expect(result.code).toBe(0);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout)).toEqual({
+    status: "applied",
+    nonce: "actual-stdin-boundary",
+  });
+  expect(result.stdout.endsWith("\n")).toBe(true);
+});
