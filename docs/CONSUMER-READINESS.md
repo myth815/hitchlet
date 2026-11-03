@@ -36,3 +36,7 @@ Docker 的 guest OS 当前为 Linux，宿主 macOS 或 Windows 不改变容器 g
 - Tart 默认 NAT 不承诺强网络隔离，Softnet 是显式可选能力；Docker 既有网络行为不变。
 - 共用宿主容量、真实 Runtime 身份、资源归属与最终 absent 属于平台；媒体识别、质量判断、批处理和 Vesta 测试结果属于消费者。
 - 未验证项按实际下一任务推进，不作为所有消费者的新增默认门槛。
+
+## 2026-11-04 后续落地
+
+已增加 [可重复启动与消费者接力入口](STUDIO-REPEATABLE-START.md)，实际在线check/reuse没有重启服务；原服务仍是明确标识的0039+d0128a8兼容包。Windows已完成准确节点与组件只读核对，见 [Hyper-V最小路线](HYPERV-PREPARATION-2026-11-04.md)：功能Disabled、vmms/Get-VM不可用；系统功能启用和可能重启未执行，不妨碍上述源码交付。
