@@ -31,3 +31,5 @@ Vesta新版本`5e6dba54f`的governance text三项已在真实Ubuntu ARM VM完成
 Hyper-V原生生命周期内核源码已完成，见[内核边界与验证](HYPERV-NATIVE-KERNEL.md)：原ID恢复、未知不重导入、精确VM/磁盘回收及跨allocation独立推进已有受控证据；内部[认证Runtime server/client](HYPERV-RUNTIME-TRANSPORT.md)已有受控接线；内部[ExecutionPort/guest握手](HYPERV-PROVIDER.md)已补受控实现；Windows启动组合、原生guest SSH和正式管理发布未完成，不向消费者宣称Windows可租。
 
 Hyper-V已补固定Windows/Linux amd64 SSH probe及正常制品草稿登记/读回，见[源码与34项局部验证](HYPERV-READINESS-AND-DRAFTS.md)。下一步是实际模板引导、节点/资格/live模板发布证明和正式组合；未执行远端或伪造发布事实。
+
+Hyper-V的[正常Runtime入口与namespace目录绑定](HYPERV-RUNTIME-ENTRY.md)已补本地受控接线，Windows部署未执行。历史源解析一次授权重试超时无回执，暂停该未知步骤；后续仍以真实模板/引导渠道、系统前置及正式resolver/资格发布为依据，不补造能力。

@@ -29,7 +29,7 @@
 - 新Hyper-V内核16项：Windows/Linux amd64元数据、原ID恢复、丢回执不重开、未知导入保持unknown、VM与文件分别清理、owner/ID/盘路径变化拒绝、冻结规格/控制版本、缺失能力与不完整inventory、运行时规格漂移、跨allocation并发和deadline。
 - 共用合同/Tart别名3项；受影响Tart驱动16项与guest初始化6项；Controller执行注册/路由6项。合计**47项定向通过**，均为受控依赖/假CLI或本地文件，不是真实Hyper-V证据。
 - Contracts、Runtime、Controller TypeScript构建通过，编译后Hyper-V模块本地导入通过；ps1源与dist副本hash一致。未重跑全仓或旧Docker/Tart实机闭环。
-- 未执行Windows PowerShell Parser或任何原生Hyper-V动作。未安装本地PowerShell。具体阻塞留本机任务交接；不能将原生脚本视为已在目标Windows执行验证。
+- 原生Hyper-V动作未执行；历史Parser拒绝后已获具体授权并尝试一次，维护调用超时无回执，未确认Parser完成或语法通过。未安装本地PowerShell。准确超时状态留本机任务交接；不能将原生脚本视为已在目标Windows执行验证。
 
 ## 后续最小接线
 

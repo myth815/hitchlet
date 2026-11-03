@@ -13,7 +13,7 @@
 
 ## 尚未接入，不能据本批称为可租
 
-server/client 是可测试组合函数，没有新增可执行启动入口，也没有读取真实 Runtime 配置或监听常驻端口。内部ExecutionPort后续已接线，正式server/管理发布尚未接入。后续启动组合仍须把 namespace 标记绑定到专属工作根并锁定单 Runtime 写入者；本批 facts 中的 namespace 来自显式配置，不能作为独立资格证明。
+server/client 是可测试组合函数，后续已补[可执行启动入口与持久namespace绑定](HYPERV-RUNTIME-ENTRY.md)，本机受控验证，不是在Windows实际监听的部署。内部ExecutionPort后续已接线，正式server/管理发布尚未接入。后续入口已把namespace标记绑定到专属工作根，部署模型仍为单Runtime进程；NTFS/不同端口多写者未验。直接server函数的namespace仍来自调用方，不能单独作为资格证明。
 
 原生 lifecycle 仍只有 vmcx hash，不是完整模板/磁盘制品身份。PowerShell 解析/运行、native import 早期中断取证、VM 资源/网络/SSH、正式管理发布和 Ticket 均未实机验证；详见[内核边界](HYPERV-NATIVE-KERNEL.md)。没有将不可用 host 伪造成可用：facts 可诚实返回 available=false。默认无guest渠道仍为not_implemented；后续内部provider仅在受控引导/SSH证据完整时生成ReadyReceipt/access，不是实机支持。
 
@@ -40,3 +40,5 @@ server/client 是可测试组合函数，没有新增可执行启动入口，也
 未重复 Docker/Studio ARM/macOS/Linux 已验实机票，未更改正在服务 Go 影音的冻结兼容包。远端 PowerShell Parser 因自动审批拒绝而未执行；本批没有重试、换入口或上传源文件。精确待批动作及原因保留在本机任务交接，待白天统一汇报。
 
 固定guest SSH probe与制品草稿的接续实现、验证和真实未覆盖见[后续批次](HYPERV-READINESS-AND-DRAFTS.md)。实际模板初始化渠道仍未实现。
+
+历史解析拒绝已获一次具体新授权并重试，原维护通道60秒超时、无解析回执；不是再次拒绝或语法通过。未重复未知请求，详见[当前入口与真实边界](HYPERV-RUNTIME-ENTRY.md)。

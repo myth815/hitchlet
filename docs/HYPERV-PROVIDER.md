@@ -14,7 +14,7 @@
 
 ## 仍缺哪些实际接线
 
-1. Windows 实际 Runtime 启动配置、namespace与专属根/单写进程绑定，及基于当前凭据/持久cleanup Operation的真实 resolver。现在只有注入式组合函数；没有偷偷使用已有维护口令作为租客认证。
+1. [Runtime配置/namespace与专属根绑定及正常入口](HYPERV-RUNTIME-ENTRY.md)已有本地受控接线，Windows真实部署/NTFS仍未验；基于当前凭据/持久cleanup Operation的真实 resolver未接。没有偷偷使用已有维护口令作为租客认证。
 2. 选定完整模板/磁盘制品身份和已有引导入口，再实现一个 Windows/amd64 模板配方/真实SSH验收；[Windows/Linux固定SSH probe源码与草稿登记](HYPERV-READINESS-AND-DRAFTS.md)已补。PowerShell Direct需要guest认证，宿主管理员token不等于guest身份；没有该事实时不尝试。Linux/amd64是合同维度与受控用例，不冒称已有x64镜像。
 3. 制品草稿登记/读回已补；正式管理节点、资格/发布与当前冻结网络合同到operation-plan的映射未完成。`hyperv_nat`目前只是内部 provider 支持的执行计划，未在管理 API 或生产账本中创建新profile；不把受控对象称为完整管理链路。
 4. 原生PowerShell解析/执行、早期Import未完成状态、NTFS/掉电和真实单票验证仍未完成。组件启用、可能重启、模板许可和宿主网络等动作尚未执行。Windows源码解析的既有拒绝不受这批代码修改解除。
