@@ -35,6 +35,9 @@ export function ProfileSetup({
     [name, setName] = React.useState(""),
     [consumers, setConsumers] = React.useState<string[]>([]),
     [ingress, setIngress] = React.useState(""),
+    [tartMode, setTartMode] = React.useState<"trusted_nat" | "isolated">(
+      "trusted_nat",
+    ),
     [egress, setEgress] = React.useState<
       { cidr: string; protocol: "tcp" | "udp"; ports: string }[]
     >([]),
@@ -55,6 +58,7 @@ export function ProfileSetup({
     const config = p.config;
     if (!config) return;
     if (kind === "network") {
+      setTartMode(config.tartMode === "isolated" ? "isolated" : "trusted_nat");
       const sources = config.allowedIngressSourceCidrs;
       if (Array.isArray(sources))
         setIngress(
@@ -101,6 +105,7 @@ export function ProfileSetup({
   };
   const save = async (key: string) => {
     const policy = {
+        tartMode,
         allowedEgress: egress.map((r) => ({
           cidr: r.cidr,
           protocol: r.protocol,
@@ -232,7 +237,32 @@ export function ProfileSetup({
           {kind === "network" ? (
             <>
               <label>
-                允许入口来源 CIDR（每行或逗号分隔）
+                Tart VM 网络模式
+                <select
+                  value={tartMode}
+                  onChange={(e) =>
+                    setTartMode(
+                      e.target.value === "isolated"
+                        ? "isolated"
+                        : "trusted_nat",
+                    )
+                  }
+                >
+                  <option value="trusted_nat">
+                    受信任任务 NAT（默认，无强网络隔离）
+                  </option>
+                  <option value="isolated">
+                    Softnet 强隔离（需要对应能力）
+                  </option>
+                </select>
+              </label>
+              <p>
+                NAT 允许任务按需访问宿主可达的网络，不实施下列来源、出口或 IPv6
+                限制，不保证宿主、家庭 LAN 或租客间网络隔离。Docker
+                始终保持既有规则。
+              </p>
+              <label>
+                Docker / Softnet 允许入口来源 CIDR（每行或逗号分隔）
                 <textarea
                   value={ingress}
                   onChange={(e) => setIngress(e.target.value)}

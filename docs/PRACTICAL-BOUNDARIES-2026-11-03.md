@@ -1,0 +1,33 @@
+# 已实现使用链的实用边界复核（2026-11-03）
+
+用户目标：家庭受信任消费者独立申请环境，访问所需资源，用完归还；保持业务无关、易接入。网络强隔离不是所有任务的默认前提。本批未运行 VM、未改宿主或 Docker 网络、未安装工具/生成真实凭据。
+
+| 环节     | 已核实现与处置                                                                           | 保留的实际作用 / 边界                                                                                                                                           |
+| -------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 申请     | tickets.ts 默认 Tart trusted_nat；旧冻结票据不改；Profile 可显式选 isolated              | 固定镜像/模式/规格和幂等 key 防止恢复时重复创建或改变原请求，不增加每票人工审批                                                                                 |
+| 认证     | access.ts / tart-runtime-resolver.ts / tart-main.ts；保留 owner、有效身份及 Runtime 认证 | 防串票和将控制动作发往错误环境；不是要求每票新建 CA。现有本机 mTLS+Bearer 仍是部署实现，优先复用既有流程，不另造认证系统                                        |
+| 资源调度 | tickets.ts / admission.ts；保留真实 CPU/内存、额度和人机政策                             | 避免占用超出承诺或影响人的负载。未新增低并发硬限制、整机压力或预测平台；未知占用不能当空闲                                                                      |
+| 挂载     | runtime-storage.ts / storage-resolver；Docker 授权 local/NFS/SMB 路径和数据保留不放宽    | 真实路径/读写权限/不销毁外存防误删数据；NAS 数据端口与管理端口可区分。Tart 无托管挂载是功能缺口，不是禁止访问 NAS；先 SSH/SFTP，直接 NAS 由消费者按实际权限使用 |
+| 网络     | Tart trusted_nat 不依赖 Softnet/强隔离报告/控制 FD；真实规则不再假装应用                 | NAT 不承诺隔离宿主、家庭 LAN、peer 或 IPv6，按需使用网络。Softnet 可选，Docker 既有规则未变；没有申请全屋 VLAN、VPN、DHCP 改造                                  |
+| 续租     | leases.ts / SDK；保留 pending 与 confirmed、原票恢复、截止和幂等                         | 防止把尚未获得的延期当成已获授权；SDK 已封装必要版本裁决，不要求租客管理数据库/Operation。Controller 离线硬停仍不支持                                           |
+| 归还     | App.tsx 两个确认合并一个，清楚说明保存输出与删除；NAT 精确停止/删除/不存在取证           | 一次明确 reclaimable 意图足够；停止失败或未知保持 Claim，保护的是资源账实与数据，不能简化为 HTTP 受理即已释放                                                   |
+| 发布     | NAT 只需资源/SSH/回收基本资格；Softnet 才要求网络 scope；镜像验证清理后发布              | 防止交付不能启动或无法回收的环境。资格与镜像验证是新节点/模板准备步骤，普通 Ticket 不增加手动审批；不将模拟报告当实机证明                                       |
+
+## 已知仍妨碍使用的地方
+
+1. 全局 Tart server guard 仍无条件拒绝启动；删除该 guard 被自动审批拒绝且未执行。本批 NAT 源码/测试不能被宣称为正常入口已经可用。需要对该具体被拒动作的新明确批准后才能重试，不换工具绕过。
+2. Tart 实机工具、模板、guest 初始化和认证尚未准备/验证；这是尚未实施，不是必须使用 Softnet。NAT 方案不需要其 SUID 或 bootpd 写入。
+3. Tart 平台托管 NAS 挂载、Linux guest 初始化未实现；不是缺了几条白名单就能承诺支持。影音业务由消费者维护，不在 Hitchlet 内新增媒体管线。
+4. guest helper 固定 Node 24、SSH 22，禁用 SSH 端口转发，属于当前配方范围，不能泛称租客安全必需。若消费者需要其他配方/开发端口，应按真实需求支持，不把“当前不支持”变成“禁止”。本批不扩展 guest bootstrap 协议。
+
+## 精简后的下一步
+
+先完成被拒 guard 的具体决定，再用单个 NAT VM 验证正常 SDK/GUI 生命周期和需要的网络访问；无需先部署 Softnet 或全套强隔离网络。复用原 Docker 证据，不重复全仓/全机测试。正常使用中出现的具体阻碍直接修，不再为假设风险叠加默认门槛。
+
+## 本批实际验证与复审
+
+- Node v24.21.0、pnpm 10.28.2；contracts、SDK、Controller、Runtime Agent 和 GUI 构建通过；GUI 与设计合同类型检查通过，git diff --check 通过。
+- 98 项定向测试通过：Controller 69（Ticket 文件 64，Tart Provider/基本资格/schema 3，两种模式的正式管理发布 2）；Runtime 22；contracts 6；GUI 归还/冻结 NAT 展示 1。未跑全仓。
+- 证据是临时 SQLite、合成 Runtime/SSH、假 Tart CLI、受管合成子进程和浏览器夹具；没有真实 VM 或网络/NAS 正反流量证据。原 Studio Docker 实机证据复用，不冒充本批新实测。
+- 有限复审核对模式冻结、默认资格、旧票兼容、owner/fence、未知和未查实停止保留 Claim、重复回收、API/SDK/GUI 模式投影；修正了 NAT 初稿仍沿用强资格默认值、停止意图与查实停止的区分。未改 Docker 网络后端和规则。
+- 仍阻塞：`apps/controller/src/config.ts` 的全局 `assertTartExecutionAdaptersConfigured` 拒绝 Tart server。移除此 guard 的执行申请被自动审批拒绝，理由为未明确批准该启动/部署边界变化；动作未执行，未重试或绕过。后续应只处理该具体决定，不重新要求一揽子网络权限。

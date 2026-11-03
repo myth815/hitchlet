@@ -70,7 +70,8 @@ export function projectCapabilities(value: string, now = Date.now()) {
       evidenceState === "valid" &&
       c.cpuHardLimit === "verified" &&
       c.memoryHardLimit === "verified" &&
-      c.networkPolicyEnforcement === "verified",
+      (c.networkMode === "trusted_nat" ||
+        c.networkPolicyEnforcement === "verified"),
     expiresAt,
     architectures: Array.isArray(c.architectures)
       ? c.architectures.filter((x) => x === "amd64" || x === "arm64")

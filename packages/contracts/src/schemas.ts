@@ -449,6 +449,9 @@ export const CleanupBlockerViewSchema: z.ZodType<CleanupBlockerView> = z
   })
   .strict();
 const ticketViewObjectSchema = TicketSummarySchema.extend({
+  networkMode: z
+    .enum(["isolated_bridge", "isolated_vm", "trusted_nat"])
+    .optional(),
   acceptedRequest: AcceptedAcquireRequestSchema,
   pinnedProfileRevisions: z
     .object({

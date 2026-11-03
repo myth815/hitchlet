@@ -1,5 +1,7 @@
 # Tart 接入：管理接线与受控验证阶段
 
+2026-11-03：家庭受信任任务默认 NAT；Softnet 强隔离按 Profile 显式选择。NAT 的基本资格、无控制 FD 恢复回收和不提供强网络隔离的边界见 [网络模式](TART-NETWORK.md)。原文中的网络策略/回执门槛仅适用于 Softnet；独立环境、身份、资源、SSH 与查实回收共同保留。全局 server guard 本批仍未获准移除，真实 VM 未验。
+
 Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。当前已补可信 Runtime 通道、固定 guest 初始化、真实 SSH 探针源码，以及正常管理 API/SDK 的发现、注册、资格登记、验证与发布。本批继续补了冻结网络计划、Softnet 控制 FD/策略读回、显式网络回收和正式 server composition 的受控接线。**尚不能在正式 server 启用真实 Tart 租用**：实机网络资格与受控部署未完成，`EXECUTION_MODE=tart` 仍明确拒绝启动，默认仍为 `disabled`。不能将配置枚举或合成测试当作已有可租 VM。
 
 影音和 Vesta 的业务属于各自租客工程。Linux guest、Windows 原生、Hyper-V、快照池、Orchard 和云扩容均不是本批交付。

@@ -616,7 +616,7 @@ export interface NetworkProfileRevision {
   /** 允许连接租客声明入口的来源网段。 */
   readonly allowedIngressSourceCidrs: readonly string[];
   /** 同等验证 IPv6，或在该网络关闭并验证。 */
-  readonly ipv6: 'disabled' | 'verified_equivalent';
+  readonly ipv6: 'disabled' | 'verified_equivalent' | 'not_enforced';
   /** 记录创建时间。 */
   readonly createdAt: UtcTimestamp;
 }
@@ -668,7 +668,7 @@ export interface FrozenNetworkGrant {
   /** 受理时的平台拒绝基线，仅用于审计，不阻止后续加强。 */
   readonly platformDenyRevisionId: Id;
   /** 实际读写或网络模式。 */
-  readonly mode: 'isolated_bridge';
+  readonly mode: 'isolated_bridge' | 'isolated_vm' | 'trusted_nat';
   /** 显式允许的出口目的地；仍受平台强制拒绝规则约束。 */
   readonly allowedEgress: readonly NetworkDestination[];
   /** 允许连接租客声明入口的来源网段。 */
@@ -677,10 +677,10 @@ export interface FrozenNetworkGrant {
   readonly managementDenyRules: readonly NetworkDenyRule[];
   /** 同等验证 IPv6，或在该网络关闭并验证。 */
   readonly ipv6: 'disabled' | 'verified_equivalent';
-  /** 实际网络规则实施后端，首版只支持 Docker iptables。 */
-  readonly enforcement: 'docker_iptables'; // VM 阶段增加经验证的实现，不以此声称已支持。
-  /** 首版固定 true；必须有节点实际验证证据。 */
-  readonly verificationRequired: true;
+  /** 实际模式：Docker iptables、可选 Tart Softnet，或不实施网络限制的 NAT。 */
+  readonly enforcement: 'docker_iptables' | 'tart_agent' | 'tart_nat';
+  /** Docker/Softnet 为 true；受信任 NAT 为 false，不声称强隔离。 */
+  readonly verificationRequired: boolean;
 }
 
 /** 受理阶段的内部授权快照。与选定节点后才能生成的解析合同分开。 */

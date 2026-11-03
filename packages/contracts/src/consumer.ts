@@ -176,6 +176,8 @@ export interface AcquireRequest {
 
 /** 公开详情白名单。独立于内部 Ticket，不因内部新增字段而自动扩大响应。 */
 export interface TicketView extends TicketSummary {
+  /** Frozen actual mode; NAT does not implement profile firewall/IPv6 restrictions. */
+  readonly networkMode?: "isolated_bridge" | "isolated_vm" | "trusted_nat";
   /** 服务端固定的完整安全请求，不含内部真实源或秘密引用。 */
   readonly acceptedRequest: AcceptedAcquireRequest;
   /** 对消费者公开的固定授权修订摘要。 */

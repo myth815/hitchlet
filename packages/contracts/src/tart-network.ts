@@ -21,7 +21,7 @@ const managementDenyRule = z
   .strict();
 
 /** Frozen subset of the resolved VM network contract needed by Tart Softnet. */
-export const tartNetworkPlanSchema = z
+const isolatedTartNetworkPlanSchema = z
   .object({
     grantId: id,
     revisionId: id,
@@ -39,11 +39,22 @@ export const tartNetworkPlanSchema = z
   })
   .strict();
 
+const trustedNatTartNetworkPlanSchema = isolatedTartNetworkPlanSchema.extend({
+  mode: z.literal("trusted_nat"),
+  enforcement: z.literal("tart_nat"),
+  ipv6: z.literal("not_enforced"),
+});
+export const tartNetworkPlanSchema = z.discriminatedUnion("mode", [
+  isolatedTartNetworkPlanSchema,
+  trustedNatTartNetworkPlanSchema,
+]);
+
 export type TartNetworkPlan = z.infer<typeof tartNetworkPlanSchema>;
 
-const tartNetworkPlanWithoutHashSchema = tartNetworkPlanSchema.omit({
-  contractHash: true,
-});
+const tartNetworkPlanWithoutHashSchema = z.union([
+  isolatedTartNetworkPlanSchema.omit({ contractHash: true }),
+  trustedNatTartNetworkPlanSchema.omit({ contractHash: true }),
+]);
 
 /** Stable canonical form used to bind the full source and access contract. */
 export function canonicalTartNetworkPlan(value: unknown): string {

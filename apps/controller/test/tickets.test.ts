@@ -37,6 +37,21 @@ function tartNetworkObservation(
   vmName: string,
   at: number,
 ) {
+  if (network.mode === "trusted_nat")
+    return {
+      backend: "nat" as const,
+      status: "not_enforced" as const,
+      identity,
+      revisionId: network.revisionId,
+      contractHash: network.contractHash,
+      vm: {
+        vmName,
+        device: "41",
+        inode: "2048",
+        macAddress: "02:00:00:00:00:41",
+      },
+      observedAt: new Date(at).toISOString(),
+    };
   const readback = {
     allow: ["in proto tcp 192.0.2.0/24 port 22"],
     block: ["out 0.0.0.0/0"],
@@ -101,7 +116,7 @@ function tartNetworkCleanupReceipt(
 
 const dirs: string[] = [];
 const opened: Awaited<ReturnType<typeof openStorage>>[] = [];
-async function fixture() {
+async function fixture(tartMode?: "isolated") {
   const dir = await mkdtemp(join(tmpdir(), "hitchlet-tickets-"));
   dirs.push(dir);
   const storage = await openStorage(dir);
@@ -157,8 +172,16 @@ async function fixture() {
     },
     {
       kind: "run",
-      sql: 'INSERT INTO network_profile_revisions(id,profile_id,revision,policy_json,created_at_ms) VALUES(\'30000000-0000-4000-8000-000000000002\',\'30000000-0000-4000-8000-000000000001\',1,\'{"allowedEgress":[],"allowedIngressSourceCidrs":[],"ipv6":"disabled"}\',?)',
-      params: [now],
+      sql: "INSERT INTO network_profile_revisions(id,profile_id,revision,policy_json,created_at_ms) VALUES('30000000-0000-4000-8000-000000000002','30000000-0000-4000-8000-000000000001',1,?,?)",
+      params: [
+        JSON.stringify({
+          allowedEgress: [],
+          allowedIngressSourceCidrs: [],
+          ipv6: "disabled",
+          ...(tartMode ? { tartMode } : {}),
+        }),
+        now,
+      ],
     },
     {
       kind: "run",
@@ -2767,8 +2790,14 @@ describe("persistent simulator lifecycle", () => {
 });
 
 describe("Tart VM ticket ledger integration", () => {
-  it("reserves, survives an unknown create response, claims and renews by SSH, and releases only after complete absence", async () => {
-    const { sourceService: service, storage, dir, now } = await fixture();
+  const tartModes = it.each(["isolated", "trusted_nat"] as const);
+  tartModes("Tart lifecycle: %s", async (networkMode) => {
+    const {
+      sourceService: service,
+      storage,
+      dir,
+      now,
+    } = await fixture(networkMode === "isolated" ? "isolated" : undefined);
     const consumerId = "10000000-0000-4000-8000-000000000001";
     const installId = "tart-test-installation";
     const nodeId = "40000000-0000-4000-8000-000000000002";
@@ -2838,9 +2867,12 @@ describe("Tart VM ticket ledger integration", () => {
             memoryHardLimit: "verified",
             scratchHardLimit: "verified",
             offlineLeaseEnforcement: "unsupported",
-            networkPolicyEnforcement: "verified",
+            networkMode,
+            networkPolicyEnforcement:
+              networkMode === "trusted_nat" ? "unsupported" : "verified",
             supportedAccess: ["ssh"],
-            verifiedNetworkProfileRevisionIds: [networkRevisionId],
+            verifiedNetworkProfileRevisionIds:
+              networkMode === "trusted_nat" ? [] : [networkRevisionId],
             verifiedStorageProfileRevisionIds: [],
             accelerators: [],
             reportId: "synthetic-test-only",
@@ -2924,6 +2956,13 @@ describe("Tart VM ticket ledger integration", () => {
       networkProfileId: "30000000-0000-4000-8000-000000000001",
       lease: { requestedSeconds: 900 },
     });
+    const projected = await new TicketQueries(storage, () => now).get(
+      consumerId,
+      ticket.ticketId,
+    );
+    expect(projected?.networkMode).toBe(
+      networkMode === "trusted_nat" ? "trusted_nat" : "isolated_vm",
+    );
     const allocation = await service.reserveNext();
     expect(allocation).toMatchObject({ ticketId: ticket.ticketId, nodeId });
     const operation = await storage.get<{ id: string }>(
@@ -2958,6 +2997,7 @@ describe("Tart VM ticket ledger integration", () => {
     let cloneCount = 0;
     let loseFirstBootstrapResponse = true;
     let cleanupInventoryUnknown = false;
+    let cleanupStopUnverified = false;
     let auditInventoryUnknown = false;
     const runtime = {
       async inspect(identity: TartAllocationIdentity): Promise<TartInspection> {
@@ -3065,15 +3105,25 @@ describe("Tart VM ticket ledger integration", () => {
           };
         if (network.contractHash !== savedNetwork?.contractHash)
           throw new Error("synthetic network plan mismatch");
-        networkCleanupReceipt = tartNetworkCleanupReceipt(
-          identity,
-          network,
-          vmNameFor(identity),
-          clock,
-        );
+        networkCleanupReceipt =
+          networkMode === "trusted_nat"
+            ? undefined
+            : tartNetworkCleanupReceipt(
+                identity,
+                network,
+                vmNameFor(identity),
+                clock,
+              );
         if (observation?.presence === "present")
           observation = {
             ...observation,
+            ...(networkMode === "trusted_nat"
+              ? {
+                  state: cleanupStopUnverified
+                    ? ("running" as const)
+                    : ("stopped" as const),
+                }
+              : {}),
             identity,
             network: {
               backend: "softnet",
@@ -3084,14 +3134,14 @@ describe("Tart VM ticket ledger integration", () => {
               reason: "synthetic_control_closed",
               observedAt: new Date(clock).toISOString(),
             },
-            networkCleanupReceipt,
+            ...(networkCleanupReceipt ? { networkCleanupReceipt } : {}),
           };
         return structuredClone(
           observation ?? {
             presence: "absent",
             identity,
             inventoryCompleteness: "complete",
-            networkCleanupReceipt,
+            ...(networkCleanupReceipt ? { networkCleanupReceipt } : {}),
           },
         );
       },
@@ -3459,7 +3509,19 @@ describe("Tart VM ticket ledger integration", () => {
       ),
     ).toMatchObject({ state: "committed" });
     cleanupInventoryUnknown = false;
-    clock += 3_000;
+    if (networkMode === "trusted_nat") {
+      cleanupStopUnverified = true;
+      clock += 30_000;
+      expect(await worker.run(cleanup?.id ?? "")).toBe(true);
+      expect(
+        await storage.get(
+          "SELECT state FROM capacity_claims WHERE allocation_id=?",
+          [allocation?.allocationId],
+        ),
+      ).toMatchObject({ state: "committed" });
+      cleanupStopUnverified = false;
+    }
+    clock += 30_000;
     expect(await worker.run(cleanup?.id ?? "")).toBe(true);
     expect(
       await storage.get("SELECT phase FROM tickets WHERE id=?", [

@@ -200,7 +200,7 @@ export type TartDriverOptions = Readonly<{
   manifestDirectory: string;
   /** Absolute executable path. Production callers fix this to their installed Tart binary. */
   executable: string;
-  /** Must be a fixed Softnet adapter; omission disables Tart networking/runs. */
+  /** Optional strong-isolation backend. Trusted NAT runs do not require Softnet. */
   networkAdapter?: TartNetworkAdapter;
   templateRegistryDirectory?: string;
 }>;
@@ -217,6 +217,10 @@ export class TartLocalDriver {
   private readonly registryRoot: string;
   private readonly executable: string;
   private readonly networkAdapter: TartNetworkAdapter | undefined;
+  private readonly natChildren = new Map<
+    string,
+    { child: ChildProcess; exit: Promise<unknown> }
+  >();
   private readonly env: NodeJS.ProcessEnv;
   private readonly children = new Map<string, RunningChild>();
   private readonly ownedRunningVMs = new Set<string>();
@@ -447,11 +451,24 @@ export class TartLocalDriver {
     request: TartReconcileRequest,
   ): Promise<TartInspection> {
     const { identity } = request;
-    if (!this.networkAdapter)
+    const trustedNat = request.network.mode === "trusted_nat";
+    if (trustedNat) {
+      const { contractHash, ...unhashed } = request.network;
+      const expected =
+        "sha256:" +
+        createHash("sha256")
+          .update(canonicalTartNetworkPlan(unhashed))
+          .digest("hex");
+      if (contractHash !== expected)
+        return unknown(identity, "tart_network_contract_hash_mismatch");
+    }
+    if (!trustedNat && !this.networkAdapter)
       return unknown(identity, "tart_network_adapter_unavailable");
     let compiledPolicy: ReturnType<typeof compileTartNetworkPolicy>;
     try {
-      compiledPolicy = compileTartNetworkPolicy(request.network);
+      compiledPolicy = trustedNat
+        ? { allow: [], block: [], policyHash: request.network.contractHash }
+        : compileTartNetworkPolicy(request.network);
     } catch (error) {
       return unknown(
         identity,
@@ -648,7 +665,13 @@ export class TartLocalDriver {
     const row = inventory.rows.find((item) => item.Name === vmName);
     if (!row || row.Source !== "local")
       return unknown(identity, "owned_vm_missing_from_cli_inventory");
-    if (row.Running) {
+    if (trustedNat) {
+      if (!row.Running) {
+        if (manifest.networkLaunchIntent)
+          return unknown(identity, "nat_launch_outcome_unknown");
+        await this.startNatRun(vmName, manifestPath, manifest);
+      }
+    } else if (row.Running) {
       const running = this.children.get(vmName);
       if (!running || running.policy.policyHash !== compiledPolicy.policyHash)
         return unknown(identity, "network_process_untracked");
@@ -925,6 +948,7 @@ export class TartLocalDriver {
             : {}),
         };
       if (
+        manifest.networkPlan?.mode !== "trusted_nat" &&
         manifest.networkLaunchIntent &&
         manifest.networkCleanupReceipt?.status !== "removed" &&
         manifest.networkCleanupReceipt?.status !== "process_exited" &&
@@ -1003,6 +1027,24 @@ export class TartLocalDriver {
     if (!plan) return networkUnknown(identity, "network_plan_missing");
     if (!sameActionIdentity(manifest.identity, identity))
       return networkUnknown(identity, "network_operation_fence_mismatch", plan);
+    if (plan.mode === "trusted_nat") {
+      if (!manifest.instance)
+        return networkUnknown(identity, "network_vm_identity_missing", plan);
+      return {
+        backend: "nat",
+        status: "not_enforced",
+        identity,
+        revisionId: plan.revisionId,
+        contractHash: plan.contractHash,
+        vm: {
+          vmName: manifest.vmName,
+          device: manifest.instance.device,
+          inode: manifest.instance.inode,
+          macAddress: manifest.instance.macAddress,
+        },
+        observedAt: new Date().toISOString(),
+      };
+    }
     if (manifest.networkCleanupReceipt)
       return networkUnknown(identity, "network_policy_revoked", plan);
     if (!manifest.networkLaunchIntent)
@@ -1061,6 +1103,8 @@ export class TartLocalDriver {
     identity: TartAllocationIdentity,
     network: TartNetworkPlan,
   ): Promise<TartInspection> {
+    if (network.mode === "trusted_nat")
+      return this.stopNatOwned(identity, network);
     let expected: ReturnType<typeof compileTartNetworkPolicy>;
     try {
       expected = compileTartNetworkPolicy(network);
@@ -1397,6 +1441,7 @@ export class TartLocalDriver {
       return unknown(identity, "stale_control_fence");
     if (
       manifest.networkPlan &&
+      manifest.networkPlan.mode !== "trusted_nat" &&
       manifest.networkCleanupReceipt?.status !== "removed" &&
       manifest.networkCleanupReceipt?.status !== "process_exited" &&
       manifest.networkCleanupReceipt?.status !== "not_started"
@@ -1814,6 +1859,109 @@ export class TartLocalDriver {
     }
   }
 
+  private async startNatRun(
+    vmName: string,
+    manifestPath: string,
+    manifest: Manifest,
+  ): Promise<void> {
+    if (this.closed) throw new Error("tart_driver_closed");
+    if (this.natChildren.has(vmName))
+      throw new Error("nat_run_already_in_flight");
+    await this.writeManifest(manifestPath, {
+      ...manifest,
+      networkLaunchIntent: true,
+    });
+    const child = spawn(this.executable, ["run", "--no-graphics", vmName], {
+      cwd: this.home,
+      env: this.env,
+      shell: false,
+      stdio: "ignore",
+    });
+    const exit = new Promise<void>((resolve) =>
+      child.once("close", () => resolve()),
+    );
+    this.natChildren.set(vmName, { child, exit });
+    void exit.then(() => {
+      if (this.natChildren.get(vmName)?.child === child)
+        this.natChildren.delete(vmName);
+    });
+    await new Promise<void>((resolve, reject) => {
+      child.once("spawn", () => resolve());
+      child.once("error", reject);
+    });
+  }
+
+  /** Stop only the exact manifested VM; no firewall/control-FD receipt exists for NAT. */
+  private async stopNatOwned(
+    identity: TartAllocationIdentity,
+    network: TartNetworkPlan,
+  ): Promise<TartInspection> {
+    await this.prepareDirectories();
+    const manifestPath = this.manifestPath(identity);
+    let manifest = await this.readManifest(manifestPath);
+    if (!manifest) return this.inspectOwned(identity);
+    if (!sameOwner(manifest.identity, identity))
+      return unknown(identity, "manifest_owner_mismatch");
+    if (!(await this.matchesHome(manifest)))
+      return unknown(identity, "tart_home_identity_changed");
+    if (!acceptsFence(manifest, identity))
+      return unknown(identity, "stale_control_fence");
+    if (
+      !manifest.networkPlan ||
+      canonicalTartNetworkPlan(manifest.networkPlan) !==
+        canonicalTartNetworkPlan(network)
+    )
+      return unknown(identity, "network_contract_changed");
+    if (manifest.phase === "released") {
+      if (identity.controlVersion > manifest.highestControlVersion)
+        await this.writeManifest(manifestPath, {
+          ...manifest,
+          identity,
+          highestControlVersion: identity.controlVersion,
+        });
+      return this.inspectOwned(identity);
+    }
+    if (!manifest.instance)
+      return unknown(identity, "clone_identity_not_recorded");
+    if (
+      identity.controlVersion === manifest.highestControlVersion &&
+      !sameActionIdentity(manifest.identity, identity)
+    )
+      return unknown(identity, "operation_fence_mismatch");
+    manifest = {
+      ...manifest,
+      identity,
+      highestControlVersion: identity.controlVersion,
+    };
+    await this.writeManifest(manifestPath, manifest);
+    const inventory = await this.inventory();
+    if (inventory.status !== "complete")
+      return unknown(identity, "inventory_incomplete");
+    const row = inventory.rows.find((item) => item.Name === manifest.vmName);
+    if (!row) return this.inspectOwned(identity);
+    if (
+      row.Source !== "local" ||
+      (await this.verifyOwned(manifest)) !== "present"
+    )
+      return unknown(identity, "owned_vm_identity_or_inventory_mismatch");
+    if (row.Running) await this.runShort(["stop", manifest.vmName]);
+    if (!(await this.stopRunChild(manifest.vmName)))
+      return unknown(identity, "run_process_exit_not_observed");
+    const stopped = await this.inventory();
+    if (stopped.status !== "complete")
+      return unknown(identity, "inventory_incomplete_after_stop");
+    const current = stopped.rows.find((item) => item.Name === manifest.vmName);
+    if (
+      !current ||
+      current.Source !== "local" ||
+      current.Running ||
+      current.State !== "stopped" ||
+      (await this.verifyOwned(manifest)) !== "present"
+    )
+      return unknown(identity, "vm_stop_not_verified");
+    return this.inspectOwned(identity);
+  }
+
   private async startRun(
     vmName: string,
     identity: TartAllocationIdentity,
@@ -1923,6 +2071,12 @@ export class TartLocalDriver {
   }
 
   private async stopRunChild(vmName: string): Promise<boolean> {
+    const nat = this.natChildren.get(vmName);
+    if (nat) {
+      nat.child.kill("SIGINT");
+      if (!(await settlesWithin(nat.exit, RUN_EXIT_MS))) return false;
+      this.natChildren.delete(vmName);
+    }
     const running = this.children.get(vmName);
     if (!running) return true;
     running.child.kill("SIGINT");

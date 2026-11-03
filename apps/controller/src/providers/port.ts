@@ -72,13 +72,13 @@ export type ProvisionPlan = Readonly<{
       revisionId: string;
       frozenPlatformDenyRevisionId: string;
       platformDenyRevisionId: string;
-      mode: "isolated_bridge" | "isolated_vm";
-      ipv6: "disabled" | "verified_equivalent";
+      mode: "isolated_bridge" | "isolated_vm" | "trusted_nat";
+      ipv6: "disabled" | "verified_equivalent" | "not_enforced";
       allowedEgress: readonly NetworkDestination[];
       allowedIngressSourceCidrs: readonly string[];
       managementDenyRules: readonly NetworkDenyRule[];
-      enforcement: "docker_iptables" | "tart_agent";
-      verificationRequired: true;
+      enforcement: "docker_iptables" | "tart_agent" | "tart_nat";
+      verificationRequired: boolean;
     }>;
     mounts: readonly ResolvedStorageMount[];
   }>;

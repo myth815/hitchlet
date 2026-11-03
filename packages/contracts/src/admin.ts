@@ -62,6 +62,8 @@ const egress = z
   .strict();
 const networkPolicy = z
   .object({
+    /** Applies to Tart only; Docker retains its enforced profile. */
+    tartMode: z.enum(["trusted_nat", "isolated"]).optional(),
     allowedEgress: z.array(egress),
     allowedIngressSourceCidrs: z.array(z.string().min(1)),
     ipv6: z.enum(["disabled", "verified_equivalent"]),
@@ -475,9 +477,27 @@ export const PortainerCapabilityAttestationSchema = z
     storageProfileRevisionIds: z.array(id).default([]),
   })
   .strict();
+const tartQualificationScope = z
+  .object({
+    status: z.literal("passed"),
+    summary: z.string().min(1).max(1000),
+    evidenceRef: z.string().min(1).max(500),
+  })
+  .strict();
+const tartQualificationScopes = z
+  .object({
+    resourceLimits: tartQualificationScope,
+    sshBootstrap: tartQualificationScope,
+    cleanupRecovery: tartQualificationScope,
+    firewallInput: tartQualificationScope.optional(),
+    firewallForward: tartQualificationScope.optional(),
+    ipv6: tartQualificationScope.optional(),
+  })
+  .strict();
 export const TartCapabilityAttestationSchema = z
   .object({
     backendKind: z.literal("tart"),
+    networkMode: z.enum(["trusted_nat", "isolated"]).default("trusted_nat"),
     expectedNamespaceId: id,
     expectedTartVersion: z.string().min(1).max(100),
     templateRef: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
@@ -490,13 +510,25 @@ export const TartCapabilityAttestationSchema = z
       .object({
         runId: id,
         sha256: z.string().regex(/^[a-f0-9]{64}$/),
-        scopes: capabilityReport.shape.report.shape.scopes,
+        scopes: tartQualificationScopes,
       })
       .strict(),
-    networkProfileRevisionIds: z.array(id).min(1),
+    networkProfileRevisionIds: z.array(id).default([]),
     storageProfileRevisionIds: z.array(id).length(0).default([]),
   })
-  .strict();
+  .strict()
+  .refine(
+    (value) =>
+      value.networkMode === "trusted_nat" ||
+      (value.networkProfileRevisionIds.length > 0 &&
+        ["firewallInput", "firewallForward", "ipv6"].every(
+          (key) =>
+            value.report.scopes[
+              key as "firewallInput" | "firewallForward" | "ipv6"
+            ]?.status === "passed",
+        )),
+    "Isolated Tart requires its three network qualification scopes",
+  );
 export const NodeCapabilityAttestationSchema = z
   .union([
     PortainerCapabilityAttestationSchema,

@@ -50,7 +50,7 @@ export function validAttestedCapability(
   );
 }
 
-/** Tart Node health is refreshable only while its original six-scope manual qualification remains valid. */
+/** NAT needs resource/SSH/cleanup evidence; strong isolation additionally needs network evidence. */
 export function validTartAttestedCapability(
   value: unknown,
   now: number,
@@ -60,14 +60,17 @@ export function validTartAttestedCapability(
     typeof value.expiresAt === "string" ? Date.parse(value.expiresAt) : NaN;
   const report = value.manualReport;
   const scopes = isRecord(report) ? report.scopes : undefined;
-  const names = [
-    "resourceLimits",
-    "firewallInput",
-    "firewallForward",
-    "ipv6",
-    "sshBootstrap",
-    "cleanupRecovery",
-  ];
+  const names =
+    value.networkMode === "trusted_nat"
+      ? ["resourceLimits", "sshBootstrap", "cleanupRecovery"]
+      : [
+          "resourceLimits",
+          "firewallInput",
+          "firewallForward",
+          "ipv6",
+          "sshBootstrap",
+          "cleanupRecovery",
+        ];
   return (
     Number.isFinite(expiry) &&
     expiry > now &&
@@ -76,7 +79,9 @@ export function validTartAttestedCapability(
     value.powerEnabled === false &&
     value.cpuHardLimit === "verified" &&
     value.memoryHardLimit === "verified" &&
-    value.networkPolicyEnforcement === "verified" &&
+    (value.networkMode === "trusted_nat"
+      ? value.networkPolicyEnforcement === "unsupported"
+      : value.networkPolicyEnforcement === "verified") &&
     typeof value.capabilityFingerprint === "string" &&
     /^[a-f0-9]{64}$/.test(value.capabilityFingerprint) &&
     typeof value.connectionRevisionId === "string" &&
@@ -100,7 +105,8 @@ export function validTartAttestedCapability(
     typeof report.sha256 === "string" &&
     /^[a-f0-9]{64}$/.test(report.sha256) &&
     isRecord(scopes) &&
-    Object.keys(scopes).length === names.length &&
+    (value.networkMode === "trusted_nat" ||
+      Object.keys(scopes).length === names.length) &&
     names.every(
       (name) => isRecord(scopes[name]) && scopes[name].status === "passed",
     )

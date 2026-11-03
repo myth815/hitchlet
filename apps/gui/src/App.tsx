@@ -118,7 +118,6 @@ export function App({ client: injected }: { client?: HitchletClient }) {
     hostKeyFingerprint: string | null;
     expiresAt: string;
   } | null>(null);
-  const [savedConfirmed, setSavedConfirmed] = React.useState(false);
   const [reclaimConfirmed, setReclaimConfirmed] = React.useState(false);
   const [loginToken, setLoginToken] = React.useState("");
   const principalRef = React.useRef(principal);
@@ -320,7 +319,6 @@ export function App({ client: injected }: { client?: HitchletClient }) {
     setGrant(null);
     if (accessTimer.current !== undefined)
       window.clearTimeout(accessTimer.current);
-    setSavedConfirmed(false);
     setReclaimConfirmed(false);
     if (!selectedId || !principal) return;
     void refreshDetail(selectedId);
@@ -789,6 +787,17 @@ export function App({ client: injected }: { client?: HitchletClient }) {
                     </div>
                     <details className="technical-details">
                       <summary>资源、放置与租约明细</summary>
+                      {ticket.networkMode === "trusted_nat" ? (
+                        <p>
+                          受信任 NAT：可访问网络资源，不提供强网络隔离，不实施
+                          Profile 来源、出口或 IPv6 限制。
+                        </p>
+                      ) : ticket.networkMode === "isolated_vm" ? (
+                        <p>
+                          Softnet 强隔离：按冻结网络 Profile
+                          实施来源和出口限制。
+                        </p>
+                      ) : null}
                       <div className="detail-grid">
                         <div>
                           <small>镜像版本</small>
@@ -1136,28 +1145,17 @@ export function App({ client: injected }: { client?: HitchletClient }) {
                         <label className="check-row">
                           <input
                             type="checkbox"
-                            checked={savedConfirmed}
-                            onChange={(e) =>
-                              setSavedConfirmed(e.target.checked)
-                            }
-                          />
-                          我已保存需要保留的数据
-                        </label>
-                        <label className="check-row">
-                          <input
-                            type="checkbox"
                             checked={reclaimConfirmed}
                             onChange={(e) =>
                               setReclaimConfirmed(e.target.checked)
                             }
                           />
-                          我同意删除这个临时环境及其中未保存的数据
+                          我已保存需要保留的数据，同意删除这个临时环境及未保存的数据
                         </label>
                         <button
                           className="danger-button"
                           disabled={
                             !canRelease ||
-                            !savedConfirmed ||
                             !reclaimConfirmed ||
                             !!busy ||
                             pendingFor("release", ticket.id)

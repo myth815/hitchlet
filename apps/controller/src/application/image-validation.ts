@@ -172,6 +172,14 @@ export class ImageValidationService {
     }
     const requested = input.resources.request;
     const isTart = target.backend_kind === "tart";
+    if (
+      isTart &&
+      networkPolicy.tartMode !== undefined &&
+      networkPolicy.tartMode !== "trusted_nat" &&
+      networkPolicy.tartMode !== "isolated"
+    )
+      throw new RangeError("Invalid Tart network mode");
+    const trustedNat = isTart && networkPolicy.tartMode !== "isolated";
     let tartProofVerified = !isTart;
     if (isTart && this.tartFactsForRevision) {
       try {
@@ -219,14 +227,15 @@ export class ImageValidationService {
     const block =
       caps.cpuHardLimit !== "verified" ||
       caps.memoryHardLimit !== "verified" ||
-      caps.networkPolicyEnforcement !== "verified" ||
+      (!trustedNat && caps.networkPolicyEnforcement !== "verified") ||
       (input.resources.scratchEnforcement === "required" &&
         caps.scratchHardLimit !== "verified") ||
       caps.capacity === undefined ||
-      !Array.isArray(caps.verifiedNetworkProfileRevisionIds) ||
-      !caps.verifiedNetworkProfileRevisionIds.includes(
-        String(network.current_revision_id),
-      ) ||
+      (!trustedNat &&
+        (!Array.isArray(caps.verifiedNetworkProfileRevisionIds) ||
+          !caps.verifiedNetworkProfileRevisionIds.includes(
+            String(network.current_revision_id),
+          ))) ||
       !stringArray(caps.architectures).includes(String(target.architecture)) ||
       !stringArray(caps.guestOs).includes(String(target.guest_os)) ||
       !stringArray(caps.resourceKinds).includes(isTart ? "vm" : "container") ||
@@ -310,15 +319,25 @@ export class ImageValidationService {
         grantId: `validation:${validationId}`,
         networkProfileRevisionId: network.current_revision_id,
         platformDenyRevisionId: deny.id,
-        mode: isTart ? "isolated_vm" : "isolated_bridge",
-        ipv6: networkPolicy.ipv6,
-        allowedEgress: networkPolicy.allowedEgress,
-        allowedIngressSourceCidrs: networkPolicy.allowedIngressSourceCidrs,
-        enforcement: isTart ? "tart_agent" : "docker_iptables",
-        verificationRequired: true,
-        managementDenyRules: JSON.parse(
-          String(deny.management_deny_rules_json),
-        ),
+        mode: trustedNat
+          ? "trusted_nat"
+          : isTart
+            ? "isolated_vm"
+            : "isolated_bridge",
+        ipv6: trustedNat ? "not_enforced" : networkPolicy.ipv6,
+        allowedEgress: trustedNat ? [] : networkPolicy.allowedEgress,
+        allowedIngressSourceCidrs: trustedNat
+          ? []
+          : networkPolicy.allowedIngressSourceCidrs,
+        enforcement: trustedNat
+          ? "tart_nat"
+          : isTart
+            ? "tart_agent"
+            : "docker_iptables",
+        verificationRequired: !trustedNat,
+        managementDenyRules: trustedNat
+          ? []
+          : JSON.parse(String(deny.management_deny_rules_json)),
       },
       storage: bindings.map((b, index) => ({
         grantId: `validation:${validationId}:${index}`,

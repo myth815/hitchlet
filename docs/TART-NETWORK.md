@@ -1,6 +1,16 @@
-# Tart 网络源码接线与验证边界
+# Tart 网络模式与验证边界
 
 本批实现冻结网络合同到 Softnet 的执行计划、可信 Runtime 策略读回、归还前网络回收，以及现有 Controller worker/Ticket/Lease/Claim 的 composition。真实 Tart server 仍由启动 guard 关闭，Runtime `networkEnabled` 默认 false。源码与受控测试不代表已安装、已具备管理员权限、真实网络合格或可供消费者租用。
+
+## 默认受信任 NAT（2026-11-03）
+
+用户明确选择家庭受信任任务默认 NAT：网络 Profile 的 `policy.tartMode` 省略或为 `trusted_nat` 时，新 Tart 票据/镜像验证冻结 `trusted_nat/tart_nat`、`verificationRequired=false`、`ipv6=not_enforced`。允许使用宿主可达的互联网和家庭网络；没有来源/出口白名单、管理面或租客间网络隔离保证，Profile 的 Docker/Softnet 规则不会在 NAT 下执行。SSH 身份、独立 VM、资源额度、幂等、租约和查实回收保持。
+
+NAT 用普通 `tart run --no-graphics`，不启动 Softnet，不申请其 root/SUID，不改宿主 DHCP。观察明确返回 `backend=nat/status=not_enforced`，不是伪造 policy_match；同票 bootstrap 保留模式/身份引用。归还按精确 manifest/native VM 身份停止，再查实停止、删除和不存在；不需要 Softnet 控制 FD 或网络回收回执，Runtime 重建后仍可观察并回收原 VM。停止失败、错误归属或不完整盘点不释放 Claim。
+
+基本 Node 资格只需真实 resourceLimits、sshBootstrap、cleanupRecovery 三项；`networkPolicyEnforcement=unsupported`，不以免检冒充强隔离已验证。网络 Profile 仍是授权和固定模式的目录，不需逐个 Profile 的强隔离资格。`policy.tartMode=isolated` 显式选择下文 Softnet 路径，仍要求六项证据；旧冻结票据不迁移，Docker 行为不变。
+
+**当前全局 Tart server 启动禁令仍保留**：删除该 guard 的操作被自动审批拒绝且未执行，故本批源码不等于正式入口可运行。真实 Tart/NAT/SSH/回收尚未实机验证。本节之后的默认拒绝、控制 FD 与 Softnet 回执要求只适用于可选强隔离模式。
 
 ## 合同与执行
 

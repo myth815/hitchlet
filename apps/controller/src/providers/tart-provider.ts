@@ -459,6 +459,16 @@ export class TartExecutionProvider implements ExecutionPort {
     );
     if (resultRules !== confirmedRules)
       throw new Error("Tart network cleanup receipt changed on readback");
+    if (
+      network.mode === "trusted_nat" &&
+      [result, confirmed].some(
+        (observation) =>
+          observation.presence === "unknown" ||
+          (observation.presence === "present" &&
+            observation.state !== "stopped"),
+      )
+    )
+      throw new Error("Tart NAT VM stop is not verified");
   }
 
   async destroy(
@@ -780,6 +790,32 @@ export class TartExecutionProvider implements ExecutionPort {
     const now = this.now();
     const verifiedAt = Date.parse(evidence.observedAt);
     const expiresAtMs = plan.deadlineMs;
+    if (networkPlan.mode === "trusted_nat") {
+      if (
+        evidence.status !== "not_enforced" ||
+        evidence.backend !== "nat" ||
+        !sameProvisionIdentity(evidence.identity, plan.identity) ||
+        evidence.revisionId !== networkPlan.revisionId ||
+        evidence.contractHash !== networkPlan.contractHash ||
+        evidence.vm.vmName !== observed.vmName ||
+        observed.vmName !== tartVmName(tartIdentity(plan)) ||
+        !Number.isFinite(verifiedAt) ||
+        verifiedAt > now ||
+        now - verifiedAt > EVIDENCE_MAX_AGE_MS ||
+        expiresAtMs <= now
+      )
+        throw new Error("Tart NAT identity observation is stale or mismatched");
+      return {
+        runtimeIdentityId: plan.identity.runtimeIdentityId,
+        allocationId: plan.identity.allocationId,
+        generation: plan.identity.generation,
+        revisionId: plan.resolved.network.revisionId,
+        contractHash: sha256(plan.resolved.network),
+        reference: `nat:${networkPlan.contractHash}`,
+        verifiedAt: evidence.observedAt,
+        expiresAt: new Date(expiresAtMs).toISOString(),
+      };
+    }
     if (
       evidence.status !== "policy_match" ||
       evidence.backend !== "softnet" ||
@@ -870,10 +906,14 @@ function assertSupportedPlan(plan: ProvisionPlan): void {
     !["linux", "macos"].includes(plan.artifact.guestOS ?? "") ||
     plan.artifact.architecture !== "arm64" ||
     plan.resources.isolation !== "virtual_machine" ||
-    plan.resolved.network.mode !== "isolated_vm" ||
-    plan.resolved.network.enforcement !== "tart_agent" ||
-    plan.resolved.network.verificationRequired !== true ||
-    plan.resolved.network.ipv6 !== "disabled" ||
+    !(plan.resolved.network.mode === "trusted_nat"
+      ? plan.resolved.network.enforcement === "tart_nat" &&
+        plan.resolved.network.verificationRequired === false &&
+        plan.resolved.network.ipv6 === "not_enforced"
+      : plan.resolved.network.mode === "isolated_vm" &&
+        plan.resolved.network.enforcement === "tart_agent" &&
+        plan.resolved.network.verificationRequired === true &&
+        plan.resolved.network.ipv6 === "disabled") ||
     plan.bootstrap.mechanism !== "tart-guest-bootstrap-v1" ||
     plan.bootstrap.contractVersion !== "1" ||
     plan.bootstrap.identityReset !== true ||
@@ -937,7 +977,12 @@ function assertNetworkCleanupReceipt(
   plan: ProvisionPlan,
   network: TartNetworkPlan,
   rawReceipt: TartNetworkCleanupReceipt | undefined,
-): "removed" | "never_installed" {
+): "removed" | "never_installed" | "not_applicable" {
+  if (network.mode === "trusted_nat") {
+    if (rawReceipt)
+      throw new Error("NAT must not claim a Softnet removal receipt");
+    return "not_applicable";
+  }
   if (!rawReceipt) throw new Error("Tart network removal outcome is unknown");
   const receipt = tartNetworkCleanupReceiptSchema.parse(rawReceipt);
   const identityMatches = sameProvisionIdentity(

@@ -133,6 +133,17 @@ const tartNetworkProcessIdentity = z
 export const tartNetworkObservationSchema = z.discriminatedUnion("status", [
   z
     .object({
+      backend: z.literal("nat"),
+      status: z.literal("not_enforced"),
+      identity: tartAllocationIdentitySchema,
+      revisionId: id,
+      contractHash: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+      vm: tartNetworkVMIdentity,
+      observedAt: z.string().datetime({ offset: true }),
+    })
+    .strict(),
+  z
+    .object({
       backend: z.literal("softnet"),
       status: z.literal("policy_match"),
       identity: tartAllocationIdentitySchema,

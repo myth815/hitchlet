@@ -225,6 +225,7 @@ export class AdminService {
       );
     return this.inventory.attestTartCapabilities({
       ...input,
+      networkProfileRevisionIds: input.networkProfileRevisionIds ?? [],
       expectedConnectionRevisionId: String(target.current_revision_id),
       facts,
     });

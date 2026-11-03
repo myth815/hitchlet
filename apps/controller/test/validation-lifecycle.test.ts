@@ -51,6 +51,21 @@ function syntheticTartNetworkObservation(
   vmName: string,
   now: number,
 ) {
+  if (network.mode === "trusted_nat")
+    return {
+      backend: "nat" as const,
+      status: "not_enforced" as const,
+      identity,
+      revisionId: network.revisionId,
+      contractHash: network.contractHash,
+      vm: {
+        vmName,
+        device: "51",
+        inode: "1024",
+        macAddress: "02:00:00:00:00:51",
+      },
+      observedAt: new Date(now).toISOString(),
+    };
   const readback = {
     allow: ["in proto tcp 192.0.2.0/24 port 22"],
     block: ["in 0.0.0.0/0", "out 0.0.0.0/0"],
@@ -197,6 +212,7 @@ async function fixture(
     blocked?: boolean;
     capacity?: number;
     enabledExecutionMode?: "disabled" | "simulator" | "portainer" | "tart";
+    tartMode?: "isolated" | "trusted_nat";
   } = {},
 ) {
   const dir = await mkdtemp(join(tmpdir(), "hitchlet-validation-"));
@@ -286,6 +302,7 @@ async function fixture(
   const network = await admin.createProfile("network", {
     name: "test network",
     config: {
+      tartMode: options.tartMode ?? "isolated",
       allowedEgress: [],
       allowedIngressSourceCidrs: ["10.0.0.0/8"],
       ipv6: "disabled",
@@ -527,8 +544,9 @@ describe("Tart artifact draft persistence", () => {
     ).toEqual({ status: "draft" });
   });
 
-  it("discovers, registers, qualifies, validates, cleans up, publishes and catalogs a Tart VM through normal services", async () => {
-    const f = await fixture();
+  const tartModes = it.each(["isolated", "trusted_nat"] as const);
+  tartModes("Tart publication: %s", async (networkMode) => {
+    const f = await fixture({ tartMode: networkMode });
     const adminId = f.request.requestedBy;
     const management = new ManagementService(f.db, f.now);
     const lifecyclePolicy = await management.savePolicy(
@@ -782,16 +800,25 @@ describe("Tart artifact draft persistence", () => {
         "ipv6",
         "sshBootstrap",
         "cleanupRecovery",
-      ].map((scope) => [
-        scope,
-        {
-          status: "passed" as const,
-          summary: `SYNTHETIC unit fixture only; no host qualification was run (${scope})`,
-          evidenceRef: `synthetic-test-only:${scope}`,
-        },
-      ]),
+      ]
+        .filter(
+          (scope) =>
+            networkMode === "isolated" ||
+            ["resourceLimits", "sshBootstrap", "cleanupRecovery"].includes(
+              scope,
+            ),
+        )
+        .map((scope) => [
+          scope,
+          {
+            status: "passed" as const,
+            summary: `SYNTHETIC unit fixture only; no host qualification was run (${scope})`,
+            evidenceRef: `synthetic-test-only:${scope}`,
+          },
+        ]),
     );
     const attestation = await admin.attestTartNodeCapabilities({
+      networkMode,
       backendKind: "tart",
       nodeId: node.id,
       expectedVersion: configured.version,
@@ -808,7 +835,8 @@ describe("Tart artifact draft persistence", () => {
         sha256: "e".repeat(64),
         scopes,
       },
-      networkProfileRevisionIds: [f.network.revisionId],
+      networkProfileRevisionIds:
+        networkMode === "trusted_nat" ? [] : [f.network.revisionId],
       storageProfileRevisionIds: [],
       operatorId: adminId,
       requestId: randomUUID(),
@@ -826,7 +854,11 @@ describe("Tart artifact draft persistence", () => {
       node.id,
     ]);
     const refreshed = await admin.refreshTartObservations();
-    expect(refreshed).toMatchObject({ checked: 1, refreshed: 1, unhealthy: 0 });
+    expect(refreshed).toMatchObject({
+      checked: 1,
+      refreshed: 1,
+      unhealthy: 0,
+    });
     const afterObservation = await f.db.get<{
       capabilities_json: string;
       observed_at_ms: number | null;
@@ -1025,15 +1057,21 @@ describe("Tart artifact draft persistence", () => {
       ): Promise<TartInspection> {
         if (network.contractHash !== tartNetworkPlan?.contractHash)
           throw new Error("Tart network plan mismatch");
-        networkCleanupReceipt = syntheticTartNetworkCleanup(
-          identity,
-          network,
-          vmNameFor(identity),
-          f.now(),
-        );
+        networkCleanupReceipt =
+          networkMode === "trusted_nat"
+            ? undefined
+            : syntheticTartNetworkCleanup(
+                identity,
+                network,
+                vmNameFor(identity),
+                f.now(),
+              );
         if (vmInspection?.presence === "present")
           vmInspection = {
             ...vmInspection,
+            ...(networkMode === "trusted_nat"
+              ? { state: "stopped" as const }
+              : {}),
             network: {
               backend: "softnet",
               status: "unknown",
@@ -1118,13 +1156,16 @@ describe("Tart artifact draft persistence", () => {
       requestedBy: adminId,
     };
     const validation = await admin.scheduleValidation(request);
-    expect(validation).toMatchObject({ scheduler: "queued", state: "queued" });
+    expect(validation).toMatchObject({
+      scheduler: "queued",
+      state: "queued",
+    });
     expect(validation.operationId).toBeTruthy();
     expect(await f.worker(execution).run(validation.operationId!)).toBe(true);
     expect(createCount).toBe(1);
     expect(tartNetworkPlan).toMatchObject({
-      mode: "isolated_vm",
-      enforcement: "tart_agent",
+      mode: networkMode === "trusted_nat" ? "trusted_nat" : "isolated_vm",
+      enforcement: networkMode === "trusted_nat" ? "tart_nat" : "tart_agent",
       accessPorts: [22],
     });
     expect(tartNetworkPlan?.accessSourceCidrs.length).toBeGreaterThan(0);

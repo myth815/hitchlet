@@ -263,6 +263,14 @@ export function AuthorizedAcquire({
               秒。预检不保证余量，原子预留时再次裁决。
             </p>
           ) : null}
+          {kind === "vm" ? (
+            <p>
+              本票 Tart 网络模式由所选网络 Profile 固定。默认受信任
+              NAT，不提供强网络隔离，可访问网络资源；选择 Softnet
+              才实施来源与出口限制。持久挂载暂不支持，可用 SSH/SFTP
+              传入和取回文件。
+            </p>
+          ) : null}
           <label>
             租期秒
             <input

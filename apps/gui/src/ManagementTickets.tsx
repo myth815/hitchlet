@@ -253,6 +253,14 @@ export function ManagementTickets({
       {selected ? (
         <article className="admin-card">
           <h3>Ticket {selected.id}</h3>
+          {selected.networkMode === "trusted_nat" ? (
+            <p>
+              受信任 NAT · 不提供强网络隔离 · 来源、出口和 IPv6 不由 Hitchlet
+              限制
+            </p>
+          ) : selected.networkMode === "isolated_vm" ? (
+            <p>Softnet 强隔离</p>
+          ) : null}
           <p>
             冻结资源 {selected.acceptedRequest.resources.request.cpuMillis}m CPU
             / {selected.acceptedRequest.resources.request.memoryMiB} MiB /{" "}

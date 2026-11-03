@@ -617,6 +617,150 @@ it("caps a short Tart CLI command at the ambient action deadline", async () => {
   expect(Date.now() - startedAt).toBeLessThan(1_200);
 });
 
+it.skipIf(!supportsTartHost)(
+  "trusted NAT needs no Softnet, resumes after Runtime restart and reclaims the exact VM",
+  async () => {
+    const root = await setupFixture();
+    const isolated = await makeRequest(root);
+    const { contractHash: _, ...base } = isolated.network;
+    const raw = {
+      ...base,
+      mode: "trusted_nat" as const,
+      enforcement: "tart_nat" as const,
+      ipv6: "not_enforced" as const,
+    };
+    const network = {
+      ...raw,
+      contractHash:
+        "sha256:" +
+        createHash("sha256")
+          .update(canonicalTartNetworkPlan(raw))
+          .digest("hex"),
+    };
+    const request = { ...isolated, network };
+    const create = () =>
+      new TartLocalDriver({
+        tartHome: join(root, "tart-home"),
+        manifestDirectory: join(root, "manifests"),
+        executable: join(root, "fake-tart"),
+      });
+    const first = create();
+    expect(
+      await first.reconcile({
+        ...request,
+        network: { ...network, contractHash: "sha256:" + "0".repeat(64) },
+      }),
+    ).toMatchObject({
+      presence: "unknown",
+      reason: "tart_network_contract_hash_mismatch",
+    });
+    expect((await readEvents(root)).some((e) => e.args[0] === "clone")).toBe(
+      false,
+    );
+    expect(await first.reconcile(request)).toMatchObject({
+      presence: "present",
+      state: "running",
+      network: { backend: "nat", status: "not_enforced" },
+    });
+    const events = await readEvents(root);
+    expect(
+      events.filter((e) => e.args[0] === "run").map((e) => e.args),
+    ).toEqual([["run", "--no-graphics", expectedName(identity)]]);
+    await first.close();
+    const recovered = create();
+    expect(await recovered.reconcile(request)).toMatchObject({
+      presence: "present",
+      state: "running",
+      network: { status: "not_enforced" },
+    });
+    expect(
+      (await readEvents(root)).filter((e) => e.args[0] === "clone"),
+    ).toHaveLength(1);
+    const cleanup = {
+      ...identity,
+      operationId: "nat-cleanup",
+      controlVersion: 2,
+    };
+    expect(
+      await recovered.revokeNetwork(
+        { ...cleanup, runtimeIdentityId: "other-runtime" },
+        network,
+      ),
+    ).toMatchObject({ presence: "absent" });
+    expect(await recovered.inspect(identity)).toMatchObject({
+      presence: "present",
+      state: "running",
+    });
+    expect(await recovered.revokeNetwork(cleanup, network)).toMatchObject({
+      presence: "present",
+      state: "stopped",
+    });
+    const deleted = await recovered.destroy(cleanup);
+    expect(deleted).toMatchObject({
+      presence: "absent",
+      inventoryCompleteness: "complete",
+    });
+    expect(deleted).not.toHaveProperty("networkCleanupReceipt");
+    expect(await recovered.revokeNetwork(cleanup, network)).toMatchObject({
+      presence: "absent",
+    });
+    expect(await recovered.destroy(cleanup)).toMatchObject({
+      presence: "absent",
+    });
+    await recovered.close();
+  },
+);
+
+it.skipIf(!supportsTartHost)(
+  "NAT stop failure never deletes the VM or reports absence",
+  async () => {
+    const root = await setupFixture();
+    const isolated = await makeRequest(root);
+    const { contractHash: _, ...base } = isolated.network;
+    const raw = {
+      ...base,
+      mode: "trusted_nat" as const,
+      enforcement: "tart_nat" as const,
+      ipv6: "not_enforced" as const,
+    };
+    const network = {
+      ...raw,
+      contractHash:
+        "sha256:" +
+        createHash("sha256")
+          .update(canonicalTartNetworkPlan(raw))
+          .digest("hex"),
+    };
+    const driver = new TartLocalDriver({
+      tartHome: join(root, "tart-home"),
+      manifestDirectory: join(root, "manifests"),
+      executable: join(root, "fake-tart"),
+    });
+    await driver.reconcile({ ...isolated, network });
+    await writeFile(join(root, "tart-home", "stop-failure-marker"), "1");
+    const cleanup = {
+      ...identity,
+      operationId: "nat-cleanup",
+      controlVersion: 2,
+    };
+    await expect(driver.revokeNetwork(cleanup, network)).rejects.toThrow(
+      "tart_cli_command_failed",
+    );
+    expect(await driver.destroy(cleanup)).toMatchObject({
+      presence: "unknown",
+    });
+    expect((await readEvents(root)).some((e) => e.args[0] === "delete")).toBe(
+      false,
+    );
+    await rm(join(root, "tart-home", "stop-failure-marker"));
+    expect(await driver.revokeNetwork(cleanup, network)).toMatchObject({
+      state: "stopped",
+    });
+    expect(await driver.destroy(cleanup)).toMatchObject({ presence: "absent" });
+    await driver.close();
+  },
+);
+
 function makeDriver(
   root: string,
   tartHome = join(root, "tart-home"),

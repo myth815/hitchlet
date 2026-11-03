@@ -1024,6 +1024,7 @@ export class SQLiteMachineNodeStore {
 
   async attestTartCapabilities(input: {
     nodeId: string;
+    networkMode?: "trusted_nat" | "isolated" | undefined;
     expectedVersion: number;
     expectedConnectionRevisionId: string;
     expectedNamespaceId: string;
@@ -1040,7 +1041,8 @@ export class SQLiteMachineNodeStore {
       scopes: Readonly<
         Record<
           string,
-          Readonly<{ status: "passed"; summary: string; evidenceRef: string }>
+          | Readonly<{ status: "passed"; summary: string; evidenceRef: string }>
+          | undefined
         >
       >;
     }>;
@@ -1049,6 +1051,18 @@ export class SQLiteMachineNodeStore {
     requestId: string;
     facts: TartRuntimeFacts;
   }) {
+    const networkMode = input.networkMode ?? "trusted_nat";
+    const requiredScopes =
+      networkMode === "trusted_nat"
+        ? ["resourceLimits", "sshBootstrap", "cleanupRecovery"]
+        : [
+            "resourceLimits",
+            "firewallInput",
+            "firewallForward",
+            "ipv6",
+            "sshBootstrap",
+            "cleanupRecovery",
+          ];
     const node = await this.db.get<Row>(
       "SELECT n.machine_id,n.runtime_identity_id,n.pool_id,n.config_json,n.version,n.backend_kind,m.architecture,m.host_os,pc.current_revision_id,ri.native_id,r.evidence_json FROM nodes n JOIN machines m ON m.id=n.machine_id JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.runtime_identity_id=n.runtime_identity_id AND pc.enabled=1 JOIN runtime_identities ri ON ri.id=n.runtime_identity_id AND ri.backend_kind='tart' JOIN provider_connection_revisions r ON r.id=pc.current_revision_id AND r.verified_runtime_identity_id=n.runtime_identity_id WHERE n.id=? AND n.backend_kind='tart' AND n.admission='disabled'",
       [input.nodeId],
@@ -1098,10 +1112,12 @@ export class SQLiteMachineNodeStore {
       !Number.isSafeInteger(validForSeconds) ||
       validForSeconds < 3600 ||
       validForSeconds > 30 * 24 * 3600 ||
-      Object.keys(input.report.scopes).length !== 6
+      requiredScopes.some(
+        (name) => input.report.scopes[name]?.status !== "passed",
+      )
     )
       throw new RangeError(
-        "Tart attestation must match the current namespace, sealed template and six passed qualification scopes",
+        "Tart attestation must match the current namespace, sealed template and the required qualification scopes",
       );
     const revisions = await this.db.all<Row>(
       `SELECT id FROM network_profile_revisions WHERE id IN (${input.networkProfileRevisionIds.map(() => "?").join(",")})`,
@@ -1137,6 +1153,7 @@ export class SQLiteMachineNodeStore {
         templateDigest: input.templateDigest,
         guestOs: input.guestOs,
         checkedAt: input.checkedAt,
+        networkMode,
         networkProfileRevisionIds: input.networkProfileRevisionIds,
         report: input.report,
       }),
@@ -1145,7 +1162,9 @@ export class SQLiteMachineNodeStore {
       cpuHardLimit: "verified",
       memoryHardLimit: "verified",
       scratchHardLimit: "unsupported",
-      networkPolicyEnforcement: "verified",
+      networkMode,
+      networkPolicyEnforcement:
+        networkMode === "trusted_nat" ? "unsupported" : "verified",
       storagePolicyEnforcement: "unsupported",
       supportedAccess: ["ssh"],
       resourceKinds: ["vm"],

@@ -306,11 +306,24 @@ export class TicketService {
     const networkPolicy = object(
       parseJson(network.policy_json, "network policy"),
     );
-    const allowedEgress = parseDestinations(networkPolicy.allowedEgress);
-    const allowedIngressSourceCidrs = stringListRequired(
-      networkPolicy.allowedIngressSourceCidrs,
-      "network allowed ingress source CIDRs",
-    );
+    if (
+      contract.kind === "vm" &&
+      networkPolicy.tartMode !== undefined &&
+      networkPolicy.tartMode !== "trusted_nat" &&
+      networkPolicy.tartMode !== "isolated"
+    )
+      throw new RangeError("Invalid Tart network mode");
+    const trustedNat =
+      contract.kind === "vm" && networkPolicy.tartMode !== "isolated";
+    const allowedEgress = trustedNat
+      ? []
+      : parseDestinations(networkPolicy.allowedEgress);
+    const allowedIngressSourceCidrs = trustedNat
+      ? []
+      : stringListRequired(
+          networkPolicy.allowedIngressSourceCidrs,
+          "network allowed ingress source CIDRs",
+        );
     if (
       networkPolicy.ipv6 !== "disabled" &&
       networkPolicy.ipv6 !== "verified_equivalent"
@@ -340,13 +353,23 @@ export class TicketService {
         grantId: this.id(),
         networkProfileRevisionId: String(network.id),
         platformDenyRevisionId: String(deny.id),
-        mode: contract.kind === "vm" ? "isolated_vm" : "isolated_bridge",
+        mode: trustedNat
+          ? "trusted_nat"
+          : contract.kind === "vm"
+            ? "isolated_vm"
+            : "isolated_bridge",
         allowedEgress,
         allowedIngressSourceCidrs,
-        managementDenyRules: parseDenyRules(deny.management_deny_rules_json),
-        ipv6: networkPolicy.ipv6,
-        enforcement: contract.kind === "vm" ? "tart_agent" : "docker_iptables",
-        verificationRequired: true,
+        managementDenyRules: trustedNat
+          ? []
+          : parseDenyRules(deny.management_deny_rules_json),
+        ipv6: trustedNat ? "not_enforced" : networkPolicy.ipv6,
+        enforcement: trustedNat
+          ? "tart_nat"
+          : contract.kind === "vm"
+            ? "tart_agent"
+            : "docker_iptables",
+        verificationRequired: !trustedNat,
       },
     };
     return {
@@ -774,7 +797,8 @@ export class TicketService {
     if (
       caps.cpuHardLimit !== "verified" ||
       caps.memoryHardLimit !== "verified" ||
-      caps.networkPolicyEnforcement !== "verified" ||
+      (object(frozen.network).mode !== "trusted_nat" &&
+        caps.networkPolicyEnforcement !== "verified") ||
       (contract.resources.scratchEnforcement === "required" &&
         caps.scratchHardLimit !== "verified") ||
       contract.requiredCapabilities.some((cap) => caps[cap] !== "verified")
@@ -788,6 +812,7 @@ export class TicketService {
     )
       hardReasons.add("access_unavailable");
     if (
+      object(frozen.network).mode !== "trusted_nat" &&
       !stringList(caps.verifiedNetworkProfileRevisionIds).includes(
         networkRevisionId,
       )

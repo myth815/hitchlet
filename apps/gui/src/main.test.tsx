@@ -32,9 +32,11 @@ function ticket(
   phase: "queued" | "ready" | "releasing" | "released" = "ready",
   claimedAt: string | null = at,
   renewalPending: TicketView["renewalPending"] = null,
+  networkMode?: TicketView["networkMode"],
 ) {
   return {
     id: ids.ticket,
+    ...(networkMode ? { networkMode } : {}),
     consumerId: ids.consumer,
     phase,
     version: phase === "ready" ? 1 : 2,
@@ -131,6 +133,7 @@ function response(body: unknown, status = 200, headers?: HeadersInit) {
 function harness(
   options: {
     initialTicket?: boolean;
+    networkMode?: TicketView["networkMode"];
     claimedAt?: string | null;
     prepared?: unknown;
     authPrincipal?: AuthenticatedPrincipal;
@@ -147,6 +150,7 @@ function harness(
         "ready",
         options.claimedAt === undefined ? null : options.claimedAt,
         options.renewalPending ?? null,
+        options.networkMode,
       )
     : ticket("ready", at, options.renewalPending ?? null);
   let releasingPolls = 0;
@@ -876,12 +880,15 @@ describe("consumer console", () => {
     expect(element.textContent).toContain("待恢复操作已达 8 条上限");
   });
 
-  it("requires both release confirmations, exposes access briefly and waits for released", async () => {
-    const h = harness({ initialTicket: true });
+  it("requires one clear release acknowledgement, exposes access briefly and waits for released", async () => {
+    const h = harness({ initialTicket: true, networkMode: "trusted_nat" });
     const element = await mount(h.client);
     await enter(element, "粘贴一次性显示的 token", "token");
     await submit(element, ".login-card form");
     await click(element, "环境就绪");
+    expect(element.textContent).toContain(
+      "受信任 NAT：可访问网络资源，不提供强网络隔离",
+    );
     expect(element.textContent).toContain("技术健康只说明");
     await click(element, "首次接用 / Claim");
     expect(element.textContent).toContain("首次接用已确认");
@@ -923,9 +930,14 @@ describe("consumer console", () => {
     expect(
       sessionStorage.getItem(`hitchlet.prepared.v1.${ids.consumer}`),
     ).not.toContain("short-secret");
-    const checks = [
-      ...element.querySelectorAll("input[type=checkbox]"),
-    ] as HTMLInputElement[];
+    const checks = [...element.querySelectorAll("input[type=checkbox]")].filter(
+      (input) =>
+        input.closest("label")?.textContent?.includes("同意删除这个临时环境"),
+    ) as HTMLInputElement[];
+    expect(checks).toHaveLength(1);
+    expect(element.textContent).toContain(
+      "我已保存需要保留的数据，同意删除这个临时环境及未保存的数据",
+    );
     await act(async () => {
       checks.forEach((input) => input.click());
     });

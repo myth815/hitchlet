@@ -95,6 +95,11 @@ export class TicketQueries {
     const accepted = json(row.request_json);
     if (!accepted || typeof accepted !== "object")
       throw new Error("Ticket contract unavailable");
+    const frozen = json(row.accepted_contract_json);
+    const mode =
+      isRecord(frozen) && isRecord(frozen.network)
+        ? frozen.network.mode
+        : undefined;
     const grants = await this.store.ticketGrants(String(row.id));
     const lease =
       row.lease_id === null
@@ -134,6 +139,11 @@ export class TicketQueries {
     return TicketViewSchema.parse({
       ...summaryView,
       acceptedRequest: accepted,
+      ...(["isolated_bridge", "isolated_vm", "trusted_nat"].includes(
+        String(mode),
+      )
+        ? { networkMode: mode }
+        : {}),
       pinnedProfileRevisions: {
         networkProfileRevisionId: row.network_profile_revision_id,
         storageProfileRevisionIds: grants.map(

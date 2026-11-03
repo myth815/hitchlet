@@ -776,7 +776,10 @@ export class OperationWorker {
       allowedIngressSourceCidrs: stringList(network.allowedIngressSourceCidrs),
       managementDenyRules: parseDenyRules(network.managementDenyRules),
       enforcement: enforcement(network.enforcement),
-      verificationRequired: requiredTrue(network.verificationRequired),
+      verificationRequired:
+        network.mode === "trusted_nat"
+          ? natVerification(network.enforcement, network.verificationRequired)
+          : requiredTrue(network.verificationRequired),
     };
     const contractPayload = {
       selectionHash,
@@ -1157,8 +1160,14 @@ function architecture(value: unknown): "amd64" | "arm64" {
     throw new Error("Persisted artifact architecture is invalid");
   return value;
 }
-function enforcement(value: unknown): "docker_iptables" | "tart_agent" {
-  if (value !== "docker_iptables" && value !== "tart_agent")
+function enforcement(
+  value: unknown,
+): "docker_iptables" | "tart_agent" | "tart_nat" {
+  if (
+    value !== "docker_iptables" &&
+    value !== "tart_agent" &&
+    value !== "tart_nat"
+  )
     throw new Error("Persisted network enforcement is invalid");
   return value;
 }
@@ -1166,8 +1175,14 @@ function grantRevision(value: unknown): 1 {
   if (value !== 1) throw new Error("Persisted grant revision is invalid");
   return 1;
 }
-function networkMode(value: unknown): "isolated_bridge" | "isolated_vm" {
-  if (value !== "isolated_bridge" && value !== "isolated_vm")
+function networkMode(
+  value: unknown,
+): "isolated_bridge" | "isolated_vm" | "trusted_nat" {
+  if (
+    value !== "isolated_bridge" &&
+    value !== "isolated_vm" &&
+    value !== "trusted_nat"
+  )
     throw new Error("Persisted network mode is invalid");
   return value;
 }
@@ -1194,13 +1209,24 @@ function expectedManifest(value: unknown): string[] | undefined {
     return undefined;
   }
 }
+function natVerification(enforcement: unknown, value: unknown): false {
+  if (enforcement !== "tart_nat" || value !== false)
+    throw new Error("Persisted NAT mode is inconsistent");
+  return false;
+}
 function requiredTrue(value: unknown): true {
   if (value !== true)
     throw new Error("Persisted verification requirement is missing");
   return true;
 }
-function ipv6Mode(value: unknown): "disabled" | "verified_equivalent" {
-  if (value !== "disabled" && value !== "verified_equivalent")
+function ipv6Mode(
+  value: unknown,
+): "disabled" | "verified_equivalent" | "not_enforced" {
+  if (
+    value !== "disabled" &&
+    value !== "verified_equivalent" &&
+    value !== "not_enforced"
+  )
     throw new Error("Persisted IPv6 mode is invalid");
   return value;
 }
