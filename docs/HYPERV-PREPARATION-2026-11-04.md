@@ -14,9 +14,9 @@
 
 ## 当前代码到哪一步
 
-公开请求已独立表达kind、guestOs、architecture、资源；统一Ticket/Operation/Lease/Claim与恢复存在。执行注册仅portainer/tart/simulator；现已增加[Hyper-V原生生命周期内核](HYPERV-NATIVE-KERNEL.md)与受控回归；已有内部认证Runtime server/client受控接线，见[通道与初始化边界](HYPERV-RUNTIME-TRANSPORT.md)；仍无Windows实际启动组合、可信guest初始化或ExecutionPort注册/发布资格接线。Windows Host观测/电源脚本不提供Hyper-V生命周期。
+公开请求已独立表达kind、guestOs、architecture、资源；统一Ticket/Operation/Lease/Claim与恢复存在。执行注册仅portainer/tart/simulator；现已增加[Hyper-V原生生命周期内核](HYPERV-NATIVE-KERNEL.md)与受控回归；已有内部认证Runtime server/client受控接线，见[通道与初始化边界](HYPERV-RUNTIME-TRANSPORT.md)；仍无Windows实际启动组合、原生guest初始化或正式ExecutionPort管理注册/发布资格接线。Windows Host观测/电源脚本不提供Hyper-V生命周期。
 
-首轮仍走现有ExecutionProvider接口，不增加消费者的hyperv参数或通用插件框架。现有Tart源码是生命周期和身份校验的参考，不能把tart-exec、launchd、Linux UID或ARM模板直接套到Windows。
+内部ExecutionPort与guest握手现已有受控源码，见[provider边界](HYPERV-PROVIDER.md)。首轮仍走现有ExecutionProvider接口，不增加消费者的hyperv参数或通用插件框架。现有Tart源码是生命周期和身份校验的参考，不能把tart-exec、launchd、Linux UID或ARM模板直接套到Windows。
 
 ## 最小实施顺序
 

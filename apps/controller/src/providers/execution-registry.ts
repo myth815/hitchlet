@@ -5,6 +5,7 @@ export const executionDefinitions = {
   simulator: { provider: "portainer", kind: "container" },
   portainer: { provider: "portainer", kind: "container" },
   tart: { provider: "tart", kind: "vm" },
+  hyperv: { provider: "hyperv", kind: "vm" },
 } as const;
 export type ExecutionMode = keyof typeof executionDefinitions;
 export type ExecutionSelection =
@@ -46,17 +47,20 @@ export function environmentContractReason(
   if (
     typeof guestOs === "string" &&
     ((provider === "tart" && !["macos", "linux"].includes(guestOs)) ||
-      (provider === "portainer" && guestOs !== "linux"))
+      (provider === "portainer" && guestOs !== "linux") ||
+      (provider === "hyperv" && !["windows", "linux"].includes(guestOs)))
   )
     return "guest_os_unsupported";
   if (
-    provider === "tart" &&
+    (provider === "tart" || provider === "hyperv") &&
     (contract.resources.request.cpuMillis % 1000 !== 0 ||
       contract.resources.isolation !== "virtual_machine" ||
       contract.resources.scratchEnforcement !== "best_effort" ||
       contract.access.protocol !== "ssh" ||
       contract.storage.length > 0)
   )
-    return "tart_contract_unsupported";
+    return provider === "tart"
+      ? "tart_contract_unsupported"
+      : "hyperv_contract_unsupported";
   return null;
 }

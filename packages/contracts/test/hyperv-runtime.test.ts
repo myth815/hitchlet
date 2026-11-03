@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   hyperVInspectionSchema,
+  hyperVGuestBootstrapRequestSchema,
   hyperVRequestSchema,
   hyperVRuntimeActionRequestSchema,
 } from "../src/hyperv-runtime.js";
@@ -87,4 +88,37 @@ it("requires observed native identity for present and complete inventory for abs
       inventoryComplete: true,
     }).success,
   ).toBe(true);
+});
+
+it("bootstrap accepts only public material and the same runtime envelope", () => {
+  const key = "ssh-ed25519 " + "A".repeat(68);
+  const bootstrap = {
+    identity,
+    vmId: "11111111-1111-4111-8111-111111111111",
+    nonce: "bootstrap-0123456789",
+    account: "workspace",
+    guestOs: "windows",
+    architecture: "amd64",
+    clientPublicKey: key,
+    clientPublicKeyFingerprint: "SHA256:" + "A".repeat(43),
+  };
+  expect(hyperVGuestBootstrapRequestSchema.safeParse(bootstrap).success).toBe(
+    true,
+  );
+  expect(
+    hyperVGuestBootstrapRequestSchema.safeParse({
+      ...bootstrap,
+      privateKey: "secret",
+    }).success,
+  ).toBe(false);
+  expect(
+    hyperVRuntimeActionRequestSchema.safeParse({
+      requestNonce: "11111111-1111-4111-8111-111111111111",
+      installationId: "i",
+      runtimeIdentityId: "foreign",
+      controllerEpoch: 1,
+      deadline: "2030-01-01T00:00:00Z",
+      action: { kind: "bootstrap.apply", request: bootstrap },
+    }).success,
+  ).toBe(false);
 });

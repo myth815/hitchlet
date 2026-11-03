@@ -8,6 +8,11 @@ import {
   type HyperVNativeVm,
   type HyperVRequest,
 } from "../src/drivers/hyperv.js";
+import { hyperVPublicKeyFingerprint } from "../src/drivers/hyperv-guest.js";
+import type {
+  HyperVGuestBootstrapRequest,
+  HyperVGuestBootstrapReceipt,
+} from "@hitchlet/contracts/internal";
 import { withCommandDeadline } from "../src/command-exec.js";
 
 const roots: string[] = [];
@@ -353,4 +358,166 @@ it("keeps unreadable existing inventory unknown and never turns it into deletion
   });
   expect(count(f.native, "remove")).toBe(0);
   expect(count(f.native, "stop")).toBe(0);
+});
+
+function publicKey(seed: number) {
+  const name = Buffer.from("ssh-ed25519");
+  const blob = Buffer.concat([
+    Buffer.from([0, 0, 0, 11]),
+    name,
+    Buffer.from([0, 0, 0, 32]),
+    Buffer.alloc(32, seed),
+  ]);
+  return "ssh-ed25519 " + blob.toString("base64");
+}
+async function bootstrapFixture() {
+  const f = await fixture();
+  await f.driver.reconcile(request());
+  const key = publicKey(1),
+    host = publicKey(2);
+  const input: HyperVGuestBootstrapRequest = {
+    identity,
+    vmId: vm(f.native).id,
+    nonce: "bootstrap-nonce-0123456789",
+    account: "workspace",
+    guestOs: "windows",
+    architecture: "amd64",
+    clientPublicKey: key,
+    clientPublicKeyFingerprint: hyperVPublicKeyFingerprint(key),
+  };
+  let stored: HyperVGuestBootstrapReceipt | undefined;
+  let applies = 0;
+  let loseReply = false;
+  let inspectUnknown = false;
+  let rewrite = (r: HyperVGuestBootstrapReceipt) => r;
+  const guest = {
+    inspect: async () =>
+      inspectUnknown
+        ? { status: "unknown", reason: "transport_unavailable" }
+        : (stored ?? { status: "not_applied" }),
+    apply: async (req: HyperVGuestBootstrapRequest) => {
+      applies++;
+      const manifests = await readdir(f.options.manifestDirectory);
+      const saved = JSON.parse(
+        await readFile(
+          join(f.options.manifestDirectory, manifests[0]!),
+          "utf8",
+        ),
+      );
+      expect(saved.bootstrapRequest).toEqual(req);
+      expect(saved.bootstrapState).toBe("pending");
+      const { clientPublicKey: _, ...fields } = req;
+      stored = rewrite({
+        ...fields,
+        status: "applied",
+        hostPublicKey: host,
+        hostKeyFingerprint: hyperVPublicKeyFingerprint(host),
+        observedAt: new Date().toISOString(),
+      });
+      if (loseReply) {
+        loseReply = false;
+        throw Error("reply lost");
+      }
+      return stored;
+    },
+  };
+  const driver = new HyperVLocalDriver({ ...f.options, guestBootstrap: guest });
+  return {
+    ...f,
+    input,
+    driver,
+    guest,
+    get applies() {
+      return applies;
+    },
+    lose() {
+      loseReply = true;
+    },
+    unknown() {
+      inspectUnknown = true;
+    },
+    rewrite(fn: typeof rewrite) {
+      rewrite = fn;
+    },
+  };
+}
+it("does not invent guest initialization when no template channel exists", async () => {
+  const f = await bootstrapFixture();
+  const without = new HyperVLocalDriver(f.options);
+  expect(await without.bootstrapApply(f.input)).toMatchObject({
+    presence: "present",
+    bootstrapStatus: "not_implemented",
+  });
+  expect(f.applies).toBe(0);
+});
+it("persists public bootstrap intent before apply and recovers lost reply via same VM/nonce readback", async () => {
+  const f = await bootstrapFixture();
+  f.lose();
+  expect(await f.driver.bootstrapApply(f.input)).toMatchObject({
+    presence: "present",
+    bootstrapStatus: "unknown",
+  });
+  expect(f.applies).toBe(1);
+  const restarted = new HyperVLocalDriver({
+    ...f.options,
+    guestBootstrap: f.guest,
+  });
+  expect(await restarted.bootstrapApply(f.input)).toMatchObject({
+    bootstrapStatus: "applied",
+    bootstrapReceipt: { nonce: f.input.nonce, vmId: f.input.vmId },
+  });
+  expect(f.applies).toBe(1);
+  expect(count(f.native, "import")).toBe(1);
+  await restarted.bootstrapApply(f.input);
+  expect(f.applies).toBe(1);
+});
+it("does not repeat guest mutations when initialization observation is unknown", async () => {
+  const f = await bootstrapFixture();
+  f.unknown();
+  expect(await f.driver.bootstrapApply(f.input)).toMatchObject({
+    bootstrapStatus: "unknown",
+  });
+  expect(f.applies).toBe(0);
+});
+it.each([
+  "vmId",
+  "nonce",
+  "clientPublicKeyFingerprint",
+  "hostKeyFingerprint",
+] as const)(
+  "does not accept mismatched bootstrap receipt %s",
+  async (field) => {
+    const f = await bootstrapFixture();
+    f.rewrite((r) => ({
+      ...r,
+      [field]:
+        field === "vmId"
+          ? "00000000-0000-4000-8000-000000009999"
+          : field === "nonce"
+            ? "different-nonce-0123456789"
+            : "SHA256:" + "A".repeat(43),
+    }));
+    expect(await f.driver.bootstrapApply(f.input)).toMatchObject({
+      bootstrapStatus: "unknown",
+    });
+    expect(await f.driver.inspect(identity)).not.toHaveProperty(
+      "bootstrapReceipt",
+    );
+  },
+);
+it("rejects changed frozen public material and guest environment without altering the clone", async () => {
+  const f = await bootstrapFixture();
+  await f.driver.bootstrapApply(f.input);
+  await expect(
+    f.driver.bootstrapApply({ ...f.input, account: "other" }),
+  ).rejects.toThrow("request changed");
+  await expect(
+    f.driver.bootstrapApply({ ...f.input, guestOs: "linux" }),
+  ).rejects.toThrow("frozen environment");
+  expect(f.applies).toBe(1);
+  await f.driver.destroy(cleanup);
+  await expect(f.driver.bootstrapApply(f.input)).rejects.toThrow(
+    "stale control version",
+  );
+  expect(f.applies).toBe(1);
 });

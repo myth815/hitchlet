@@ -355,7 +355,7 @@ export class TartExecutionProvider implements ExecutionPort {
       hostPublicKey: receipt.hostPublicKey,
       hostKeyFingerprint: receipt.hostKeyFingerprint,
       clientPublicKeyFingerprint: materials.fingerprint,
-      guestOS: plan.artifact.guestOS!,
+      guestOS: tartGuestOS(plan),
       architecture: "arm64",
       deadlineMs: plan.deadlineMs,
     });
@@ -739,7 +739,7 @@ export class TartExecutionProvider implements ExecutionPort {
         hostPublicKey: bootstrap.hostPublicKey,
         hostKeyFingerprint: hostFingerprint,
         clientPublicKeyFingerprint: clientFingerprint,
-        guestOS: plan.artifact.guestOS!,
+        guestOS: tartGuestOS(plan),
         architecture: "arm64",
         deadlineMs,
       });
@@ -1304,4 +1304,11 @@ function requireJournal(
 ): asserts journal is Required<ResourceJournal> {
   if (!journal.beforeCreate || !journal.assertActive || !journal.recordCreated)
     throw new Error("Tart create requires a durable VM resource journal");
+}
+
+function tartGuestOS(plan: ProvisionPlan): "linux" | "macos" {
+  const os = plan.artifact.guestOS;
+  if (os !== "linux" && os !== "macos")
+    throw Error("Tart guest OS is unavailable");
+  return os;
 }

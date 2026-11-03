@@ -28,7 +28,7 @@ Docker 的 guest OS 当前为 Linux，宿主 macOS 或 Windows 不改变容器 g
 2. **Vesta 下一格：** 由 Vesta 指定新的固定代码/已有测试。若仅重复现有短 CLI 场景，可按既有授权范围准备；若要 GUI、浏览器、平台挂载或新系统镜像，应明确该项动作和预算。无需新平台业务 API。
 3. **可重复部署：** 现有 Docker foreground 不是持久服务，Tart 两个模板也不是在线混合目录。下一批先确定是否需要同一安装的 Docker + 两个 Tart 节点/模板目录，以及具体启动方式和共享宿主预算。可先整理配置与可回退制品；安装/加载用户 LaunchAgent、新长期凭据或家庭网络监听必须有相应具体范围，不因“继续开发”自动执行。默认仍只 loopback，不要求改 DHCP/firewall 或启 Softnet。
 4. **真实影音输入：** 现有播放器 Music 挂载对业务账户的 errno13 不能靠换路径、协议或身份绕过。由业务选择具体已授权只读输入与独立可写目标/state，先把挂载身份和实际 Engine 映射说清；平台沿现有 storage profile 交付即可。是否连接外部 API/服务凭据由实际任务决定，无需恢复旧编排链或先放开全网。尚未实施新挂载或读取真实输入。
-5. **Windows x64 / Hyper-V：** 按既定优先级后续实现。先核准确 Windows 节点、Hyper-V 可用性和负载、可用 guest OS/架构/模板；再做一个现有 provider 契约的创建→初始化/SSH→恢复→销毁/absent 垂直实现。已有原生内核源码，已有内部Runtime通道受控接线，仍缺Windows启动组合/ExecutionPort、模板与guest初始化和真实资格，不是只差一个测试。管理员/服务权限、安装、Windows 镜像来源/许可、新持久身份或网络设置若实际必需，逐项给具体动作，不申请笼统一揽子提权。
+5. **Windows x64 / Hyper-V：** 按既定优先级后续实现。先核准确 Windows 节点、Hyper-V 可用性和负载、可用 guest OS/架构/模板；再做一个现有 provider 契约的创建→初始化/SSH→恢复→销毁/absent 垂直实现。已有原生内核源码，已有内部Runtime通道受控接线，已有内部[ExecutionPort/guest握手](HYPERV-PROVIDER.md)，仍缺Windows启动组合/正式管理发布、模板与原生guest初始化和真实资格，不是只差一个测试。管理员/服务权限、安装、Windows 镜像来源/许可、新持久身份或网络设置若实际必需，逐项给具体动作，不申请笼统一揽子提权。
 
 ## 持续边界
 
@@ -43,4 +43,4 @@ Docker 的 guest OS 当前为 Linux，宿主 macOS 或 Windows 不改变容器 g
 
 Vesta的下一格也已实际推进：[新CLI 5e6dba54f / Linux ARM VM治理文本3项](VESTA-GOVERNANCE-VM-2026-11-04.md)真实通过并查实回收，临时服务/认证已清理。新版本的macOS VM、Windows和完整CI仍不从该结果外推。
 
-Hyper-V新增[原生生命周期内核源码与47项相关回归](HYPERV-NATIVE-KERNEL.md)，未执行原生动作、未注册可租能力；系统功能保持Disabled，内部[Runtime通道](HYPERV-RUNTIME-TRANSPORT.md)已有受控接线，Windows启动组合、guest初始化/SSH及正式provider继续作为明确下一切片。
+Hyper-V新增[原生生命周期内核源码与47项相关回归](HYPERV-NATIVE-KERNEL.md)，未执行原生动作、未注册可租能力；系统功能保持Disabled，内部[Runtime通道](HYPERV-RUNTIME-TRANSPORT.md)已有受控接线，内部provider与guest握手已补受控实现；Windows启动组合、原生guest初始化/SSH及正式管理发布继续作为下一切片。

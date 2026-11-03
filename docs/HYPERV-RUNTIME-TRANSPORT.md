@@ -4,7 +4,7 @@
 
 ## 已接入的内部通道
 
-- `createHyperVRuntimeServer` 将现有内核接到 `/v1/hyperv/actions` 和 `/v1/hyperv/facts`。动作只有 reconcile、inspect、stop、destroy；不暴露任意 PowerShell/native command、bootstrap 或租客管理接口。
+- `createHyperVRuntimeServer` 将现有内核接到 `/v1/hyperv/actions` 和 `/v1/hyperv/facts`。动作是 reconcile、inspect、stop、destroy及固定公钥输入的bootstrap.apply；不暴露任意 PowerShell/native command 或租客管理接口。初始化与内部provider见[接续批次](HYPERV-PROVIDER.md)。
 - `HyperVRuntimeHttpClient` 使用已有 `RuntimeAgentHttpTransport`；继续由它加载版本化认证、验证 HTTPS/mTLS、传 Bearer 并限制响应/超时。没有新增网络、身份或证书体系。
 - Tart 和 Hyper-V 共用原 Tart server 的有限 HTTP 实现：证书和令牌检查、256 KiB 请求体、最长 240 秒动作 deadline、每 allocation 排队、短暂持久 epoch 更新。慢创建不占全局原生动作锁；排队后再次检查 deadline/epoch。
 - 内部合同在 `contracts/internal`，驱动原有导出保留为同一 schema 的别名。guest OS 与 amd64 独立，宿主本地模板/switch 只在内部请求中；公开消费者不增加后端、宿主或 Windows 路径参数。
@@ -13,13 +13,13 @@
 
 ## 尚未接入，不能据本批称为可租
 
-server/client 是可测试组合函数，没有新增可执行启动入口，也没有读取真实 Runtime 配置、监听常驻端口或注册 ExecutionPort。后续启动组合仍须把 namespace 标记绑定到专属工作根并锁定单 Runtime 写入者；本批 facts 中的 namespace 来自显式配置，不能作为独立资格证明。
+server/client 是可测试组合函数，没有新增可执行启动入口，也没有读取真实 Runtime 配置或监听常驻端口。内部ExecutionPort后续已接线，正式server/管理发布尚未接入。后续启动组合仍须把 namespace 标记绑定到专属工作根并锁定单 Runtime 写入者；本批 facts 中的 namespace 来自显式配置，不能作为独立资格证明。
 
-原生 lifecycle 仍只有 vmcx hash，不是完整模板/磁盘制品身份。PowerShell 解析/运行、native import 早期中断取证、VM 资源/网络/SSH、正式管理发布和 Ticket 均未实机验证；详见[内核边界](HYPERV-NATIVE-KERNEL.md)。没有将不可用 host 伪造成可用：facts 可诚实返回 available=false。没有返回 ReadyReceipt/access，bootstrapStatus 仍固定 not_implemented。
+原生 lifecycle 仍只有 vmcx hash，不是完整模板/磁盘制品身份。PowerShell 解析/运行、native import 早期中断取证、VM 资源/网络/SSH、正式管理发布和 Ticket 均未实机验证；详见[内核边界](HYPERV-NATIVE-KERNEL.md)。没有将不可用 host 伪造成可用：facts 可诚实返回 available=false。默认无guest渠道仍为not_implemented；后续内部provider仅在受控引导/SSH证据完整时生成ReadyReceipt/access，不是实机支持。
 
 ## 首个 Windows guest 的最小初始化方案
 
-这部分是下一切片的输入/成功标准，**不是已经执行或验证的初始化实现**。先满足 Vesta Windows/amd64 一种 guest，不同时实现另一套 Linux/amd64 引导框架。
+这部分是下一切片的输入/成功标准，**不是已经执行或验证的原生初始化实现**。先满足 Vesta Windows/amd64 一种 guest，不同时实现另一套 Linux/amd64 引导框架。
 
 | 环节 | 最小输入与实际交付要求 |
 | --- | --- |

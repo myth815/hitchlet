@@ -17,7 +17,7 @@ export function createHyperVRuntimeServer(
   config: VmRuntimeServerConfig,
   driver: Pick<
     HyperVLocalDriver,
-    "inspect" | "reconcile" | "stop" | "destroy" | "facts"
+    "inspect" | "reconcile" | "stop" | "destroy" | "facts" | "bootstrapApply"
   >,
   journal: FileJournal,
 ) {
@@ -33,8 +33,10 @@ export function createHyperVRuntimeServer(
       nativeRuntimeNamespaceId: config.nativeRuntimeNamespaceId,
     }),
     execute: (action) =>
-      action.kind === "reconcile"
-        ? driver.reconcile(action.request)
-        : driver[action.kind](action.identity),
+      action.kind === "bootstrap.apply"
+        ? driver.bootstrapApply(action.request)
+        : action.kind === "reconcile"
+          ? driver.reconcile(action.request)
+          : driver[action.kind](action.identity),
   });
 }

@@ -9,7 +9,7 @@ import type { ExecutionPort, ProvisionPlan } from "../src/providers/port.js";
 import { ExecutionProviderDispatcher } from "../src/providers/execution-dispatcher.js";
 
 function plan(
-  mode: "simulator" | "portainer" | "tart",
+  mode: "simulator" | "portainer" | "tart" | "hyperv",
   phase?: "provision" | "cleanup",
 ) {
   return {
@@ -161,8 +161,9 @@ it("registers macOS/Linux Tart bootstrap without claiming Windows support", () =
   expect(environmentContractReason("tart", contract, "windows")).toBe(
     "guest_os_unsupported",
   );
-  expect(environmentContractReason("hyperv", contract, "windows")).toBe(
-    "environment_kind_unsupported",
+  expect(environmentContractReason("hyperv", contract, "windows")).toBeNull();
+  expect(environmentContractReason("hyperv", contract, "macos")).toBe(
+    "guest_os_unsupported",
   );
   expect(
     environmentContractReason(
@@ -177,4 +178,15 @@ it("registers macOS/Linux Tart bootstrap without claiming Windows support", () =
       "macos",
     ),
   ).toBe("tart_contract_unsupported");
+});
+
+it("keeps default registered production composition unchanged while supporting explicit Hyper-V injection", async () => {
+  expect(configuredExecutionModes("registered")).toEqual(["portainer", "tart"]);
+  const hyperv = provider();
+  const dispatcher = new ExecutionProviderDispatcher(
+    { hyperv: hyperv.execution },
+    ["hyperv"],
+  );
+  await dispatcher.create(plan("hyperv"), {});
+  expect(hyperv.calls.create).toHaveBeenCalledOnce();
 });

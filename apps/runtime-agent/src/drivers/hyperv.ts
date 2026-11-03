@@ -15,9 +15,19 @@ import {
   type HyperVRequest,
   type HyperVNativeVm,
   type HyperVInspection,
+  hyperVGuestBootstrapRequestSchema,
+  hyperVGuestBootstrapReceiptSchema,
+  hyperVGuestBootstrapObservationSchema,
+  type HyperVGuestBootstrapRequest,
+  type HyperVGuestBootstrapReceipt,
 } from "@hitchlet/contracts/internal";
 import { canonical } from "../canonical.js";
 import { currentCommandDeadlineMs } from "../command-exec.js";
+
+import {
+  hyperVPublicKeyFingerprint,
+  type HyperVGuestBootstrapPort,
+} from "./hyperv-guest.js";
 
 const sha = (value: unknown) =>
   createHash("sha256").update(canonical(value)).digest("hex");
@@ -46,6 +56,9 @@ const manifestSchema = z
     spec: specSchema,
     specHash: z.string().regex(/^[a-f0-9]{64}$/),
     vmId: z.string().uuid().nullable(),
+    bootstrapRequest: hyperVGuestBootstrapRequestSchema.optional(),
+    bootstrapReceipt: hyperVGuestBootstrapReceiptSchema.optional(),
+    bootstrapState: z.enum(["pending", "unknown", "applied"]).optional(),
   })
   .strict();
 type Manifest = z.infer<typeof manifestSchema>;
@@ -79,6 +92,7 @@ export class HyperVLocalDriver {
       manifestDirectory: string;
       workRoot: string;
       run?: HyperVNativeRunner;
+      guestBootstrap?: HyperVGuestBootstrapPort;
     },
   ) {
     this.workRoot = win32.normalize(absolutePath.parse(options.workRoot));
@@ -113,6 +127,93 @@ export class HyperVLocalDriver {
   }
   destroy(input: unknown): Promise<HyperVInspection> {
     return this.cleanup(input, true);
+  }
+
+  bootstrapApply(input: unknown): Promise<HyperVInspection> {
+    const request = hyperVGuestBootstrapRequestSchema.parse(input);
+    return this.lock(request.identity, async () => {
+      const identity = request.identity;
+      const m = await this.load(identity);
+      if (!m) return this.unknown(identity, "bootstrap_manifest_missing");
+      this.fence(m, identity);
+      const observed = await this.observe(identity, m);
+      if (
+        m.phase !== "owned" ||
+        observed.presence !== "present" ||
+        !observed.vm ||
+        !this.owns(identity, m, observed.vm) ||
+        observed.vm.id !== request.vmId ||
+        observed.vm.state !== "running" ||
+        !this.matches(observed.vm, m.spec)
+      )
+        return this.unknown(
+          identity,
+          "bootstrap_native_identity_or_state_changed",
+        );
+      if (
+        request.guestOs !== m.spec.template.guestOs ||
+        request.architecture !== m.spec.template.architecture ||
+        canonical(m.identity) !== canonical(identity)
+      )
+        throw Error(
+          "Hyper-V bootstrap request does not match frozen environment",
+        );
+      if (
+        hyperVPublicKeyFingerprint(request.clientPublicKey) !==
+        request.clientPublicKeyFingerprint
+      )
+        throw Error("Hyper-V bootstrap client key fingerprint mismatch");
+      if (
+        m.bootstrapRequest &&
+        canonical(m.bootstrapRequest) !== canonical(request)
+      )
+        throw Error("Hyper-V bootstrap request changed");
+      if (m.bootstrapReceipt) return this.inspection(identity, observed, m);
+      if (!this.options.guestBootstrap)
+        return this.inspection(identity, observed, m);
+      const deadlineMs = Math.min(
+        currentCommandDeadlineMs() ?? Infinity,
+        Date.now() + 30_000,
+      );
+      if (deadlineMs <= Date.now())
+        throw Error("Hyper-V bootstrap deadline expired");
+      m.identity = identity;
+      m.highestControlVersion = identity.controlVersion;
+      m.bootstrapRequest = request;
+      m.bootstrapState = "pending";
+      await this.store(m);
+      try {
+        let receipt = hyperVGuestBootstrapObservationSchema.parse(
+          await this.options.guestBootstrap.inspect(request, deadlineMs),
+        );
+        if (Date.now() >= deadlineMs) throw Error("bootstrap_deadline_expired");
+        if (receipt.status === "not_applied")
+          receipt = hyperVGuestBootstrapObservationSchema.parse(
+            await this.options.guestBootstrap.apply(request, deadlineMs),
+          );
+        if (
+          receipt.status !== "applied" ||
+          Date.now() >= deadlineMs ||
+          !bootstrapMatches(receipt, request)
+        )
+          throw Error("bootstrap_receipt_unknown_or_mismatched");
+        const confirmed = await this.observe(identity, m);
+        if (
+          confirmed.presence !== "present" ||
+          !confirmed.vm ||
+          !this.owns(identity, m, confirmed.vm) ||
+          confirmed.vm.id !== request.vmId ||
+          confirmed.vm.state !== "running"
+        )
+          throw Error("bootstrap_native_readback_changed");
+        m.bootstrapReceipt = receipt;
+        m.bootstrapState = "applied";
+      } catch {
+        m.bootstrapState = "unknown";
+      }
+      await this.store(m);
+      return this.inspection(identity, await this.observe(identity, m), m);
+    });
   }
 
   private async reconcileOwned(
@@ -322,7 +423,15 @@ export class HyperVLocalDriver {
       identity,
       presence: o.presence,
       inventoryComplete: o.inventoryComplete,
-      bootstrapStatus: "not_implemented",
+      bootstrapStatus:
+        o.presence === "present"
+          ? (m?.bootstrapState ?? "not_implemented")
+          : "not_implemented",
+      ...(o.presence === "present" &&
+      m?.bootstrapState === "applied" &&
+      m.bootstrapReceipt
+        ? { bootstrapReceipt: m.bootstrapReceipt }
+        : {}),
       ...(o.reason ? { reason: o.reason } : {}),
       ...(o.vm ? { vm: o.vm } : {}),
       ...(m
@@ -481,6 +590,23 @@ export class HyperVLocalDriver {
     return next;
   }
 }
+function bootstrapMatches(
+  receipt: HyperVGuestBootstrapReceipt,
+  request: HyperVGuestBootstrapRequest,
+): boolean {
+  return (
+    canonical(receipt.identity) === canonical(request.identity) &&
+    receipt.vmId === request.vmId &&
+    receipt.nonce === request.nonce &&
+    receipt.account === request.account &&
+    receipt.guestOs === request.guestOs &&
+    receipt.architecture === request.architecture &&
+    receipt.clientPublicKeyFingerprint === request.clientPublicKeyFingerprint &&
+    hyperVPublicKeyFingerprint(receipt.hostPublicKey) ===
+      receipt.hostKeyFingerprint
+  );
+}
+
 function inside(root: string, path: string) {
   const relative = win32.relative(root, path);
   return (

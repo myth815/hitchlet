@@ -50,6 +50,58 @@ export const hyperVNativeVmSchema = z
   .strict();
 export type HyperVNativeVm = z.infer<typeof hyperVNativeVmSchema>;
 
+const sshPublicKey = z
+  .string()
+  .max(4096)
+  .regex(/^ssh-ed25519 [A-Za-z0-9+/]+={0,2}(?: [^\r\n]*)?$/);
+const sshFingerprint = z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/);
+/** Public bootstrap material only; a native VM GUID binds it to the owned clone. */
+export const hyperVGuestBootstrapRequestSchema = z
+  .object({
+    identity: vmAllocationIdentitySchema,
+    vmId: z.string().uuid(),
+    nonce: z
+      .string()
+      .min(16)
+      .max(256)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    account: z.string().regex(/^[a-zA-Z_][a-zA-Z0-9_.-]{0,31}$/),
+    guestOs: z.enum(["windows", "linux"]),
+    architecture: z.literal("amd64"),
+    clientPublicKey: sshPublicKey,
+    clientPublicKeyFingerprint: sshFingerprint,
+  })
+  .strict();
+export type HyperVGuestBootstrapRequest = z.infer<
+  typeof hyperVGuestBootstrapRequestSchema
+>;
+export const hyperVGuestBootstrapReceiptSchema =
+  hyperVGuestBootstrapRequestSchema
+    .omit({ clientPublicKey: true })
+    .extend({
+      status: z.literal("applied"),
+      hostPublicKey: sshPublicKey,
+      hostKeyFingerprint: sshFingerprint,
+      observedAt: z.string().datetime({ offset: true }),
+    })
+    .strict();
+export type HyperVGuestBootstrapReceipt = z.infer<
+  typeof hyperVGuestBootstrapReceiptSchema
+>;
+export const hyperVGuestBootstrapObservationSchema = z.discriminatedUnion(
+  "status",
+  [
+    hyperVGuestBootstrapReceiptSchema,
+    z.object({ status: z.literal("not_applied") }).strict(),
+    z
+      .object({
+        status: z.literal("unknown"),
+        reason: z.string().min(1).max(200),
+      })
+      .strict(),
+  ],
+);
+
 export const hyperVInspectionSchema = z
   .object({
     identity: vmAllocationIdentitySchema,
@@ -64,10 +116,33 @@ export const hyperVInspectionSchema = z
       })
       .strict()
       .optional(),
-    bootstrapStatus: z.literal("not_implemented"),
+    bootstrapStatus: z.enum([
+      "not_implemented",
+      "pending",
+      "unknown",
+      "applied",
+    ]),
+    bootstrapReceipt: hyperVGuestBootstrapReceiptSchema.optional(),
   })
   .strict()
   .superRefine((value, ctx) => {
+    if (
+      (value.bootstrapStatus === "applied") !==
+      (value.bootstrapReceipt !== undefined)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Applied bootstrap requires its receipt",
+      });
+    if (
+      value.bootstrapReceipt &&
+      (value.presence !== "present" ||
+        value.bootstrapReceipt.vmId !== value.vm?.id)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Bootstrap receipt must belong to the present native VM",
+      });
     if (value.presence === "present" && !value.vm)
       ctx.addIssue({
         code: "custom",
@@ -100,6 +175,12 @@ export const hyperVRuntimeFactsSchema = hyperVNativeFactsSchema.extend({
 export type HyperVRuntimeFacts = z.infer<typeof hyperVRuntimeFactsSchema>;
 
 export const hyperVRuntimeActionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({
+      kind: z.literal("bootstrap.apply"),
+      request: hyperVGuestBootstrapRequestSchema,
+    })
+    .strict(),
   z
     .object({ kind: z.literal("reconcile"), request: hyperVRequestSchema })
     .strict(),
@@ -151,7 +232,7 @@ export type HyperVRuntimeActionRequest = z.infer<
   typeof hyperVRuntimeActionRequestSchema
 >;
 export function hyperVActionIdentity(action: HyperVRuntimeAction) {
-  return action.kind === "reconcile"
+  return action.kind === "reconcile" || action.kind === "bootstrap.apply"
     ? action.request.identity
     : action.identity;
 }

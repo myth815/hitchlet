@@ -98,6 +98,10 @@ beforeEach(async () => {
       calls.push("reconcile");
       return reconcileHook(request);
     },
+    bootstrapApply: async () => {
+      calls.push("bootstrap.apply");
+      return inspection;
+    },
     stop: async () => {
       calls.push("stop");
       return inspection;
@@ -377,8 +381,21 @@ it("connects the controller client through the existing real mTLS transport, wit
   });
   expect(await client.inspect(identity)).toEqual(inspection);
   expect(await client.facts()).toEqual(facts);
-  expect(calls).toEqual(["inspect"]);
+  const request = {
+    identity,
+    vmId: "11111111-1111-4111-8111-111111111111",
+    nonce: "bootstrap-nonce-0123456789",
+    account: "workspace",
+    guestOs: "windows" as const,
+    architecture: "amd64" as const,
+    clientPublicKey: "ssh-ed25519 " + "A".repeat(68),
+    clientPublicKeyFingerprint: "SHA256:" + "A".repeat(43),
+  };
+  expect((await client.bootstrapApply(request)).bootstrapStatus).toBe(
+    "not_implemented",
+  );
+  expect(calls).toEqual(["inspect", "bootstrap.apply"]);
   token = "revoked-fixture-token";
   await expect(client.destroy(identity)).rejects.toThrow();
-  expect(calls).toEqual(["inspect"]);
+  expect(calls).toEqual(["inspect", "bootstrap.apply"]);
 });

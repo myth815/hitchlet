@@ -9,6 +9,7 @@ import {
   type VmAllocationIdentity as HyperVAllocationIdentity,
   type HyperVInspection,
   type HyperVRequest,
+  type HyperVGuestBootstrapRequest,
   type HyperVRuntimeAction,
   type HyperVRuntimeFacts,
 } from "@hitchlet/contracts/internal";
@@ -51,6 +52,12 @@ export class HyperVRuntimeHttpClient {
     return this.action({ kind: "reconcile", request });
   }
 
+  bootstrapApply(
+    request: HyperVGuestBootstrapRequest,
+  ): Promise<HyperVInspection> {
+    return this.action({ kind: "bootstrap.apply", request });
+  }
+
   stop(identity: HyperVAllocationIdentity): Promise<HyperVInspection> {
     return this.action({ kind: "stop", identity });
   }
@@ -82,7 +89,9 @@ export class HyperVRuntimeHttpClient {
     );
     const actionBudgetMs = actionDeadlineMs - now;
     const identity =
-      action.kind === "reconcile" ? action.request.identity : action.identity;
+      action.kind === "reconcile" || action.kind === "bootstrap.apply"
+        ? action.request.identity
+        : action.identity;
     const request = hyperVRuntimeActionRequestSchema.parse({
       requestNonce: randomUUID(),
       deadline: new Date(actionDeadlineMs).toISOString(),
