@@ -2,6 +2,8 @@
 
 This note separates the isolated StudioARM evidence collected on 2026-11-02 from this source revision. It is a preparation record, not a release or a new acceptance report.
 
+2026-11-03 update: the explicit build-write authorization succeeded; the Colima label was diagnosed as a sandbox metadata-read failure, and one current-candidate real lifecycle completed with cleanup. Exact artifacts, the startup compatibility fix, evidence and limits are in [the candidate acceptance receipt](STUDIO-ARM-RC-2026-11-03.md). The preparation constraints below describe the earlier checkpoint and the procedure for future candidates.
+
 ## What the evidence establishes
 
 The 2026-11-02 isolated Studio Engine run exercised the `colima-hitchlet-studio-acceptance` context and the `hitchlet-studio-acceptance` profile. Its Colima VM was configured for 6 CPUs and 8 GiB; the default Docker context was not changed. The report covered an isolated Engine/profile, pinned artifact digest, real SSH, renew, output persistence/hash, release proof, and reclamation. It did not use NAS media. The latest acceptance stack was stopped after the run. These results describe that recorded environment and source only.
