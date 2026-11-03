@@ -1,5 +1,10 @@
 import { z } from "zod";
 import { tartNetworkPlanSchema } from "./tart-network.js";
+import {
+  vmAllocationIdentitySchema,
+  vmResourceSpecSchema,
+} from "./vm-runtime-identity.js";
+export { vmAllocationOwnerTuple as tartAllocationOwnerTuple } from "./vm-runtime-identity.js";
 
 const id = z.string().min(1).max(200);
 const fingerprint = z.string().regex(/^SHA256:[A-Za-z0-9+/]{20,44}={0,2}$/);
@@ -17,18 +22,7 @@ const nonce = z
   .regex(/^[A-Za-z0-9_-]+$/);
 
 /** Allocation ownership identity; operation/control version are fences, not owner keys. */
-export const tartAllocationIdentitySchema = z
-  .object({
-    installationId: id,
-    runtimeIdentityId: id,
-    connectionRevisionId: id,
-    allocationId: id,
-    generation: z.number().int().positive(),
-    operationId: id,
-    controlVersion: z.number().int().positive(),
-    purpose: z.enum(["tenant", "validation"]),
-  })
-  .strict();
+export const tartAllocationIdentitySchema = vmAllocationIdentitySchema;
 
 /** A preinstalled local Tart template. configSha256 covers config.json only, not VM disks. */
 export const tartLocalTemplateRefSchema = z
@@ -41,12 +35,7 @@ export const tartLocalTemplateRefSchema = z
   })
   .strict();
 
-export const tartResourceSpecSchema = z
-  .object({
-    cpus: z.number().int().min(1).max(64),
-    memoryMiB: z.number().int().min(512).max(1_048_576),
-  })
-  .strict();
+export const tartResourceSpecSchema = vmResourceSpecSchema;
 
 /** Contains client public material only. No private key, password, or passphrase is accepted. */
 export const tartGuestBootstrapRequestSchema = z
@@ -294,20 +283,6 @@ export type TartNetworkCleanupReceipt = z.infer<
   typeof tartNetworkCleanupReceiptSchema
 >;
 export type TartInspection = z.infer<typeof tartInspectionSchema>;
-
-/** Stable owner-key components shared by the Tart provider and local driver. */
-export function tartAllocationOwnerTuple(
-  identity: TartAllocationIdentity,
-): readonly [string, string, string, string, number, "tenant" | "validation"] {
-  return [
-    identity.installationId,
-    identity.runtimeIdentityId,
-    identity.connectionRevisionId,
-    identity.allocationId,
-    identity.generation,
-    identity.purpose,
-  ];
-}
 
 function sameImmutableTartAllocation(
   left: TartAllocationIdentity,

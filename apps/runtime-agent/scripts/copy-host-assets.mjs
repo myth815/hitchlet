@@ -12,3 +12,8 @@ await copyFile(
   resolve("src/drivers/tart-guest-bootstrap.cjs"),
   resolve("dist/drivers/tart-guest-bootstrap.cjs"),
 );
+
+await copyFile(
+  resolve("src/drivers/hyperv-local.ps1"),
+  resolve("dist/drivers/hyperv-local.ps1"),
+);

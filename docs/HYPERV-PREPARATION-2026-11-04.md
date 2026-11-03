@@ -14,7 +14,7 @@
 
 ## 当前代码到哪一步
 
-公开请求已独立表达kind、guestOs、architecture、资源；统一Ticket/Operation/Lease/Claim与恢复存在。执行注册仅portainer/tart/simulator；尚无Hyper-V driver、Runtime通道、可信初始化或正式发布/资格接线。Windows Host观测/电源脚本不提供Hyper-V生命周期。
+公开请求已独立表达kind、guestOs、architecture、资源；统一Ticket/Operation/Lease/Claim与恢复存在。执行注册仅portainer/tart/simulator；现已增加[Hyper-V原生生命周期内核](HYPERV-NATIVE-KERNEL.md)与受控回归；仍无正式Runtime通道、可信guest初始化或ExecutionPort注册/发布资格接线。Windows Host观测/电源脚本不提供Hyper-V生命周期。
 
 首轮仍走现有ExecutionProvider接口，不增加消费者的hyperv参数或通用插件框架。现有Tart源码是生命周期和身份校验的参考，不能把tart-exec、launchd、Linux UID或ARM模板直接套到Windows。
 
@@ -33,4 +33,4 @@
 - 未枚举到可用switch。功能启用后先只读核既有可用NAT/Default Switch；能复用则复用，不先创建External Switch、改物理网卡、全局firewall或影响WSL/既有负载。
 - 工作根仍需落在明确的owned E盘子目录；没有创建目录/VM或改ACL。当前管理员token证明读取已成功，不是后续系统变更的自动批准。
 
-源实现与针对性夹具可在这些步骤前独立推进；但当前没有宿主后端可用事实，也没有合适guest模板，因此不新增未接线的“支持”占位或拿模拟当实机。下一批应以已有provider契约的单guest垂直切片为界，不先做快照池、强隔离或大型VM编排。
+内部生命周期源实现和47项相关回归已独立完成；当前没有宿主后端可用事实，也没有合适guest模板，因此不注册可租“支持”或拿受控回归当实机。下一批应以已有provider契约的单guest垂直切片为界，不先做快照池、强隔离或大型VM编排。

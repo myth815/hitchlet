@@ -27,3 +27,5 @@ export * from "./power-execution.js";
 export * from "./tart-runtime.js";
 export * from "./tart-network.js";
 export * from "./tart-transport.js";
+
+export * from "./vm-runtime-identity.js";
