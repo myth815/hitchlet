@@ -8,7 +8,10 @@ import { openStorage } from "../dist/storage/index.js";
 import { TicketService } from "../src/application/tickets.js";
 import { TicketQueries } from "../src/application/queries.js";
 import { LeaseService } from "../src/application/leases.js";
-import { OperationWorker } from "../src/application/operations.js";
+import {
+  AllocationCreateCalls,
+  OperationWorker,
+} from "../src/application/operations.js";
 import { ImageCacheWorker } from "../src/application/image-cache.js";
 import type { ImageCacheExecutionPort } from "../src/providers/image-cache-port.js";
 import { SQLiteImageValidationStore } from "../src/storage/image-validation-store.js";
@@ -60,11 +63,13 @@ async function fixture(withRenewal = true) {
     installationId: installation.installation_id,
     now,
   });
+  const createCalls = new AllocationCreateCalls();
   const worker = new OperationWorker({
     storage,
     installationId: installation.installation_id,
     execution: new PersistentSimulator(join(dir, "external")),
     now,
+    createCalls,
   });
   const leases = new LeaseService(storage, now);
   const accepted = await tickets.acquire(consumerId, "f1-acquire", {
@@ -95,6 +100,8 @@ async function fixture(withRenewal = true) {
     storage,
     leases,
     worker,
+    installationId: installation.installation_id,
+    createCalls,
     tickets,
     externalDir: join(dir, "external"),
     now,
@@ -377,6 +384,133 @@ describe("lease decision scheduling alongside slow work", () => {
       cacheGate.resolve();
       await loops.close();
     }
+  });
+
+  it("keeps recovery unavailable until the independent cleanup lane succeeds", async () => {
+    let mainHealthy = false;
+    let cleanupHealthy = false;
+    let failCleanup = false;
+    let cleanupFailures = 0;
+    const mainAfterCleanupFailure = deferred();
+    const cleanupFailed = deferred();
+    const cleanupRecovered = deferred();
+    const initialRecovery = deferred();
+    const recoveryState = () =>
+      mainHealthy && cleanupHealthy ? "ready" : "unavailable";
+    const loops = new ControllerBackgroundLoops({
+      refreshObservations: async () => undefined,
+      reconcile: async () => undefined,
+      reconcileCleanup: async () => {
+        if (failCleanup) throw new Error("cleanup lane unavailable");
+      },
+      reconcileLeaseIntents: async () => undefined,
+      onReconcileSuccess: () => {
+        mainHealthy = true;
+        if (cleanupFailures > 0) mainAfterCleanupFailure.resolve();
+        if (recoveryState() === "ready") initialRecovery.resolve();
+      },
+      onLeaseSuccess: () => undefined,
+      onCleanupSuccess: () => {
+        cleanupHealthy = true;
+        if (cleanupFailures > 0) cleanupRecovered.resolve();
+        if (recoveryState() === "ready") initialRecovery.resolve();
+      },
+      onFailure: (kind, error) => {
+        if (kind !== "cleanup")
+          throw new Error(`${kind} failed`, { cause: error });
+        cleanupFailures++;
+        cleanupHealthy = false;
+        cleanupFailed.resolve();
+      },
+      reconcileIntervalMs: 5,
+      cleanupIntervalMs: 20,
+    });
+    loops.start();
+    await initialRecovery.promise;
+    expect(recoveryState()).toBe("ready");
+
+    failCleanup = true;
+    await cleanupFailed.promise;
+    await mainAfterCleanupFailure.promise;
+    expect(recoveryState()).toBe("unavailable");
+
+    failCleanup = false;
+    await cleanupRecovered.promise;
+    expect(recoveryState()).toBe("ready");
+    await loops.close();
+  });
+
+  it("runs one cleanup beside a held create and keeps the same-allocation fence", async () => {
+    const f = await fixture(false);
+    const lease = await f.storage.get<{ expires_at_ms: bigint }>(
+      "SELECT expires_at_ms FROM leases WHERE ticket_id=?",
+      [f.ticketId],
+    );
+    if (!lease) throw new Error("Ready ticket has no confirmed lease");
+    f.setTime(Number(lease.expires_at_ms));
+    await f.worker.expireDue();
+    const allocation = await f.storage.get<{ id: string }>(
+      "SELECT id FROM allocations WHERE ticket_id=?",
+      [f.ticketId],
+    );
+    if (!allocation) throw new Error("Expired ticket has no allocation");
+    const cleanup = await f.storage.get<{ id: string }>(
+      "SELECT id FROM operations WHERE allocation_id=? AND kind='allocation.cleanup'",
+      [allocation.id],
+    );
+    if (!cleanup) throw new Error("Expired ticket has no cleanup intent");
+    const ownerA = "held-create-a";
+    f.createCalls.enter(`${f.installationId}:${ownerA}`);
+    f.createCalls.enter(`${f.installationId}:${allocation.id}`);
+    expect(await f.worker.reconcileCleanupLane()).toBe(1);
+    expect(
+      await f.storage.get<{ state: string; diagnostic: string }>(
+        "SELECT state,json_extract(result_json,'$.diagnostic') AS diagnostic FROM operations WHERE id=?",
+        [cleanup.id],
+      ),
+    ).toEqual({ state: "unknown", diagnostic: "create_call_in_flight" });
+    f.createCalls.leave(`${f.installationId}:${allocation.id}`);
+    f.setTime(Number(lease.expires_at_ms) + 3_000);
+
+    const mainGate = deferred();
+    const mainStarted = deferred();
+    const cleanupFinished = deferred();
+    const loops = new ControllerBackgroundLoops({
+      refreshObservations: async () => undefined,
+      reconcile: async () => {
+        mainStarted.resolve();
+        await mainGate.promise;
+      },
+      reconcileCleanup: async () => {
+        await f.worker.reconcileCleanupLane();
+        const ticket = await f.storage.get<{ phase: string }>(
+          "SELECT phase FROM tickets WHERE id=?",
+          [f.ticketId],
+        );
+        if (ticket?.phase === "released") cleanupFinished.resolve();
+      },
+      reconcileLeaseIntents: async () => undefined,
+      onReconcileSuccess: () => undefined,
+      onLeaseSuccess: () => undefined,
+      onFailure: (kind, error) => {
+        throw new Error(`${kind} failed`, { cause: error });
+      },
+      reconcileIntervalMs: 2_000,
+    });
+    loops.start();
+    await mainStarted.promise;
+    await cleanupFinished.promise;
+    expect(f.createCalls.has(`${f.installationId}:${ownerA}`)).toBe(true);
+    expect(
+      await f.storage.get<{ phase: string; cleanup_status: string }>(
+        "SELECT phase,cleanup_status FROM tickets WHERE id=?",
+        [f.ticketId],
+      ),
+    ).toEqual({ phase: "released", cleanup_status: "complete" });
+    const closing = loops.close();
+    mainGate.resolve();
+    await closing;
+    f.createCalls.leave(`${f.installationId}:${ownerA}`);
   });
 
   it("persists an expired renewal termination intent while main reconciliation remains blocked", async () => {

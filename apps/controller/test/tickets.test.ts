@@ -2916,13 +2916,28 @@ describe("Tart VM ticket ledger integration", () => {
     let cloneCount = 0;
     let loseFirstBootstrapResponse = true;
     let cleanupInventoryUnknown = false;
+    let auditInventoryUnknown = false;
     const runtime = {
       async inspect(identity: TartAllocationIdentity): Promise<TartInspection> {
+        if (auditInventoryUnknown)
+          return {
+            presence: "unknown",
+            identity,
+            reason: "synthetic audit inventory unavailable",
+          };
         if (cleanupInventoryUnknown)
           return {
             presence: "unknown",
             identity,
             reason: "synthetic cleanup inventory unavailable",
+          };
+        if (observation?.presence === "present")
+          observation = {
+            ...observation,
+            network: {
+              ...observation.network,
+              observedAt: new Date(clock).toISOString(),
+            },
           };
         return structuredClone(
           observation ?? {
@@ -3288,6 +3303,47 @@ describe("Tart VM ticket ledger integration", () => {
         ticket.ticketId,
       ]),
     ).toMatchObject({ phase: "ready" });
+
+    expect(await worker.reconcile()).toBe(1);
+    expect(
+      await storage.get<{ state: string }>(
+        "SELECT json_extract(result_json,'$.integrity.state') AS state FROM operations WHERE id=?",
+        [operation?.id],
+      ),
+    ).toEqual({ state: "healthy" });
+    clock += 30_001;
+    auditInventoryUnknown = true;
+    expect(await worker.reconcile()).toBe(1);
+    expect(
+      await storage.get<{ state: string }>(
+        "SELECT json_extract(result_json,'$.integrity.state') AS state FROM operations WHERE id=?",
+        [operation?.id],
+      ),
+    ).toEqual({ state: "unknown" });
+    auditInventoryUnknown = false;
+    clock += 30_001;
+    expect(await worker.reconcile()).toBe(1);
+    expect(
+      await storage.get<{ state: string }>(
+        "SELECT json_extract(result_json,'$.integrity.state') AS state FROM operations WHERE id=?",
+        [operation?.id],
+      ),
+    ).toEqual({ state: "healthy" });
+    expect(
+      await storage.get<{
+        phase: string;
+        lease_state: string;
+        observed_state: string;
+        expires_at_ms: bigint;
+      }>(
+        "SELECT t.phase,l.state AS lease_state,a.observed_state,l.expires_at_ms FROM tickets t JOIN leases l ON l.ticket_id=t.id JOIN allocations a ON a.id=l.allocation_id WHERE t.id=?",
+        [ticket.ticketId],
+      ),
+    ).toMatchObject({
+      phase: "ready",
+      lease_state: "active",
+      observed_state: "running",
+    });
 
     const claim = await leases.renew(
       consumerId,

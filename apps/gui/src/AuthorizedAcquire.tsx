@@ -37,7 +37,9 @@ export function AuthorizedAcquire({
     }),
     [ttl, setTtl] = React.useState(900),
     [node, setNode] = React.useState(""),
-    [architecture, setArchitecture] = React.useState(""),
+    [architecture, setArchitecture] = React.useState<"" | "amd64" | "arm64">(
+      "",
+    ),
     [hardScratch, setHardScratch] = React.useState(false),
     [clientRef, setClientRef] = React.useState(""),
     [requiredCapabilities, setCapabilities] = React.useState<
@@ -50,6 +52,14 @@ export function AuthorizedAcquire({
     [error, setError] = React.useState(""),
     [previewing, setPreviewing] = React.useState(false);
   const selected = catalog.data?.versions.find((v) => v.id === versionId);
+  const availableArchitectures =
+    selected?.platforms
+      .filter((platform) => platform.kind === kind)
+      .map((platform) => platform.architecture) ?? [];
+  React.useEffect(() => {
+    if (architecture && !availableArchitectures.includes(architecture))
+      setArchitecture("");
+  }, [architecture, availableArchitectures.join("|")]);
   React.useEffect(() => {
     if (catalog.data) {
       if (!versionId && catalog.data.versions[0]) {
@@ -80,7 +90,7 @@ export function AuthorizedAcquire({
     storage: mounts,
     locality: "local_only",
     ...(node ? { allowedNodeIds: [node] } : {}),
-    ...(architecture
+    ...(architecture && availableArchitectures.includes(architecture)
       ? { allowedArchitectures: [architecture as "amd64" | "arm64"] }
       : {}),
     requiredCapabilities,
@@ -279,7 +289,9 @@ export function AuthorizedAcquire({
               CPU 架构
               <select
                 value={architecture}
-                onChange={(e) => setArchitecture(e.target.value)}
+                onChange={(e) =>
+                  setArchitecture(e.target.value as "" | "amd64" | "arm64")
+                }
               >
                 <option value="">版本可用架构</option>
                 {[

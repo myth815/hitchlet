@@ -84,6 +84,8 @@ export type ProvisionPlan = Readonly<{
   }>;
   /** Cleanup has its own short command deadline; the create deadline stays frozen. */
   executionPhase?: "provision" | "cleanup" | "observe";
+  /** Saved ready evidence supplied only to read-only integrity observation. */
+  integritySnapshot?: unknown;
   /** In-memory proof inputs for the exact durable cleanup operation holding this plan. */
   cleanupAuthorization?: Readonly<{
     cleanupOperationId: string;

@@ -11,6 +11,7 @@ import {
   tartNetworkObservationSchema,
   tartNetworkPlanSchema,
   tartAllocationOwnerTuple,
+  tartAllocationIdentitySchema,
   type EffectiveResources,
   type TartAllocationIdentity,
   type TartGuestBootstrapReceipt,
@@ -264,6 +265,13 @@ export class TartExecutionProvider implements ExecutionPort {
           identity: plan.identity,
         },
       };
+    if (plan.executionPhase === "observe") {
+      if (!sameProvisionIdentity(observed.identity, identity))
+        return { presence: "unknown", reason: "inventory_incomplete" };
+      if (!isResolvedTartRuntime(resolved))
+        return { presence: "unknown", reason: "runtime_identity_mismatch" };
+      return this.inspectIntegrity(plan, resolved, observed);
+    }
     if (!this.vmObservationMatches(observed, plan, resolved))
       return { presence: "unknown", reason: "inventory_incomplete" };
     const object = this.ownedVm(plan, resolved, observed);
@@ -552,6 +560,142 @@ export class TartExecutionProvider implements ExecutionPort {
     return resolved;
   }
 
+  private async inspectIntegrity(
+    plan: ProvisionPlan,
+    resolved: ResolvedTartRuntime,
+    observed: Extract<TartInspection, { presence: "present" }>,
+  ): Promise<Inspection> {
+    const evidence: InventoryEvidence = {
+      completeness: "complete",
+      runtime: runtimeBinding(plan),
+      identity: plan.identity,
+      objects: [this.ownedVm(plan, resolved, observed)],
+    };
+    const unknown = (): Inspection => ({
+      presence: "unknown",
+      reason: "inventory_incomplete",
+    });
+    const lost = (reason: string): Inspection => ({
+      presence: "present",
+      evidence,
+      integrity: { state: "lost", reason },
+    });
+    if (resolved.artifactDigest !== plan.artifact.digest) return unknown();
+    if (observed.vmName !== tartVmName(tartIdentity(plan)))
+      return lost("TART_VM_IDENTITY_MISMATCH");
+    if (observed.state !== "running") return lost("TART_VM_NOT_RUNNING");
+    if (
+      observed.resources.cpus !== tartResources(plan).cpus ||
+      observed.resources.memoryMiB !== tartResources(plan).memoryMiB
+    )
+      return lost("TART_VM_RESOURCE_MISMATCH");
+    if (observed.networkCleanupReceipt) {
+      const receipt = observed.networkCleanupReceipt;
+      if (!sameProvisionIdentity(receipt.identity, plan.identity))
+        return unknown();
+      if (receipt.status === "removed" || receipt.status === "process_exited")
+        return lost("TART_NETWORK_REVOKED");
+    }
+    if (
+      observed.bootstrapStatus === "unknown" ||
+      observed.bootstrapStatus === "pending"
+    )
+      return unknown();
+    if (observed.bootstrapStatus !== "applied" || !observed.bootstrapReceipt)
+      return lost("TART_BOOTSTRAP_NOT_APPLIED");
+    const bootstrap = tartGuestBootstrapReceiptSchema.parse(
+      observed.bootstrapReceipt,
+    );
+    if (bootstrap.status !== "applied") return unknown();
+    if (!sameProvisionIdentity(bootstrap.identity, plan.identity))
+      return unknown();
+
+    const saved = readyReceiptSnapshot(plan.integritySnapshot);
+    if (!saved) return unknown();
+    const savedIdentity = recordValue(saved.identity);
+    const savedAccess = recordValue(saved.access);
+    let parsedSavedIdentity: TartAllocationIdentity;
+    try {
+      parsedSavedIdentity = tartAllocationIdentitySchema.parse(savedIdentity);
+    } catch {
+      return unknown();
+    }
+    if (
+      !savedIdentity ||
+      !savedAccess ||
+      !sameProvisionIdentity(parsedSavedIdentity, plan.identity) ||
+      saved.artifactDigest !== plan.artifact.digest ||
+      saved.contractHash !== plan.resolved.contractHash ||
+      saved.networkRevisionId !== plan.resolved.network.revisionId ||
+      saved.networkContractHash !== sha256(plan.resolved.network)
+    )
+      return unknown();
+    const username = savedAccess.username;
+    const hostFingerprint = savedAccess.hostKeyFingerprint;
+    const clientFingerprint = savedAccess.clientPublicKeyFingerprint;
+    if (
+      typeof username !== "string" ||
+      typeof hostFingerprint !== "string" ||
+      typeof clientFingerprint !== "string"
+    )
+      return unknown();
+    if (
+      bootstrap.nonce !== expectedBootstrapNonce(plan) ||
+      bootstrap.account !== plan.access.account ||
+      username !== plan.access.account ||
+      bootstrap.clientPublicKeyFingerprint !== clientFingerprint ||
+      bootstrap.hostKeyFingerprint !== hostFingerprint
+    )
+      return lost("TART_BOOTSTRAP_RECEIPT_MISMATCH");
+    const receiptObservedAt = Date.parse(bootstrap.observedAt);
+    const receiptEvidenceExpiry = Date.parse(
+      bootstrap.networkEvidenceExpiresAt,
+    );
+    if (
+      !Number.isFinite(receiptObservedAt) ||
+      !Number.isFinite(receiptEvidenceExpiry) ||
+      receiptObservedAt > this.now() ||
+      receiptEvidenceExpiry <= receiptObservedAt
+    )
+      return unknown();
+
+    if (observed.network.status === "unknown") {
+      if (
+        observed.network.reason === "network_policy_revoked" ||
+        observed.network.reason === "network_policy_readback_mismatch"
+      )
+        return lost("TART_NETWORK_POLICY_MISMATCH");
+      return unknown();
+    }
+    const expectedNetwork = tartNetworkPlanFor(plan);
+    if (!sameProvisionIdentity(observed.network.identity, plan.identity))
+      return unknown();
+    if (
+      observed.network.revisionId !== expectedNetwork.revisionId ||
+      observed.network.contractHash !== expectedNetwork.contractHash ||
+      observed.network.vm.vmName !== observed.vmName
+    )
+      return lost("TART_NETWORK_POLICY_MISMATCH");
+    let currentNetwork: TartNetworkEvidence;
+    try {
+      currentNetwork = await this.networkEvidence(
+        {
+          ...plan,
+          deadlineMs: Math.min(
+            plan.deadlineMs,
+            this.now() + EVIDENCE_MAX_AGE_MS,
+          ),
+        },
+        observed,
+      );
+    } catch {
+      return unknown();
+    }
+    if (bootstrap.networkEvidenceReference !== currentNetwork.reference)
+      return lost("TART_BOOTSTRAP_NETWORK_MISMATCH");
+    return { presence: "present", evidence, integrity: { state: "healthy" } };
+  }
+
   private async networkEvidence(
     plan: ProvisionPlan,
     observed: Extract<TartInspection, { presence: "present" }>,
@@ -737,6 +881,15 @@ function assertNetworkCleanupReceipt(
       throw new Error("Tart network never-started receipt is not owned");
     return "never_installed";
   }
+  if (receipt.status === "process_exited") {
+    if (
+      receipt.vm.vmName !== tartVmName(tartIdentity(plan)) ||
+      receipt.processExitObserved !== true ||
+      receipt.vmStopped !== true
+    )
+      throw new Error("Tart stopped-process receipt is not owned");
+    return "removed";
+  }
   if (
     receipt.status !== "removed" ||
     receipt.vm.vmName !== tartVmName(tartIdentity(plan)) ||
@@ -899,19 +1052,7 @@ function makeBootstrapRequest(
 ): TartGuestBootstrapRequest {
   if (fingerprint(clientPublicKey) !== clientPublicKeyFingerprint)
     throw new Error("Tart client key material does not match its fingerprint");
-  const nonce = createHash("sha256")
-    .update(
-      JSON.stringify([
-        identity.installationId,
-        identity.runtimeIdentityId,
-        identity.connectionRevisionId,
-        identity.allocationId,
-        identity.generation,
-        identity.purpose,
-        plan.resolved.contractHash,
-      ]),
-    )
-    .digest("base64url");
+  const nonce = expectedBootstrapNonce(plan);
   return tartGuestBootstrapRequestSchema.parse({
     identity,
     nonce,
@@ -984,6 +1125,54 @@ function hashSoftnetReadback(readback: {
     allow: [...readback.allow].sort(),
     block: [...readback.block].sort(),
   })}`;
+}
+
+function readyReceiptSnapshot(
+  value: unknown,
+): Record<string, unknown> | undefined {
+  const snapshot =
+    typeof value === "string"
+      ? (() => {
+          try {
+            return recordValue(JSON.parse(value));
+          } catch {
+            return undefined;
+          }
+        })()
+      : recordValue(value);
+  return snapshot ? recordValue(snapshot.receipt) : undefined;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | undefined {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function isResolvedTartRuntime(
+  value: ResolvedTartRuntime | ResolvedTartCleanupRuntime,
+): value is ResolvedTartRuntime {
+  return (
+    "template" in value &&
+    tartLocalTemplateRefSchema.safeParse(value.template).success
+  );
+}
+
+function expectedBootstrapNonce(plan: ProvisionPlan): string {
+  const identity = tartIdentity(plan);
+  return createHash("sha256")
+    .update(
+      JSON.stringify([
+        identity.installationId,
+        identity.runtimeIdentityId,
+        identity.connectionRevisionId,
+        identity.allocationId,
+        identity.generation,
+        identity.purpose,
+        plan.resolved.contractHash,
+      ]),
+    )
+    .digest("base64url");
 }
 
 function sameJson(left: unknown, right: unknown): boolean {

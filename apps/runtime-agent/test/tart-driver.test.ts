@@ -7,6 +7,7 @@ import {
   rm,
   writeFile,
 } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
@@ -124,15 +125,40 @@ it.skipIf(!supportsTartHost)(
     expect(
       await recovered.revokeNetwork(cleanup, (await makeRequest(root)).network),
     ).toMatchObject({ presence: "unknown" });
+    const cleanupNetwork = (await makeRequest(root)).network;
+    expect(await driver.revokeNetwork(cleanup, cleanupNetwork)).toMatchObject({
+      presence: "present",
+      networkCleanupReceipt: { status: "removed", processExitObserved: true },
+    });
+    expect(await driver.revokeNetwork(cleanup, cleanupNetwork)).toMatchObject({
+      presence: "present",
+      networkCleanupReceipt: { status: "removed", processExitObserved: true },
+    });
+    const ownedConfigPath = join(
+      root,
+      "tart-home",
+      "vms",
+      expectedName(identity),
+      "config.json",
+    );
+    const originalConfig = await readFile(ownedConfigPath, "utf8");
+    const changedConfig = JSON.parse(originalConfig) as Record<string, unknown>;
+    changedConfig.macAddress = "02:00:00:00:00:99";
+    await writeFile(ownedConfigPath, JSON.stringify(changedConfig));
+    expect(await driver.revokeNetwork(cleanup, cleanupNetwork)).toMatchObject({
+      presence: "unknown",
+      reason: "network_release_vm_stop_not_verified",
+    });
+    await writeFile(ownedConfigPath, originalConfig);
+    await driver.close();
+    await recovered.close();
+    recovered = makeDriver(root);
     expect(
-      await driver.revokeNetwork(cleanup, (await makeRequest(root)).network),
+      await recovered.revokeNetwork(cleanup, cleanupNetwork),
     ).toMatchObject({
       presence: "present",
       networkCleanupReceipt: { status: "removed", processExitObserved: true },
     });
-    await driver.close();
-    await recovered.close();
-    recovered = makeDriver(root);
     expect(await recovered.destroy(cleanup)).toMatchObject({
       presence: "absent",
       inventoryCompleteness: "complete",
@@ -141,6 +167,83 @@ it.skipIf(!supportsTartHost)(
       presence: "absent",
     });
     await recovered.close();
+  },
+);
+
+it.skipIf(!supportsTartHost)(
+  "records process exit after a tracked network control channel fails and replays it across restart",
+  async () => {
+    const root = await setupFixture();
+    const request = await makeRequest(root);
+    const driver = makeDriver(root);
+    expect(await driver.reconcile(request)).toMatchObject({
+      presence: "present",
+      state: "running",
+    });
+    await writeFile(
+      join(root, "tart-home", "softnet-disconnected-marker"),
+      "1",
+    );
+    const cleanup = {
+      ...identity,
+      operationId: "cleanup-channel-loss",
+      controlVersion: 2,
+    };
+    const first = await driver.revokeNetwork(cleanup, request.network);
+    expect(first).toMatchObject({
+      presence: "present",
+      networkCleanupReceipt: {
+        status: "process_exited",
+        processExitObserved: true,
+        vmStopped: true,
+      },
+    });
+    expect(first).not.toHaveProperty("networkCleanupReceipt.readback");
+    expect(first).not.toHaveProperty("networkCleanupReceipt.policyHash");
+    expect(await driver.revokeNetwork(cleanup, request.network)).toMatchObject({
+      presence: "present",
+      networkCleanupReceipt: { status: "process_exited", vmStopped: true },
+    });
+    await driver.close();
+    const recovered = makeDriver(root);
+    expect(
+      await recovered.revokeNetwork(cleanup, request.network),
+    ).toMatchObject({
+      presence: "present",
+      networkCleanupReceipt: { status: "process_exited", vmStopped: true },
+    });
+    expect(await recovered.destroy(cleanup)).toMatchObject({
+      presence: "absent",
+      inventoryCompleteness: "complete",
+    });
+    await recovered.close();
+  },
+);
+
+it.skipIf(!supportsTartHost)(
+  "keeps cleanup unknown when the network control channel and Tart stop both fail",
+  async () => {
+    const root = await setupFixture();
+    const request = await makeRequest(root);
+    const driver = makeDriver(root);
+    expect(await driver.reconcile(request)).toMatchObject({
+      presence: "present",
+      state: "running",
+    });
+    await Promise.all([
+      writeFile(join(root, "tart-home", "softnet-disconnected-marker"), "1"),
+      writeFile(join(root, "tart-home", "stop-failure-marker"), "1"),
+    ]);
+    expect(
+      await driver.revokeNetwork(
+        { ...identity, operationId: "cleanup-stop-failure", controlVersion: 2 },
+        request.network,
+      ),
+    ).toMatchObject({
+      presence: "unknown",
+      reason: "network_control_unavailable",
+    });
+    await driver.close();
   },
 );
 
@@ -550,9 +653,13 @@ const syntheticNetworkAdapter: TartNetworkAdapter = {
       exit,
       startedAt: new Date().toISOString(),
       async getPolicy() {
+        if (existsSync(join(home, "softnet-disconnected-marker")))
+          throw new Error("synthetic_softnet_channel_disconnected");
         return current;
       },
       async setPolicy(allow, block) {
+        if (existsSync(join(home, "softnet-disconnected-marker")))
+          throw new Error("synthetic_softnet_channel_disconnected");
         current = {
           allow: [...allow],
           block: [...block],
@@ -674,7 +781,7 @@ else if(args[0]==='exec'){let input='';process.stdin.setEncoding('utf8');process
 else if(args[0]==='clone'){fs.cpSync(vm(args[1]),vm(args[2]),{recursive:true,errorOnExist:true});const c=JSON.parse(fs.readFileSync(config(args[2]),'utf8'));if(!fs.existsSync(path.join(home,'preserve-clone-mac-marker')))c.macAddress='02:00:00:00:00:22';fs.writeFileSync(config(args[2]),JSON.stringify(c));}
 else if(args[0]==='set'){const c=JSON.parse(fs.readFileSync(config(args[1]),'utf8'));c.cpuCount=Number(args[args.indexOf('--cpu')+1]);c.memorySize=Number(args[args.indexOf('--memory')+1])*1024*1024;fs.writeFileSync(config(args[1]),JSON.stringify(c));}
 else if(args[0]==='run'){fs.writeFileSync(path.join(vm(args[2]),'run.pid'),String(process.pid));process.on('SIGINT',()=>{if(!fs.existsSync(path.join(home,'keep-run-marker'))){try{fs.unlinkSync(path.join(vm(args[2]),'run.pid'))}catch{}}process.exit(0)});setInterval(()=>{},1000);}
-else if(args[0]==='ip')process.stdout.write('192.0.2.10\\n');else if(args[0]==='stop'){const p=path.join(vm(args[args.length-1]),'run.pid');if(fs.existsSync(p)){try{process.kill(Number(fs.readFileSync(p,'utf8')),'SIGINT')}catch{}}}else if(args[0]==='delete')fs.rmSync(vm(args[1]),{recursive:true});else process.exit(64);`;
+else if(args[0]==='ip')process.stdout.write('192.0.2.10\\n');else if(args[0]==='stop'){if(fs.existsSync(path.join(home,'stop-failure-marker'))){process.stderr.write('synthetic_stop_failure');process.exitCode=1}else{const p=path.join(vm(args[args.length-1]),'run.pid');if(fs.existsSync(p)){try{process.kill(Number(fs.readFileSync(p,'utf8')),'SIGINT')}catch{}}}}else if(args[0]==='delete')fs.rmSync(vm(args[1]),{recursive:true});else process.exit(64);`;
   await writeFile(join(root, "fake-tart"), fakeCli, { mode: 0o700 });
   await chmod(join(root, "fake-tart"), 0o700);
   return root;

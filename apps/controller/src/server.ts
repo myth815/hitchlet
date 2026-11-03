@@ -284,10 +284,13 @@ try {
     });
     const leases = new LeaseService(storage);
     let mainWorkHealthy = false;
+    let cleanupWorkHealthy = false;
     let intentWorkHealthy = false;
     const refreshPortainerRecovery = () => {
       recoveryState =
-        mainWorkHealthy && intentWorkHealthy ? "ready" : "unavailable";
+        mainWorkHealthy && cleanupWorkHealthy && intentWorkHealthy
+          ? "ready"
+          : "unavailable";
     };
     backgroundLoops = new ControllerBackgroundLoops({
       refreshObservations: async () => {
@@ -363,6 +366,7 @@ try {
           if (!(await tickets.reserveNext())) break;
         await worker.reconcile();
       },
+      reconcileCleanup: () => worker.reconcileCleanupLane(),
       reconcileCache: () => imageCache.reconcile(),
       reconcileLeaseIntents: () =>
         reconcileLeaseAndExpiryIntents(leases, worker),
@@ -374,8 +378,13 @@ try {
         intentWorkHealthy = true;
         refreshPortainerRecovery();
       },
+      onCleanupSuccess: () => {
+        cleanupWorkHealthy = true;
+        refreshPortainerRecovery();
+      },
       onFailure: (kind, error) => {
         if (kind === "reconcile") mainWorkHealthy = false;
+        if (kind === "cleanup") cleanupWorkHealthy = false;
         if (kind === "lease") intentWorkHealthy = false;
         refreshPortainerRecovery();
         app?.log.error(
@@ -389,7 +398,9 @@ try {
               ? "Portainer image-cache reconciliation failed"
               : kind === "lease"
                 ? "Portainer lease and expiry reconciliation failed"
-                : "Portainer reconciliation failed",
+                : kind === "cleanup"
+                  ? "Portainer allocation cleanup reconciliation failed"
+                  : "Portainer reconciliation failed",
         );
       },
     });
@@ -417,6 +428,14 @@ try {
       controllerEpoch: epoch,
     });
     const { worker, tickets, leases } = composition;
+    const admin = new AdminService(
+      storage,
+      probePortainer,
+      Date.now,
+      false,
+      (versionRef) => secrets.get(versionRef),
+      (input) => tartRuntimeFactsForRevision(input, secrets),
+    );
     await worker.reconcileBeforeScheduling();
     await leases.reconcilePending();
     let reconciling = false;
@@ -435,16 +454,19 @@ try {
     await tick();
     recoveryState = "ready";
     let mainWorkHealthy = true;
+    let cleanupWorkHealthy = false;
     let intentWorkHealthy = true;
     const refreshTartRecovery = () => {
       recoveryState =
-        mainWorkHealthy && intentWorkHealthy ? "ready" : "unavailable";
+        mainWorkHealthy && cleanupWorkHealthy && intentWorkHealthy
+          ? "ready"
+          : "unavailable";
     };
+    refreshTartRecovery();
     backgroundLoops = new ControllerBackgroundLoops({
-      // Tart host pressure/session observations remain unknown until a trusted
-      // host observation source is composed; this loop fabricates none.
-      refreshObservations: async () => undefined,
+      refreshObservations: () => admin.refreshTartObservations(),
       reconcile: tick,
+      reconcileCleanup: () => worker.reconcileCleanupLane(),
       reconcileLeaseIntents: () =>
         reconcileLeaseAndExpiryIntents(leases, worker),
       onReconcileSuccess: () => {
@@ -455,8 +477,13 @@ try {
         intentWorkHealthy = true;
         refreshTartRecovery();
       },
+      onCleanupSuccess: () => {
+        cleanupWorkHealthy = true;
+        refreshTartRecovery();
+      },
       onFailure: (kind, error) => {
         if (kind === "reconcile") mainWorkHealthy = false;
+        if (kind === "cleanup") cleanupWorkHealthy = false;
         if (kind === "lease") intentWorkHealthy = false;
         refreshTartRecovery();
         app?.log.error(
@@ -466,7 +493,9 @@ try {
           },
           kind === "lease"
             ? "Tart lease and expiry reconciliation failed"
-            : "Tart operation reconciliation failed",
+            : kind === "cleanup"
+              ? "Tart allocation cleanup reconciliation failed"
+              : "Tart operation reconciliation failed",
         );
       },
     });

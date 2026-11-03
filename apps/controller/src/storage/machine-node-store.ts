@@ -365,6 +365,96 @@ export class SQLiteMachineNodeStore {
       memoryMiB: integer(row.total_memory_mib),
     }));
   }
+  async dueTartObservations(now: number, minimumAgeMs = 45_000, limit = 16) {
+    const rows = await this.db.all<Row>(
+      `SELECT n.id AS node_id,n.version AS node_version,n.config_json,n.capabilities_json,n.observed_at_ms,
+        n.provider_connection_id,n.runtime_identity_id,ri.native_id AS native_namespace_id,m.architecture,m.host_os,
+        p.total_cpu_millis,p.total_memory_mib,c.version AS connection_version,c.current_revision_id,
+        r.id AS revision_id,r.verified_runtime_identity_id,i.installation_id
+       FROM nodes n
+       JOIN runtime_identities ri ON ri.id=n.runtime_identity_id AND ri.backend_kind='tart'
+       JOIN machines m ON m.id=n.machine_id
+       JOIN capacity_pools p ON p.id=n.pool_id
+       JOIN provider_connections c ON c.id=n.provider_connection_id AND c.enabled=1 AND c.backend_kind='tart'
+       JOIN provider_connection_revisions r ON r.id=c.current_revision_id AND r.connection_id=c.id
+         AND r.verified_runtime_identity_id=n.runtime_identity_id
+       JOIN installations i ON i.singleton=1
+       WHERE n.backend_kind='tart' AND n.admission='enabled'
+         AND json_extract(n.config_json,'$.executionMode')='tart'
+         AND (n.observed_at_ms IS NULL OR n.observed_at_ms<=?)
+       ORDER BY n.updated_at_ms,n.observed_at_ms,n.id LIMIT ?`,
+      [now - minimumAgeMs, limit],
+    );
+    return rows.map((row) => ({
+      nodeId: String(row.node_id),
+      nodeVersion: integer(row.node_version),
+      configJson: String(row.config_json),
+      capabilitiesJson: String(row.capabilities_json),
+      observedAtMs:
+        row.observed_at_ms === null ? null : integer(row.observed_at_ms),
+      connectionId: String(row.provider_connection_id),
+      connectionVersion: integer(row.connection_version),
+      currentRevisionId: String(row.current_revision_id),
+      revisionId: String(row.revision_id),
+      verifiedRuntimeIdentityId: String(row.verified_runtime_identity_id),
+      runtimeIdentityId: String(row.runtime_identity_id),
+      nativeNamespaceId: String(row.native_namespace_id),
+      installationId: String(row.installation_id),
+      architecture: String(row.architecture),
+      hostOs: String(row.host_os),
+      cpuMillis: integer(row.total_cpu_millis),
+      memoryMiB: integer(row.total_memory_mib),
+    }));
+  }
+  async recordTartObservation(
+    snapshot: Awaited<
+      ReturnType<SQLiteMachineNodeStore["dueTartObservations"]>
+    >[number],
+    result: "healthy" | "degraded" | "unknown",
+    observedAtMs?: number,
+  ) {
+    const time = this.now();
+    const changes = await this.db.run(
+      `UPDATE nodes SET observed_health=?,observed_at_ms=CASE WHEN ?='healthy' THEN ? ELSE observed_at_ms END,updated_at_ms=?
+       WHERE id=? AND version=? AND backend_kind='tart' AND admission='enabled'
+         AND config_json=? AND capabilities_json=? AND observed_at_ms IS ?
+         AND provider_connection_id=? AND runtime_identity_id=?
+         AND EXISTS(SELECT 1 FROM machines m JOIN capacity_pools p ON p.id=nodes.pool_id
+           WHERE m.id=nodes.machine_id AND m.architecture=? AND m.host_os=?
+             AND p.total_cpu_millis=? AND p.total_memory_mib=?)
+         AND EXISTS(
+           SELECT 1 FROM runtime_identities ri JOIN provider_connections c
+             ON c.runtime_identity_id=ri.id AND c.id=nodes.provider_connection_id
+           JOIN provider_connection_revisions r ON r.id=c.current_revision_id AND r.connection_id=c.id
+           WHERE ri.id=nodes.runtime_identity_id AND ri.backend_kind='tart'
+             AND ri.native_id=? AND c.enabled=1 AND c.backend_kind='tart' AND c.version=?
+             AND c.current_revision_id=? AND r.id=?
+             AND r.verified_runtime_identity_id=nodes.runtime_identity_id
+         )`,
+      [
+        result,
+        result,
+        observedAtMs ?? null,
+        time,
+        snapshot.nodeId,
+        snapshot.nodeVersion,
+        snapshot.configJson,
+        snapshot.capabilitiesJson,
+        snapshot.observedAtMs,
+        snapshot.connectionId,
+        snapshot.runtimeIdentityId,
+        snapshot.architecture,
+        snapshot.hostOs,
+        snapshot.cpuMillis,
+        snapshot.memoryMiB,
+        snapshot.nativeNamespaceId,
+        snapshot.connectionVersion,
+        snapshot.currentRevisionId,
+        snapshot.revisionId,
+      ],
+    );
+    return changes.changes === 1n;
+  }
   async recordPortainerObservation(
     snapshot: Awaited<
       ReturnType<SQLiteMachineNodeStore["duePortainerObservations"]>

@@ -24,9 +24,20 @@ export class SQLiteOperationStore {
     );
   }
 
+  dueCleanupOperations(
+    installationId: string,
+    epoch: number,
+    now: number,
+  ): Promise<Row[]> {
+    return this.db.all<Row>(
+      "SELECT id FROM operations WHERE kind='allocation.cleanup' AND json_extract(intent_json,'$.executionMode') IN ('simulator','portainer','tart') AND (installation_id=? OR installation_id IS NULL) AND controller_epoch<=? AND (?=(SELECT controller_epoch FROM installations WHERE singleton=1) OR (json_extract(intent_json,'$.executionMode')='simulator' AND NOT EXISTS(SELECT 1 FROM installations))) AND ((state IN ('planned','unknown','failed') AND next_check_at_ms<=?) OR (state='running' AND locked_until_ms<=?)) ORDER BY next_check_at_ms,id LIMIT 1",
+      [installationId, epoch, epoch, now, now],
+    );
+  }
+
   dueIntegrityAudits(now: number, limit = 16): Promise<Row[]> {
     return this.db.all<Row>(
-      "SELECT o.id,o.version,o.allocation_id,o.control_version,o.controller_epoch FROM operations o JOIN allocations a ON a.id=o.allocation_id JOIN tickets t ON t.id=a.ticket_id WHERE o.kind='allocation.provision' AND json_extract(o.intent_json,'$.executionMode')='portainer' AND o.state='succeeded' AND a.purpose='tenant' AND a.desired_state='present' AND a.control_version=o.control_version AND t.phase='ready' AND COALESCE(json_extract(o.result_json,'$.integrity.nextCheckAtMs'),0)<=? ORDER BY COALESCE(json_extract(o.result_json,'$.integrity.nextCheckAtMs'),0),o.id LIMIT ?",
+      "SELECT o.id,o.version,o.allocation_id,o.control_version,o.controller_epoch FROM operations o JOIN allocations a ON a.id=o.allocation_id JOIN tickets t ON t.id=a.ticket_id WHERE o.kind='allocation.provision' AND json_extract(o.intent_json,'$.executionMode') IN ('portainer','tart') AND o.state='succeeded' AND a.purpose='tenant' AND a.desired_state='present' AND a.control_version=o.control_version AND t.phase='ready' AND COALESCE(json_extract(o.result_json,'$.integrity.nextCheckAtMs'),0)<=? ORDER BY COALESCE(json_extract(o.result_json,'$.integrity.nextCheckAtMs'),0),o.id LIMIT ?",
       [now, limit],
     );
   }

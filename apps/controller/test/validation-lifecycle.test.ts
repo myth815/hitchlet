@@ -568,11 +568,17 @@ describe("Tart artifact draft persistence", () => {
       configSha256: "d".repeat(64),
     };
     let freshTemplateDigest = templateDigest;
+    let factsNamespaceId = nativeRuntimeNamespaceId;
     let factsReads = 0;
+    let factsGate: Promise<void> | undefined;
+    let factsStarted: (() => void) | undefined;
+    let releaseFactsForObservation: (() => void) | undefined;
     const facts = async () => {
       factsReads++;
+      factsStarted?.();
+      if (factsGate) await factsGate;
       return {
-        nativeRuntimeNamespaceId,
+        nativeRuntimeNamespaceId: factsNamespaceId,
         tartVersion: "2.40.0",
         hostOS: "macos" as const,
         hostArch: "arm64" as const,
@@ -803,6 +809,97 @@ describe("Tart artifact draft persistence", () => {
       admission: "enabled",
       observedHealth: "healthy",
     });
+
+    f.advance(121_000);
+    const beforeObservation = await f.db.get<{
+      capabilities_json: string;
+      observed_at_ms: number | null;
+    }>("SELECT capabilities_json,observed_at_ms FROM nodes WHERE id=?", [
+      node.id,
+    ]);
+    const refreshed = await admin.refreshTartObservations();
+    expect(refreshed).toMatchObject({ checked: 1, refreshed: 1, unhealthy: 0 });
+    const afterObservation = await f.db.get<{
+      capabilities_json: string;
+      observed_at_ms: number | null;
+      observed_health: string;
+    }>(
+      "SELECT capabilities_json,observed_at_ms,observed_health FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(afterObservation).toMatchObject({
+      capabilities_json: beforeObservation?.capabilities_json,
+      observed_at_ms: BigInt(f.now()),
+      observed_health: "healthy",
+    });
+
+    freshTemplateDigest = `sha256:${"0".repeat(64)}`;
+    f.advance(46_000);
+    const mismatch = await admin.refreshTartObservations();
+    expect(mismatch).toMatchObject({ checked: 1, unhealthy: 1 });
+    const afterMismatch = await f.db.get<{
+      capabilities_json: string;
+      observed_at_ms: number | null;
+      observed_health: string;
+    }>(
+      "SELECT capabilities_json,observed_at_ms,observed_health FROM nodes WHERE id=?",
+      [node.id],
+    );
+    expect(afterMismatch).toMatchObject({
+      capabilities_json: beforeObservation?.capabilities_json,
+      observed_at_ms: BigInt(f.now() - 46_000),
+      observed_health: "degraded",
+    });
+    freshTemplateDigest = templateDigest;
+    factsNamespaceId = randomUUID();
+    const identityMismatch = await admin.refreshTartObservations();
+    expect(identityMismatch).toMatchObject({ checked: 1, unhealthy: 1 });
+    factsNamespaceId = nativeRuntimeNamespaceId;
+    freshTemplateDigest = templateDigest;
+    f.advance(46_000);
+    const factsGatePromise = new Promise<void>((resolve) => {
+      factsGate = new Promise<void>((release) => {
+        factsStarted = resolve;
+        releaseFactsForObservation = release;
+      });
+    });
+    const pendingRefresh = admin.refreshTartObservations();
+    await factsGatePromise;
+    await f.db.run("UPDATE nodes SET version=version+1 WHERE id=?", [node.id]);
+    factsGate = undefined;
+    factsStarted = undefined;
+    releaseFactsForObservation?.();
+    expect(await pendingRefresh).toMatchObject({
+      checked: 1,
+      refreshed: 0,
+      unhealthy: 0,
+    });
+    const afterCasRace = await f.db.get<{
+      capabilities_json: string;
+      observed_at_ms: number | null;
+    }>("SELECT capabilities_json,observed_at_ms FROM nodes WHERE id=?", [
+      node.id,
+    ]);
+    expect(afterCasRace).toMatchObject({
+      capabilities_json: beforeObservation?.capabilities_json,
+      observed_at_ms: afterMismatch?.observed_at_ms,
+    });
+    const expiredCapabilities = JSON.stringify({
+      ...JSON.parse(beforeObservation?.capabilities_json ?? "{}"),
+      expiresAt: new Date(f.now() - 1).toISOString(),
+    });
+    await f.db.run("UPDATE nodes SET capabilities_json=? WHERE id=?", [
+      expiredCapabilities,
+      node.id,
+    ]);
+    expect(await admin.refreshTartObservations()).toMatchObject({
+      checked: 1,
+      expired: 1,
+    });
+    await f.db.run(
+      "UPDATE nodes SET capabilities_json=?,observed_health='healthy',observed_at_ms=? WHERE id=?",
+      [beforeObservation?.capabilities_json, f.now(), node.id],
+    );
 
     const secretKeyPath = join(f.dir, "tart-test-master.key");
     await writeFile(secretKeyPath, Buffer.alloc(32, 19), { mode: 0o600 });

@@ -255,6 +255,62 @@ describe("D24 structured GUI and recovery", () => {
       }),
     );
   });
+  it("drops an incompatible explicit architecture after changing the authorized version", async () => {
+    const alternateVersionId = "00000000-0000-4000-8000-000000000008";
+    const multiArchCatalog = {
+      ...catalog,
+      versions: [
+        catalog.versions[0]!,
+        {
+          ...catalog.versions[0]!,
+          id: alternateVersionId,
+          version: "v2",
+          architectures: ["amd64"],
+          platforms: [
+            {
+              ...catalog.versions[0]!.platforms[0]!,
+              architecture: "amd64",
+            },
+          ],
+        },
+      ],
+    };
+    const calls: { path: string; body: unknown }[] = [];
+    const client = new HitchletClient("https://controller.test", {
+        fetch: async (input, init) => {
+          const path = new URL(String(input)).pathname;
+          if (path === "/v1/catalog") return Response.json(multiArchCatalog);
+          calls.push({ path, body: JSON.parse(String(init?.body)) });
+          return Response.json({
+            observedAtMs: 2,
+            capacityGuaranteed: false,
+            eligibleNodeIds: [],
+            reasons: ["No capacity reserved"],
+          });
+        },
+      }),
+      acquire = vi.fn();
+    const { element } = await mount(
+      <AuthorizedAcquire
+        client={client}
+        canOperate
+        busy={false}
+        blocked={false}
+        onAcquire={acquire}
+      />,
+    );
+    const selects = element.querySelectorAll("select");
+    await change(selects[3]!, "arm64");
+    await change(selects[0]!, alternateVersionId);
+    await click(element, "可行性预检");
+    expect(calls[0]!.path).toBe("/v1/catalog/preview");
+    expect(calls[0]!.body).not.toHaveProperty("allowedArchitectures");
+    await submit(element.querySelector("form")!);
+    expect(acquire).toHaveBeenCalledWith(
+      expect.not.objectContaining({ allowedArchitectures: ["arm64"] }),
+    );
+  });
+
   it("submits a Tart VM request with whole vCPUs, best-effort scratch, and no storage mounts", async () => {
     const vmVersionId = "00000000-0000-4000-8000-000000000005";
     const vmCatalog = {

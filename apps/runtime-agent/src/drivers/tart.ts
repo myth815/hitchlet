@@ -927,6 +927,7 @@ export class TartLocalDriver {
       if (
         manifest.networkLaunchIntent &&
         manifest.networkCleanupReceipt?.status !== "removed" &&
+        manifest.networkCleanupReceipt?.status !== "process_exited" &&
         manifest.networkCleanupReceipt?.status !== "not_started"
       )
         return unknown(identity, "network_process_absence_unverified");
@@ -1111,6 +1112,48 @@ export class TartLocalDriver {
     )
       return unknown(identity, "network_contract_changed");
 
+    const savedReceipt = manifest.networkCleanupReceipt;
+    if (
+      manifest.phase !== "released" &&
+      (savedReceipt?.status === "removed" ||
+        savedReceipt?.status === "process_exited") &&
+      sameActionIdentity(manifest.identity, identity) &&
+      sameActionIdentity(savedReceipt.identity, identity) &&
+      savedReceipt.revisionId === network.revisionId &&
+      savedReceipt.contractHash === network.contractHash
+    ) {
+      const denyPolicy = compileDenyAllNetworkPolicy();
+      if (
+        !manifest.instance ||
+        savedReceipt.vm.vmName !== vmName ||
+        savedReceipt.vm.device !== manifest.instance.device ||
+        savedReceipt.vm.inode !== manifest.instance.inode ||
+        savedReceipt.vm.macAddress !== manifest.instance.macAddress ||
+        !manifest.networkProcess ||
+        savedReceipt.process.pid !== manifest.networkProcess.pid ||
+        savedReceipt.process.startedAt !== manifest.networkProcess.startedAt ||
+        (savedReceipt.status === "removed" &&
+          (savedReceipt.policyHash !== denyPolicy.policyHash ||
+            !sameSoftnetPolicy(savedReceipt.readback, denyPolicy))) ||
+        (savedReceipt.status === "process_exited" &&
+          savedReceipt.vmStopped !== true)
+      )
+        return unknown(identity, "network_release_receipt_mismatch");
+      const inventory = await this.inventory();
+      if (inventory.status !== "complete")
+        return unknown(identity, "inventory_incomplete");
+      const row = inventory.rows.find((item) => item.Name === vmName);
+      if (
+        !row ||
+        row.Source !== "local" ||
+        row.Running ||
+        row.State !== "stopped" ||
+        (await this.verifyOwned(manifest)) !== "present"
+      )
+        return unknown(identity, "network_release_vm_stop_not_verified");
+      return this.inspectOwned(identity);
+    }
+
     if (manifest.phase === "released") {
       const receipt = manifest.networkCleanupReceipt;
       if (!receipt || receipt.status === "unknown")
@@ -1202,7 +1245,16 @@ export class TartLocalDriver {
         readback = await running.getPolicy();
       }
     } catch {
-      return unknown(identity, "network_control_unavailable");
+      return this.stopAfterNetworkControlFailure(
+        identity,
+        network,
+        vmName,
+        manifestPath,
+        manifest,
+        running,
+        nativeProcess,
+        instance,
+      );
     }
     if (!sameSoftnetPolicy(readback, denyPolicy))
       return unknown(identity, "network_deny_policy_not_verified");
@@ -1251,6 +1303,66 @@ export class TartLocalDriver {
     return this.inspectOwned(identity);
   }
 
+  private async stopAfterNetworkControlFailure(
+    identity: TartAllocationIdentity,
+    network: TartNetworkPlan,
+    vmName: string,
+    manifestPath: string,
+    manifest: Manifest,
+    running: RunningChild,
+    nativeProcess: NonNullable<Manifest["networkProcess"]>,
+    instance: NonNullable<Manifest["instance"]>,
+  ): Promise<TartInspection> {
+    try {
+      await this.runShort(["stop", "--timeout", "5", vmName]);
+    } catch {
+      return unknown(identity, "network_control_unavailable");
+    }
+    const exitTimeout = commandBudget(undefined, RUN_EXIT_MS);
+    if (exitTimeout <= 0 || !(await settlesWithin(running.exit, exitTimeout)))
+      return unknown(identity, "network_process_exit_unverified");
+    const exit = await running.exit;
+    if (exit.code !== 0 || exit.signal !== null)
+      return unknown(identity, "network_process_not_gracefully_stopped");
+    const afterStop = await this.inventory();
+    if (afterStop.status !== "complete")
+      return unknown(identity, "inventory_incomplete_after_network_stop");
+    const stopped = afterStop.rows.find((item) => item.Name === vmName);
+    if (
+      !stopped ||
+      stopped.Source !== "local" ||
+      stopped.Running ||
+      stopped.State !== "stopped"
+    )
+      return unknown(identity, "vm_stop_not_verified");
+    const observedInstance = await this.readInstanceIdentity(vmName);
+    if (!observedInstance || !sameInstanceIdentity(instance, observedInstance))
+      return unknown(identity, "network_vm_identity_mismatch_after_stop");
+
+    const receipt: TartNetworkCleanupReceipt = {
+      backend: "softnet",
+      status: "process_exited",
+      identity,
+      revisionId: network.revisionId,
+      contractHash: network.contractHash,
+      vm: {
+        vmName,
+        device: instance.device,
+        inode: instance.inode,
+        macAddress: instance.macAddress,
+      },
+      process: { pid: nativeProcess.pid, startedAt: nativeProcess.startedAt },
+      processExitObserved: true,
+      vmStopped: true,
+      observedAt: new Date().toISOString(),
+    };
+    await this.writeManifest(manifestPath, {
+      ...manifest,
+      networkCleanupReceipt: receipt,
+    });
+    return this.inspectOwned(identity);
+  }
+
   private async destroyOwned(
     identity: TartAllocationIdentity,
   ): Promise<TartInspection> {
@@ -1286,6 +1398,7 @@ export class TartLocalDriver {
     if (
       manifest.networkPlan &&
       manifest.networkCleanupReceipt?.status !== "removed" &&
+      manifest.networkCleanupReceipt?.status !== "process_exited" &&
       manifest.networkCleanupReceipt?.status !== "not_started"
     )
       return unknown(identity, "network_cleanup_not_verified");

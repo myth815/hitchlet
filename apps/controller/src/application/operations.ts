@@ -77,6 +77,17 @@ export class OperationWorker {
     worked += await this.reconcileIntegrityAudits();
     return worked;
   }
+  /** Run one due cleanup independently of the main provision scan. */
+  async reconcileCleanupLane(): Promise<number> {
+    const rows = await this.store.dueCleanupOperations(
+      this.options.installationId,
+      this.options.controllerEpoch ?? 1,
+      this.now(),
+    );
+    const operationId = rows[0]?.id;
+    if (typeof operationId !== "string") return 0;
+    return (await this.run(operationId)) ? 1 : 0;
+  }
   /** Read-only Portainer integrity audits use the provision operation as their
    * durable cursor. They never transition it out of succeeded or call create. */
   private async reconcileIntegrityAudits(): Promise<number> {
@@ -106,6 +117,7 @@ export class OperationWorker {
           ...base,
           deadlineMs: now + 15_000,
           executionPhase: "observe",
+          integritySnapshot: op.actual_resources_json,
         };
         const inspection = await this.inspect(observationPlan);
         let loss: string | undefined;

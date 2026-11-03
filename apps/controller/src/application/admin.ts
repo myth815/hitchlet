@@ -14,17 +14,24 @@ import { SQLiteValidationStore } from "../storage/validation-store.js";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { SQLiteAdminReadStore } from "../storage/admin-read-store.js";
 import { SQLiteImageCacheStore } from "../storage/image-cache-store.js";
-import { validAttestedCapability } from "../domain/attested-capability.js";
+import {
+  validAttestedCapability,
+  validTartAttestedCapability,
+} from "../domain/attested-capability.js";
 import type { TartFactsForRevision } from "../providers/runtime-credentials.js";
 import type {
   NodeCapabilityAttestationInput,
   TartNodeRuntimeConfigInput,
 } from "@hitchlet/contracts/admin";
 import { tartTemplateProofMatches } from "./tart-facts.js";
+import type { TartRuntimeFacts } from "@hitchlet/contracts/internal";
 
 export type Probe = PortainerProbe;
 type ObservationSnapshot = Awaited<
   ReturnType<SQLiteMachineNodeStore["duePortainerObservations"]>
+>[number];
+type TartObservationSnapshot = Awaited<
+  ReturnType<SQLiteMachineNodeStore["dueTartObservations"]>
 >[number];
 
 /** Admin use-case facade: transport handlers call these cohesive persistence workflows. */
@@ -307,6 +314,84 @@ export class AdminService {
       expired: outcomes.filter((value) => value === "expired").length,
     };
   }
+  async refreshTartObservations() {
+    const checkedAt = this.now();
+    const snapshots = await this.inventory.dueTartObservations(
+      checkedAt,
+      45_000,
+      16,
+    );
+    const settled = await Promise.allSettled(
+      snapshots.map(async (snapshot) => {
+        let capabilities: Record<string, unknown> | undefined;
+        try {
+          const parsed: unknown = JSON.parse(snapshot.capabilitiesJson);
+          if (isRecord(parsed)) capabilities = parsed;
+        } catch {
+          // Invalid stored qualification is not refreshed by live observation.
+        }
+        if (
+          !capabilities ||
+          !validTartAttestedCapability(capabilities, checkedAt)
+        ) {
+          const expired =
+            !capabilities || capabilityExpired(capabilities, checkedAt);
+          if (
+            await this.inventory.recordTartObservation(
+              snapshot,
+              expired ? "unknown" : "degraded",
+            )
+          )
+            return expired ? ("expired" as const) : ("unhealthy" as const);
+          return "unchanged" as const;
+        }
+        try {
+          if (!this.tartFactsForRevision)
+            throw new Error(
+              "Authenticated Tart Runtime facts probe is unavailable",
+            );
+          const parsedConfig: unknown = JSON.parse(snapshot.configJson);
+          if (!isRecord(parsedConfig))
+            throw new Error("Tart Node config is invalid");
+          const facts = await this.tartFactsForRevision({
+            installationId: snapshot.installationId,
+            runtimeIdentityId: snapshot.runtimeIdentityId,
+            connectionRevisionId: snapshot.currentRevisionId,
+            nodeId: snapshot.nodeId,
+            config: parsedConfig,
+          });
+          assertTartObservationMatches(snapshot, capabilities, facts);
+          if (
+            await this.inventory.recordTartObservation(
+              snapshot,
+              "healthy",
+              checkedAt,
+            )
+          )
+            return "refreshed" as const;
+        } catch {
+          if (await this.inventory.recordTartObservation(snapshot, "degraded"))
+            return "unhealthy" as const;
+        }
+        return "unchanged" as const;
+      }),
+    );
+    const failure = settled.find(
+      (item): item is PromiseRejectedResult => item.status === "rejected",
+    );
+    if (failure) throw failure.reason;
+    const outcomes = settled.map((item) => {
+      if (item.status !== "fulfilled")
+        throw new Error("Tart observation result did not settle");
+      return item.value;
+    });
+    return {
+      checked: snapshots.length,
+      refreshed: outcomes.filter((value) => value === "refreshed").length,
+      unhealthy: outcomes.filter((value) => value === "unhealthy").length,
+      expired: outcomes.filter((value) => value === "expired").length,
+    };
+  }
   listNodes() {
     return this.inventory.listNodes();
   }
@@ -418,6 +503,42 @@ export class AdminService {
   ) {
     return this.images.planCacheEviction(input);
   }
+}
+
+function assertTartObservationMatches(
+  snapshot: TartObservationSnapshot,
+  capability: Record<string, unknown>,
+  facts: TartRuntimeFacts,
+) {
+  const guestOs = Array.isArray(capability.guestOs)
+    ? capability.guestOs[0]
+    : undefined;
+  const capacity = capability.capacity;
+  if (
+    facts.nativeRuntimeNamespaceId !== snapshot.nativeNamespaceId ||
+    facts.nativeRuntimeNamespaceId !== capability.nativeNamespaceId ||
+    facts.hostOS !== "macos" ||
+    snapshot.hostOs !== "macos" ||
+    facts.hostArch !== "arm64" ||
+    snapshot.architecture !== "arm64" ||
+    facts.tartVersion !== capability.tartVersion ||
+    capability.providerVersion !== `Tart/${facts.tartVersion}` ||
+    capability.connectionRevisionId !== snapshot.revisionId ||
+    !isRecord(capacity) ||
+    capacity.cpuMillis !== snapshot.cpuMillis ||
+    capacity.memoryMiB !== snapshot.memoryMiB ||
+    snapshot.cpuMillis > facts.hostCpuCount * 1000 ||
+    snapshot.memoryMiB > Math.floor(facts.hostMemoryBytes / 1024 ** 2) ||
+    (guestOs !== "linux" && guestOs !== "macos") ||
+    !tartTemplateProofMatches(facts, {
+      nativeRuntimeNamespaceId: snapshot.nativeNamespaceId,
+      artifactRef: String(capability.templateRef),
+      digest: String(capability.templateDigest),
+      architecture: String(capability.architecture),
+      guestOs,
+    })
+  )
+    throw new Error("Live Tart observation does not match the attested Node");
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

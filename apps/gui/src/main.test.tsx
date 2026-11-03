@@ -697,6 +697,28 @@ describe("consumer console", () => {
     expect(element.textContent).toContain("离线租约强制执行不受支持");
   });
 
+  it("labels Tart mode and keeps the offline-lease limitation visible", async () => {
+    const element = document.createElement("div");
+    const root = createRoot(element);
+    roots.push(root);
+    await act(async () => {
+      root.render(
+        <HealthPanel
+          health={{
+            status: "ok",
+            stage: "D05",
+            executionMode: "tart",
+            recoveryState: "ready",
+          }}
+          error=""
+        />,
+      );
+    });
+    expect(element.textContent).toContain("Tart");
+    expect(element.textContent).not.toContain("Portainer Docker");
+    expect(element.textContent).toContain("离线租约强制执行不受支持");
+  });
+
   it("prioritizes a failed health refresh over stale ready data and recovers on reconnect", async () => {
     const element = document.createElement("div");
     const root = createRoot(element);

@@ -11,6 +11,7 @@ import { createTartRuntimeServer } from "../src/tart-server.js";
 import type {
   TartAllocationIdentity,
   TartInspection,
+  TartReconcileRequest,
   TartRuntimeFacts,
 } from "@hitchlet/contracts/internal";
 
@@ -46,6 +47,9 @@ let key: Buffer;
 let origin: URL;
 let journal: FileJournal;
 let calls: string[];
+let destroyLog: string[];
+let destroyHook: (owner: TartAllocationIdentity) => Promise<TartInspection>;
+let reconcileHook: (request: TartReconcileRequest) => Promise<TartInspection>;
 let observedActionDeadline: number | undefined;
 
 beforeEach(async () => {
@@ -79,6 +83,9 @@ beforeEach(async () => {
   journal = new FileJournal(join(root, "journal.json"));
   await journal.initialize();
   calls = [];
+  destroyLog = [];
+  destroyHook = async () => inspection;
+  reconcileHook = async () => inspection;
   observedActionDeadline = undefined;
   const driver = {
     inspect: async () => {
@@ -86,17 +93,18 @@ beforeEach(async () => {
       observedActionDeadline = currentCommandDeadlineMs();
       return inspection;
     },
-    reconcile: async () => {
+    reconcile: async (request: TartReconcileRequest) => {
       calls.push("reconcile");
-      return inspection;
+      return reconcileHook(request);
     },
     bootstrapApply: async () => {
       calls.push("bootstrap.apply");
       return inspection;
     },
-    destroy: async () => {
+    destroy: async (owner: TartAllocationIdentity) => {
       calls.push("destroy");
-      return inspection;
+      destroyLog.push(owner.allocationId);
+      return destroyHook(owner);
     },
   };
   server = await createTartRuntimeServer(
@@ -212,6 +220,89 @@ it("serves only authenticated, runtime-bound, nonce-echoed Tart actions and pers
       clientCertificate: false,
     }),
   ).rejects.toBeDefined();
+});
+
+it("keeps allocation actions ordered while another allocation advances the epoch", async () => {
+  let release!: () => void;
+  let entered!: () => void;
+  const gate = new Promise<void>((resolve) => (release = resolve));
+  const started = new Promise<void>((resolve) => (entered = resolve));
+  const ownerA = { ...identity, allocationId: "alloc-a" };
+  const ownerB = { ...identity, allocationId: "alloc-b" };
+  reconcileHook = async (request) => {
+    if (request.identity.allocationId === ownerA.allocationId) {
+      entered();
+      await gate;
+    }
+    return inspection;
+  };
+  const request = (
+    owner: TartAllocationIdentity,
+    epoch: number,
+    suffix: string,
+    lifetimeMs = 120_000,
+  ) => ({
+    requestNonce: `3b241101-e2bb-4255-8caf-4136c566a${suffix}`,
+    deadline: new Date(Date.now() + lifetimeMs).toISOString(),
+    controllerEpoch: epoch,
+    installationId: identity.installationId,
+    runtimeIdentityId: identity.runtimeIdentityId,
+    action: { kind: "destroy", identity: owner },
+  });
+  const cloneRequest: TartReconcileRequest = {
+    identity: ownerA,
+    template: {
+      source: "local",
+      name: "fixture-template",
+      guestOS: "linux",
+      guestArch: "arm64",
+      configSha256: "a".repeat(64),
+    },
+    resources: { cpus: 4, memoryMiB: 4096 },
+    network: {
+      grantId: "grant-1",
+      revisionId: "network-revision-1",
+      frozenPlatformDenyRevisionId: "deny-1",
+      platformDenyRevisionId: "deny-2",
+      mode: "isolated_vm",
+      enforcement: "tart_agent",
+      ipv6: "disabled",
+      allowedEgress: [],
+      allowedIngressSourceCidrs: [],
+      accessSourceCidrs: [],
+      accessPorts: [],
+      managementDenyRules: [],
+      contractHash: `sha256:${"a".repeat(64)}`,
+    },
+  };
+  const active = post("/v1/tart/actions", {
+    ...request(ownerA, 4, "971"),
+    action: { kind: "reconcile", request: cloneRequest },
+  });
+  await started;
+  const queuedOldEpoch = post("/v1/tart/actions", request(ownerA, 4, "972"));
+  const queuedCurrentEpoch = post(
+    "/v1/tart/actions",
+    request(ownerA, 5, "975"),
+  );
+  const queuedExpired = post(
+    "/v1/tart/actions",
+    request(ownerA, 5, "974", 100),
+  );
+  const independentCleanup = await post(
+    "/v1/tart/actions",
+    request(ownerB, 5, "973"),
+  );
+  expect(independentCleanup.status).toBe(200);
+  expect(journal.epoch).toBe(5);
+  await new Promise((resolve) => setTimeout(resolve, 150));
+  release();
+  expect((await active).status).toBe(200);
+  expect((await queuedOldEpoch).status).toBe(409);
+  expect((await queuedCurrentEpoch).status).toBe(200);
+  expect((await queuedExpired).status).toBe(408);
+  expect(calls).toEqual(["reconcile", "destroy", "destroy"]);
+  expect(destroyLog).toEqual(["alloc-b", "alloc-a"]);
 });
 
 it("returns fixed read-only host facts and enforces the request body limit", async () => {

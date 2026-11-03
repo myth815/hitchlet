@@ -1611,7 +1611,8 @@ export async function buildApp(
           return reply.code(403).send(apiError(request.id, "forbidden", false));
         if (
           config.EXECUTION_MODE !== "simulator" &&
-          config.EXECUTION_MODE !== "portainer"
+          config.EXECUTION_MODE !== "portainer" &&
+          config.EXECUTION_MODE !== "tart"
         )
           return reply
             .code(503)

@@ -80,6 +80,31 @@ function softnetPolicyHash(readback: {
     .digest("hex")}`;
 }
 
+function processExitedNetworkReceipt(
+  identity: TartAllocationIdentity,
+  network: TartNetworkPlan,
+  vmName: string,
+  at = Date.now(),
+): TartNetworkCleanupReceipt {
+  return {
+    backend: "softnet",
+    status: "process_exited",
+    identity,
+    revisionId: network.revisionId,
+    contractHash: network.contractHash,
+    vm: {
+      vmName,
+      device: "41",
+      inode: "2048",
+      macAddress: "02:00:00:00:00:41",
+    },
+    process: { pid: 321, startedAt: new Date(at - 1000).toISOString() },
+    processExitObserved: true,
+    vmStopped: true,
+    observedAt: new Date(at).toISOString(),
+  };
+}
+
 function removedNetworkReceipt(
   identity: TartAllocationIdentity,
   network: TartNetworkPlan,
@@ -246,6 +271,7 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
   let bootstrapRequest: TartGuestBootstrapRequest | undefined;
   let currentNetwork: TartNetworkPlan | undefined;
   let cleanupReceipt: TartNetworkCleanupReceipt | undefined;
+  let cleanupReceiptOverride: TartNetworkCleanupReceipt | undefined;
   let observation: TartInspection = {
     presence: "absent",
     identity: owner,
@@ -327,12 +353,9 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
     ) {
       if (network.contractHash !== currentNetwork?.contractHash)
         throw new Error("wrong network plan");
-      cleanupReceipt = removedNetworkReceipt(
-        identity,
-        network,
-        vmName,
-        fakeNow,
-      );
+      cleanupReceipt =
+        cleanupReceiptOverride ??
+        removedNetworkReceipt(identity, network, vmName, fakeNow);
       if (observation.presence === "present")
         observation = {
           ...observation,
@@ -490,6 +513,36 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
     hostKeyFingerprint: host.fingerprint,
     clientPublicKeyFingerprint: client.fingerprint,
   });
+  const observePlan: ProvisionPlan = {
+    ...plan,
+    executionPhase: "observe",
+    deadlineMs: fakeNow + 15_000,
+    integritySnapshot: JSON.stringify({ receipt }),
+  };
+  expect(await provider.inspect(observePlan)).toMatchObject({
+    presence: "present",
+    integrity: { state: "healthy" },
+  });
+  if (observation.presence !== "present")
+    throw new Error("expected present VM");
+  const readyObservation = observation;
+  observation = { ...readyObservation, state: "stopped" };
+  expect(await provider.inspect(observePlan)).toMatchObject({
+    presence: "present",
+    integrity: { state: "lost", reason: "TART_VM_NOT_RUNNING" },
+  });
+  observation = {
+    ...readyObservation,
+    network: {
+      ...readyObservation.network,
+      status: "unknown",
+      reason: "network_policy_unavailable",
+    },
+  };
+  expect(await provider.inspect(observePlan)).toMatchObject({
+    presence: "unknown",
+  });
+  observation = readyObservation;
   if (observation.presence !== "present")
     throw new Error("expected present VM");
   const verifiedNetwork = observation.network;
@@ -529,4 +582,30 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
   await provider.revokeStop(cleanupPlan);
   const cleanup = await provider.destroy(cleanupPlan, ownedResources[0]!);
   expect(cleanup.networkRules).toBe("removed");
+
+  const cleanupNetwork = tartNetworkPlanFor(cleanupPlan);
+  observation = {
+    presence: "present",
+    identity: owner,
+    vmName,
+    state: "running",
+    resources: { cpus: 2, memoryMiB: 2048 },
+    bootstrapStatus: "applied",
+    network: networkObservation(owner, cleanupNetwork, vmName, fakeNow),
+    ipAddress: "192.0.2.44",
+  };
+  cleanupReceiptOverride = processExitedNetworkReceipt(
+    owner,
+    cleanupNetwork,
+    vmName,
+    fakeNow,
+  );
+  await expect(provider.revokeStop(cleanupPlan)).resolves.toBeUndefined();
+  cleanupReceiptOverride = {
+    ...cleanupReceiptOverride,
+    identity: { ...owner, operationId: "other-cleanup-owner" },
+  };
+  await expect(provider.revokeStop(cleanupPlan)).rejects.toThrow(
+    "Tart network cleanup receipt does not match the plan",
+  );
 });

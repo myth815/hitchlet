@@ -42,6 +42,7 @@ export async function createTartRuntimeServer(
     readFile(config.keyFile),
   ]);
   const token = tokenText.trim();
+  const allocationTails = new Map<string, Promise<unknown>>();
   if (!token || token.includes("\n"))
     throw new Error("Runtime Agent token file is empty or invalid");
 
@@ -138,19 +139,30 @@ export async function createTartRuntimeServer(
         }
 
         try {
-          const result = await journal.serialize(async () => {
+          const action = parsed.data.action;
+          const allocationId =
+            action.kind === "reconcile"
+              ? action.request.identity.allocationId
+              : action.identity.allocationId;
+          const prior = allocationTails.get(allocationId) ?? Promise.resolve();
+          const run = prior.then(async () => {
             if (Date.parse(parsed.data.deadline) <= Date.now())
               throw new Error("tart_action_deadline_expired");
-            if (parsed.data.controllerEpoch < journal.epoch)
-              throw new Error("stale_controller_epoch");
-            if (parsed.data.controllerEpoch > journal.epoch) {
-              journal.setEpoch(parsed.data.controllerEpoch);
-              await journal.save();
-            }
+            await journal.serialize(async () => {
+              if (Date.parse(parsed.data.deadline) <= Date.now())
+                throw new Error("tart_action_deadline_expired");
+              if (parsed.data.controllerEpoch < journal.epoch)
+                throw new Error("stale_controller_epoch");
+              if (parsed.data.controllerEpoch > journal.epoch) {
+                journal.setEpoch(parsed.data.controllerEpoch);
+                await journal.save();
+              }
+            });
+            if (Date.parse(parsed.data.deadline) <= Date.now())
+              throw new Error("tart_action_deadline_expired");
             return withCommandDeadline(
               Date.parse(parsed.data.deadline),
               async () => {
-                const action = parsed.data.action;
                 switch (action.kind) {
                   case "inspect":
                     return driver.inspect(action.identity);
@@ -172,6 +184,15 @@ export async function createTartRuntimeServer(
               },
             );
           });
+          const tail = run.catch(() => undefined);
+          allocationTails.set(allocationId, tail);
+          let result: Awaited<typeof run>;
+          try {
+            result = await run;
+          } finally {
+            if (allocationTails.get(allocationId) === tail)
+              allocationTails.delete(allocationId);
+          }
           reply(
             response,
             200,

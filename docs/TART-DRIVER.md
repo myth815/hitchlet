@@ -32,7 +32,7 @@ node apps/runtime-agent/dist/tart-main.js
 
 `--seal-template` 只接受停止的本地模板，流式计算 `config.json`、`disk.img`、`nvram.bin` 的 SHA256，生成 `sealed_local_bundle_v1` 摘要并保存 dev/inode/size/mtimeNs。facts 检查模板与封存状态；不会把 config hash 当完整磁盘 digest，也不会自动封存或每次请求重读整个磁盘。上游 OCI digest 与准备后的本地 bundle digest 不同，后者必须实际生成。
 
-可信 API 为 POST `/v1/tart/facts` 和 `/v1/tart/actions`。动作只有 inspect/reconcile/bootstrap.apply/destroy，绑定完整分配身份、controller epoch、nonce、原 Operation 截止时间；等待串行执行后再次检查。短 CLI/GuestAgent exec/地址轮询均受剩余预算约束，原生常驻 `tart run` 不因单次 RPC 到期被误报 absent。超时或盘点不全保持 unknown，可恢复或回收，不释放未查实的 Claim。
+可信 API 为 POST `/v1/tart/facts` 和 `/v1/tart/actions`。动作只有 inspect/reconcile/bootstrap.apply/network.revoke/destroy，绑定完整分配身份、controller epoch、nonce 和动作截止时间。同一 Allocation 顺序执行，排队后重新检查 epoch/deadline；全局 journal 只串行持久 epoch 更新，慢 clone 不占住别票动作。短 CLI/GuestAgent exec/地址轮询均受剩余预算约束，原生常驻 `tart run` 不因单次 RPC 到期被误报 absent。超时或盘点不全保持 unknown，可恢复或回收，不释放未查实的 Claim。
 
 clone 前持久意图，clone 成功后先落实例身份再改规格；重试复用已归属实例。clone 已发生而首次身份写盘前中断仍为 unknown，不能凭同名接管/删除。停止 Controller 或 Runtime 不隐含删除 VM；查实不存在才退款/释放 Claim。Controller 离线硬到期强停仍不支持。
 
@@ -53,6 +53,16 @@ Controller 验证双方公钥指纹、精确回执与身份、冻结规格、网
 认证 facts 证明来源与模板，**不证明能力资格**。注册后仍 disabled/unknown、空能力；池预算不得超过原始宿主 CPU/内存。独立 Tart attestation 需匹配 namespace、版本、平台、模板 digest 和真实验收报告，沿用现有六 scope、report SHA、network revision 与有效期机制，不借用 Docker 版本/iptables 成功标记。测试报告均明确 synthetic，未提交任何真实节点资格。
 
 发布还要求持久验证完成、验证 allocation 查实清理、相关 Claim 归还、CAS 成功，并通过 fresh authenticated facts 重新核模板。封存或人工资格报告单独不能直接发布。已登记资源的回收使用独立 cleanup-only resolver：必须有正在执行的持久清理 Operation、精确 Allocation/owner/generation/controlVersion 与有效认证，才可在连接停用或模板证明失效后观察/归还；新建/启动不使用此权限。实际 Runtime/native identity 仍核验，发布证明不再被混作已归属资源的清理资格。Tart connection revision 的重新提议/轮换尚未提供；当前 discovery 管理初次身份，不承诺生产轮换闭环。管理 GUI 可展示 Tart facts，但尚无 Tart 注册/资格表单，这段使用正常 API/SDK；租客 VM 选择已接入 GUI。
+
+## 持续观察与恢复
+
+公开 health 合同、租客 access 和 GUI 模式已接入 Tart。access 保留原 owner、scope、generation、有效租约及加密材料校验；正式 server 启动 guard 仍关闭。申请向导清除不兼容的架构选择，保留兼容的显式约束。
+
+Portainer/Tart 共用后台循环中的独立单次 cleanup 通道；同 Allocation 的在途创建、worker lease、token/version/epoch 和身份检查保留。回收通道健康单独计入恢复状态，关闭时等待在途操作。
+
+Tart Node 通过认证 facts、当前 revision、native namespace、版本、模板证明和容量匹配刷新健康时间。人工资格 JSON 与有效期不变，不代替真实网络资格；Host 压力和人员 presence 不由这些 facts 推导，仍保留显式人工库存预算。ready 租客使用既有持久完整性巡检，核对冻结规格、原 bootstrap 回执和当前网络证据。确认漂移走原终止意图；证据不可读保留 unknown/Claim，不创建替代 VM。bootstrap 回执证明初始化时刻，不因观察现有租约而延长或重新初始化。
+
+控制通道收尾及整个 Runtime 重启后仍缺退出证明的边界，见 [网络恢复说明](TART-NETWORK.md)。
 
 ## 验证入口与下一步
 

@@ -22,9 +22,9 @@ Controller 对新鲜观察时间检查，bootstrap 的 network expiry 仍绑定�
 
 ## 归还、恢复与已知限制
 
-归还先通过自有通道写入并读回 deny-all，再正常停止自有 VM。只有正常受管 Tart 退出、相应停止观察与网络收尾回执齐全时才记录 removed，随后才删除 VM；未尝试启动的对象可记录 not_started。VM 目录消失本身不证明网络进程消失。强杀、异常退出、FD 丢失或不完整观察保留 unknown/Claim，不能用自行填成功回执解锁。
+正常归还先读回 deny-all，再停止自有 VM，保存 `removed`。通道调用失败时，若仍持有与 manifest 的 PID/start、策略 hash、VM dev/inode/MAC 匹配的原受管 child，可正常停止本 VM；只有该 child 正常退出、完整盘点明确为 stopped、停止后 native VM 身份仍匹配，才保存独立 `process_exited` 回执。后者没有 deny-policy hash/readback，不声称规则已经读回。两条路径均须再查实删除才能释放 Claim。未尝试启动的对象可记录 `not_started`；目录消失本身不证明网络进程消失。强杀、异常退出、未跟踪 child、停止失败或不完整观察保留 unknown/Claim。
 
-Softnet 控制 EOF 只会关闭管理通道，不能单凭 EOF 宣称后端已退出；正常 Tart 停止的子进程等待行为仍须实机验证。重启后丢失原控制 FD 不凭 PID 接管；已持久的 removed/not_started 回执与 tombstone 可继续回收。未完成收尾的中断不会被描述为已自动恢复，本批没有实现任意 native 进程的重新接管。
+Softnet 控制 EOF 只会关闭管理通道，不能单凭 EOF 宣称后端已退出；正常 Tart 停止的子进程等待行为仍须实机验证。同一 cleanup fence 的持久 `removed/process_exited` 回执须核对网络合同、VM/进程身份和完整停止盘点后才能幂等重放；`not_started` 与 tombstone 也保留归属检查。整个 Runtime 重启后若没有原 child 句柄或持久退出回执，仍保持 unknown/Claim，不凭 PID 接管。没有新增持久控制 broker、系统服务或 native 进程接管权限。
 
 新增的清理权限仅适用于已登记 Allocation 且有持久 cleanup Operation 的路径：
 
@@ -35,7 +35,7 @@ Softnet 控制 EOF 只会关闭管理通道，不能单凭 EOF 宣称后端已�
 
 仍有明确的启用前边界：
 
-- server composition 共用现有 lease/operation loops，但没有伪造 Tart Host 压力、人员 presence 或自动延长人工资格。自动 Tart observation 刷新尚未接入，已有观测仍会按原新鲜度到期；不承诺长期生产接单。
+- server composition 已接入有界 Tart Node 观察和既有 ready 完整性巡检。匹配的认证 facts 只刷新健康时间，不延长人工资格或证明 Host 压力、人员 presence。资格失效、模板/身份变化与观察不可达按实际状态处理。这些持续运行和故障路径仍未实机验证，不承诺长期生产接单。
 
 Controller 离线严格到期硬停仍不支持。Linux guest、动态网络修订、真实后端故障、媒体/Vesta 作业和长期生产运行未由本批证明；Tart 的真实执行 guard 保持关闭。
 

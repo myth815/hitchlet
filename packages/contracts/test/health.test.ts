@@ -27,6 +27,16 @@ describe("health response contract", () => {
       }).executionMode,
     ).toBe("portainer");
   });
+  it("accepts Tart execution mode in the shared health response", () => {
+    expect(
+      HealthResponseSchema.parse({
+        status: "ok",
+        stage: "D05",
+        executionMode: "tart",
+        recoveryState: "ready",
+      }).executionMode,
+    ).toBe("tart");
+  });
   it("rejects unknown or invalid health data", () => {
     expect(
       HealthResponseSchema.safeParse({

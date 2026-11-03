@@ -48,7 +48,9 @@ export function HealthPanel({
                 ? "Simulator · 本机模拟"
                 : health.executionMode === "disabled"
                   ? "执行器未启用"
-                  : "Portainer Docker"}
+                  : health.executionMode === "tart"
+                    ? "Tart · 本机虚拟机"
+                    : "Portainer Docker"}
         </span>
         {error && onRetry ? (
           <button className="secondary-button" onClick={onRetry}>
@@ -70,7 +72,8 @@ export function HealthPanel({
         </p>
       ) : health?.executionMode === "disabled" ? (
         <p className="muted-banner">Ticket 可查询，但环境执行不可用。</p>
-      ) : health?.executionMode === "portainer" ? (
+      ) : health?.executionMode === "portainer" ||
+        health?.executionMode === "tart" ? (
         <details className="mode-details">
           <summary>执行范围与限制</summary>
           <p>节点状态单独显示，离线租约强制执行不受支持。</p>
