@@ -2946,6 +2946,12 @@ describe("Tart VM ticket ledger integration", () => {
       },
     ]);
 
+    // One public image version offers two distinct environment implementations.
+    // All execution below is controlled fixture/Simulator work, not a real VM.
+    await storage.run(`INSERT INTO image_artifacts(id,image_version_id,backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms)
+      SELECT 'a0000000-0000-4000-8000-000000000012','20000000-0000-4000-8000-000000000003',backend_kind,environment_kind,architecture,guest_os,artifact_ref,content_digest,minimum_cpu_millis,minimum_memory_mib,minimum_scratch_mib,requirements_json,access_recipe_json,created_at_ms
+      FROM image_artifacts WHERE id='a0000000-0000-4000-8000-000000000001'`);
+
     let clock = now;
     vi.spyOn(Date, "now").mockImplementation(() => clock);
     expect(
@@ -2969,8 +2975,7 @@ describe("Tart VM ticket ledger integration", () => {
     const ticket = await service.acquire(consumerId, "tart-vm-lifecycle", {
       image: { versionId: "20000000-0000-4000-8000-000000000003" },
       kind: "vm",
-      allowedProviders: ["tart"],
-      allowedArchitectures: ["arm64"],
+      guestOs: "macos",
       resources: {
         cpuMillis: 2000,
         memoryMiB: 2048,
@@ -3253,6 +3258,10 @@ describe("Tart VM ticket ledger integration", () => {
       secrets,
       installationId: installId,
       controllerEpoch: 1,
+      enabledExecutionMode: ["simulator", "tart"],
+      otherExecutionProviders: {
+        simulator: new PersistentSimulator(join(dir, "mixed-container")),
+      },
       now: () => clock,
       resolveRuntime: async (plan) => ({
         runtimeIdentityId: plan.identity.runtimeIdentityId,
@@ -3559,6 +3568,68 @@ describe("Tart VM ticket ledger integration", () => {
       ),
     ).toMatchObject({ state: "released" });
     expect(cloneCount).toBe(1);
+    // No host/provider/node hint: same image version, Linux container request,
+    // same composed services. Disabled Tart connection must not affect Docker.
+    const containerRequest = {
+      ...request(),
+      image: { versionId: "20000000-0000-4000-8000-000000000003" },
+      kind: "container",
+      guestOs: "linux",
+    };
+    // The preceding recovery advances the fixture clock; refresh the synthetic
+    // container observation as the real background observer would do.
+    await storage.run(
+      "UPDATE nodes SET observed_at_ms=?,version=version+1 WHERE id='40000000-0000-4000-8000-000000000001'",
+      [clock],
+    );
+    const container = await composition.tickets.acquire(
+      consumerId,
+      "mixed-linux",
+      containerRequest,
+    );
+    const containerAllocation = await composition.tickets.reserveNext();
+    expect(containerAllocation?.nodeId).toBe(
+      "40000000-0000-4000-8000-000000000001",
+    );
+    await worker.reconcile();
+    const containerView = await new TicketQueries(storage, () => clock).get(
+      consumerId,
+      container.ticketId,
+    );
+    expect(containerView).toMatchObject({
+      phase: "ready",
+      placement: {
+        provider: "portainer",
+        guestOs: "linux",
+        architecture: "amd64",
+      },
+    });
+    expect(
+      (
+        await new TicketQueries(storage, () => clock).get(
+          consumerId,
+          ticket.ticketId,
+        )
+      )?.placement,
+    ).toMatchObject({
+      provider: "tart",
+      guestOs: "macos",
+      architecture: "arm64",
+    });
+    expect(cloneCount).toBe(1);
+    await composition.tickets.cancel(container.ticketId, consumerId);
+    await worker.reconcileCleanupLane();
+    expect(
+      await new TicketQueries(storage, () => clock).get(
+        consumerId,
+        container.ticketId,
+      ),
+    ).toMatchObject({ phase: "released", cleanupStatus: "complete" });
+    expect(
+      await storage.get(
+        "SELECT count(*) n FROM capacity_claims WHERE state<>'released'",
+      ),
+    ).toMatchObject({ n: 0n });
   });
 });
 
