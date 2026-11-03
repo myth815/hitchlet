@@ -227,16 +227,22 @@ wrapper's absolute path to the CLI's `--adapter` option.
 The factory accepts only `ssh` grants with `ephemeral_private_key` authentication.
 It passes the grant's host, port, username, and private-key string to `ssh2`,
 provides the raw-key verifier callback without `hostHash`, and runs only the fixed
-read-only probe `id -un && id -u && id -g && node --version`. Its result contains
-only the numeric uid/gid and Node version. On completion, timeout, or the earlier
+read-only identity probe `id -un && id -u && id -g`. Its result contains only
+`probe`, numeric `uid` and `gid`; it does not require Node (or another workload runtime)
+in the tenant. A Node consumer process can connect to a Go, Python or other compatible
+SSH image. Consumers that used the old example result's `nodeVersion` must check their
+selected workload toolchain separately; this is an example summary, not a change to
+the public SDK or Ticket DTO. On completion, timeout, or the earlier
 confirmed lease/access deadline, it closes the local channel and calls the
 client's protocol `end()` followed by socket `destroy()`. That does not kill
 remote work or provide strict offline enforcement. In addition to the controlled
-fake `Client` tests, this factory completed a real API-fingerprint-verified SSH
-probe through the public SDK/CLI on the isolated Studio stack on 2026-11-02. The
+fake `Client` tests, the earlier Node-probe version of this factory completed a
+real API-fingerprint-verified SSH probe through the public SDK/CLI on the isolated Studio stack on 2026-11-02. The
 single Ticket was released with verified cleanup. See the
 [exact environment, receipt, and limits](../../../docs/STUDIO-SSH-ADAPTER-REAL-2026-11-02.md).
-The repeatable Simulator workflow remains synthetic; its results do not replace
+The language-independent identity probe has controlled regression evidence; it has
+not been rerun on a real stack. The repeatable Simulator workflow remains synthetic;
+its results do not replace
 the separate real-connection evidence or establish other platforms as tested.
 
 Run the focused adapter tests with:
@@ -318,7 +324,7 @@ services.
 
 See [VM CLI test recipe](../../../docs/VM-CLI-TEST-RECIPE.md) for the fixed Vesta
 source, consumer-owned SSH/SFTP commands, tool versions, result manifest and
-cleanup procedure. The reference SSH adapter remains an id/Node probe, not a test
+cleanup procedure. The reference SSH adapter remains a read-only identity probe, not a test
 runner. The blocking adapter holds this CLI's state lock; do not run another
 same-state process expecting it to renew the lease concurrently. A short test
 can renew before the command and stay within the confirmed deadline. Longer jobs
@@ -326,6 +332,8 @@ need their consumer's SDK renewal/checkpoint supervision; no hidden background
 renewal or business scheduler is added here.
 
 The new parameter/cancellation behaviour is tested with an isolated Simulator;
-the recorded macOS ARM real VM result is reused rather than rerun. Linux guest
-preparation is tracked separately in
-[Tart Linux ARM preparation](../../../docs/TART-LINUX-ARM-PREPARATION.md).
+the recorded macOS ARM and Ubuntu Linux ARM real VM results are reused rather
+than rerun. See the separate
+[Linux ARM acceptance](../../../docs/TART-LINUX-ARM-ACCEPTANCE-2026-11-03.md)
+and [consumer readiness](../../../docs/CONSUMER-READINESS.md) for the current
+capability and deployment boundaries.

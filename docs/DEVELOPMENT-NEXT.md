@@ -10,6 +10,8 @@ Ubuntu 24.04.5 Linux ARM 也已完成固定初始化与真实资格/发布/单�
 
 `bd6a6b0` 已改进公开示例的显式资源/租期参数、实际交付投影、取消终态与未知结果恢复，以 localhost Simulator 定向回归；随后本批按明确授权完成 Linux 初始化和实机。可重复操作见 [VM CLI 配方](VM-CLI-TEST-RECIPE.md)。Vesta 的源码/测试矩阵、命令及业务结果仍由消费者组织，不加入 Hitchlet 调度器。
 
+最新跨消费者现状、已完成的小修和需具体安排的事项统一见 [消费者接入现状](CONSUMER-READINESS.md)。新 Go Docker 租客已完成一张纯合成票并正常归还，见 [Go 验收](DOCKER-GO-ACCEPTANCE-2026-11-04.md)；旧 0039 基础包加 d0128a8 窄修的兼容部署不等于最新完整版本部署。
+
 ## 直接后续
 
 1. 消费者复用配方，从当前授权 catalog 取 IDs，固定源码和短任务预算；先 confirmed 续租、按指纹接用，保存回读结果后正常归还或明确取消。旧 token/测试 IDs 不当持久服务入口。长任务续租监督由消费者实现，不用无限调大 SSH timeout。

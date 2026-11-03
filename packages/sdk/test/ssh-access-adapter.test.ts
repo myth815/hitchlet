@@ -106,7 +106,7 @@ afterEach(() => {
 });
 
 describe("consumer-supplied SSH reference adapter (controlled Client only)", () => {
-  it("passes the official grant fields, verifies raw host bytes before exec, and returns only the fixed probe summary", async () => {
+  it("verifies the official grant and raw host key, then returns identity without requiring tenant Node", async () => {
     const input = context();
     const { promise, client } = start(input);
     expect(client.config).toMatchObject({
@@ -121,10 +121,10 @@ describe("consumer-supplied SSH reference adapter (controlled Client only)", () 
     const channel = ready(client);
     expect(input.verifyServerHostKey).toHaveBeenCalledWith(rawKey);
     expect(client.exec).toHaveBeenCalledWith(
-      "id -un && id -u && id -g && node --version",
+      "id -un && id -u && id -g",
       expect.any(Function),
     );
-    channel.emit("data", Buffer.from("workspace\n1000\n1000\nv24.22.2\n"));
+    channel.emit("data", Buffer.from("workspace\n1000\n1000\n"));
     channel.emit("end");
     channel.emit("close", 0);
     const result = await promise;
@@ -132,12 +132,29 @@ describe("consumer-supplied SSH reference adapter (controlled Client only)", () 
       probe: "complete",
       uid: 1000,
       gid: 1000,
-      nodeVersion: "v24.22.2",
     });
     expect(JSON.stringify(result)).not.toContain(material);
     expectClean(client, channel);
     expect(client.config.hostVerifier(rawKey)).toBe(false);
   });
+
+  it.each([
+    "workspace\n1000\n",
+    "workspace\nnot-a-uid\n1000\n",
+    "workspace\n1000\n9007199254740992\n",
+    "workspace\n1000\n1000\nunexpected\n",
+  ])(
+    "rejects an incomplete or malformed identity response (%s)",
+    async (stdout) => {
+      const { promise, client } = start();
+      const rejected = expect(promise).rejects.toThrow(/invalid result/);
+      const channel = ready(client);
+      channel.emit("data", Buffer.from(stdout));
+      channel.emit("close", 0);
+      await rejected;
+      expectClean(client, channel);
+    },
+  );
 
   it.each(["ephemeral_password", "ssh_certificate", "client_public_key"])(
     "refuses unsupported %s authentication before constructing a client",
@@ -290,7 +307,7 @@ describe("consumer-supplied SSH reference adapter (controlled Client only)", () 
     const { promise, client } = start(context(50));
     const rejected = expect(promise).rejects.toThrow(/expired/);
     const channel = ready(client);
-    channel.emit("data", Buffer.from("workspace\n1000\n1000\nv24.22.2\n"));
+    channel.emit("data", Buffer.from("workspace\n1000\n1000\n"));
     vi.setSystemTime(now + 51); // Change the fake wall clock without executing timers.
     channel.emit("close", 0);
     await rejected;

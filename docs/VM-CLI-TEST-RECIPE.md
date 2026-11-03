@@ -39,7 +39,7 @@ node "$EXAMPLE" renew 1200
 node "$EXAMPLE" access-with-adapter --adapter /absolute/path/to/consumer-adapter.mjs
 ```
 
-adapter 为消费者模块，接收 `{grant, verifyServerHostKey, confirmedExpiresAt}`。按 API 主机指纹确认 SSH 服务端，短期材料仅在内存中用于 SSH，不打印或写到状态文件。`ssh-access-adapter.mjs` 只是 id/Node 连接探针，不能把它的成功当作 Vesta 测试通过。
+adapter 为消费者模块，接收 `{grant, verifyServerHostKey, confirmedExpiresAt}`。按 API 主机指纹确认 SSH 服务端，短期材料仅在内存中用于 SSH，不打印或写到状态文件。`ssh-access-adapter.mjs` 只是 id/UID/GID 连接探针，不要求 guest 安装 Node，不能把它的成功当作 Vesta 测试通过。
 
 真正测试的 adapter / 调用 Agent 使用普通 SSH/SFTP：传固定 Git bundle 与校验清单，运行消费者命令，收小日志和报告。平台无需新的媒体或 Vesta API。一次 access 结果未知后，adapter 可能再次被调用；消费者命令须先查询原 run 的结果/检查点，不盲目重跑。
 

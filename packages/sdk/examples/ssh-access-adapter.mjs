@@ -1,4 +1,4 @@
-const PROBE_COMMAND = "id -un && id -u && id -g && node --version";
+const PROBE_COMMAND = "id -un && id -u && id -g";
 const MAX_OUTPUT_BYTES = 4096;
 const swallowLateError = () => {};
 
@@ -24,11 +24,10 @@ function positiveTimeout(value, fallback, name) {
 function safeProbeSummary(stdout) {
   const lines = stdout.toString("utf8").trim().split(/\r?\n/);
   if (
-    lines.length !== 4 ||
+    lines.length !== 3 ||
     lines[0].length === 0 ||
     !/^\d+$/.test(lines[1]) ||
-    !/^\d+$/.test(lines[2]) ||
-    !/^v\d+\.\d+\.\d+(?:[-+][A-Za-z0-9.-]+)?$/.test(lines[3])
+    !/^\d+$/.test(lines[2])
   ) {
     throw new Error("The remote read-only probe returned an invalid result.");
   }
@@ -42,7 +41,6 @@ function safeProbeSummary(stdout) {
     probe: "complete",
     uid: Number(lines[1]),
     gid: Number(lines[2]),
-    nodeVersion: lines[3],
   };
 }
 
