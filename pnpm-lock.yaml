@@ -126,7 +126,7 @@ importers:
   packages/sdk:
     dependencies:
       '@hitchlet/contracts':
-        specifier: workspace:*
+        specifier: workspace:0.1.0
         version: link:../contracts
     devDependencies:
       typescript:

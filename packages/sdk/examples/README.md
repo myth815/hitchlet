@@ -8,6 +8,55 @@ or perform work on the tenant's behalf.
 It is intended for a recoverable experimental deployment, not production
 operations.
 
+## Install the SDK in a separate consumer project
+
+The workspace build can produce a paired local candidate without publishing to a
+registry. After an authorized clean build, run the pairing command from the
+repository root with an empty absolute output directory:
+
+```sh
+export HITCHLET_BUILD_REVISION="$(git rev-parse HEAD)"
+pnpm --filter @hitchlet/contracts build
+pnpm --filter @hitchlet/sdk build
+node scripts/prepare-sdk-pair.mjs /absolute/path/to/hitchlet-sdk-candidate
+```
+
+The command refuses missing or stale build provenance, requires the SDK and
+contracts versions to match, packs both packages, checks the packed export files
+and exact dependency, and writes `hitchlet-sdk-pair.json` with each tarball's
+SHA-256. Use both tarballs in a separate consumer project:
+
+```sh
+mkdir /absolute/path/to/sdk-consumer
+cd /absolute/path/to/sdk-consumer
+npm init -y
+npm install \
+  /absolute/path/to/hitchlet-sdk-candidate/hitchlet-contracts-0.1.0.tgz \
+  /absolute/path/to/hitchlet-sdk-candidate/hitchlet-sdk-0.1.0.tgz
+```
+
+Run the package-name import and read-only health request against an API you
+already operate:
+
+```sh
+HITCHLET_ORIGIN=https://hitchlet.example \
+  node node_modules/@hitchlet/sdk/examples/consumer-import.mjs
+```
+
+For a traceable candidate, build the exact reviewed source revision and set
+`HITCHLET_BUILD_REVISION` to its full Git commit before both package builds. The
+pair manifest records that supplied revision, source/build fingerprints, and
+tarball hashes. It records `null` when no revision is supplied. The tarballs are
+local files; this flow does not publish them. Provenance is a consistency record
+for the successful build inputs and outputs, not cryptographic build attestation;
+never use it to bless existing stale output.
+
+See the [Studio ARM release candidate guide](../../../docs/STUDIO-ARM-RELEASE-CANDIDATE.md)
+for the paired Docker image and consumer workflow.
+
+The current checkout's legacy `dist` files have no provenance manifest and are
+rejected by the pairing command until a fresh build succeeds.
+
 ## Run against the isolated Simulator
 
 Use an already initialized localhost Simulator with an existing consumer token.

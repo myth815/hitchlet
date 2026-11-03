@@ -39,6 +39,8 @@ recovery semantics. The remaining sections cover real Docker and maintenance.
 Keep this Simulator lab separate from a real installation; `init:admin` and
 `init:simulator` deliberately reject non-empty ledgers.
 
+Studio ARM 的 Controller/GUI、Runtime Agent、native Host 与 SDK/contracts 发布配对要求，以及未来有界实机验收步骤，见[Studio ARM 发布候选说明](STUDIO-ARM-RELEASE-CANDIDATE.md)。
+
 ## Container installation and TLS/cookie boundary
 
 The production Dockerfile builds Node24 artifacts, deploys production controller

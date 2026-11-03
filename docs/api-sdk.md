@@ -13,7 +13,7 @@ const client = new HitchletClient(process.env.HITCHLET_ORIGIN, {
 });
 ```
 
-自己的 workspace 可依赖 `@hitchlet/sdk`，并从包名导入。不要把服务器源码或设计目录当运行时依赖。长期 token 从受控终端、秘密管理器或进程环境注入；不放入 URL、代码、日志或浏览器 localStorage。
+自己的 workspace 可依赖 `@hitchlet/sdk`，并从包名导入。跨工程使用见[成对本地 SDK 制品安装](../packages/sdk/examples/README.md#install-the-sdk-in-a-separate-consumer-project)：同时安装同次构建的 contracts 和 SDK tarball，核对配对清单与 SHA-256；仓库尚未向公共 registry 发布这两个私有包。不要把服务器源码或设计目录当运行时依赖。长期 token 从受控终端、秘密管理器或进程环境注入；不放入 URL、代码、日志或浏览器 localStorage。
 
 浏览器使用 `client.session.create(token)` 换取 HttpOnly 会话，然后使用 cookie 模式客户端及 CSRF provider：
 

@@ -16,6 +16,8 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 
 D22b Windows 原生正常关机与 WOL 已通过软件主审，失联、执行者崩溃及登录撤销已实测；完整逐机关机/唤醒资格尚未通过。默认关闭自动电源；安装、守卫与启用条件见[原生电源说明](docs/POWER-NATIVE.md)。
 
+StudioARM / Colima Docker 与 Runtime 镜像的发布候选准备和后续验收边界见[Studio ARM 发布候选](docs/STUDIO-ARM-RELEASE-CANDIDATE.md)。
+
 ## 能力
 
 - **凭票使用**：申请、排队、资源预留、准备、接用、续租和归还，异常状态可恢复。

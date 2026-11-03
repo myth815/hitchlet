@@ -12,6 +12,8 @@ RUN pnpm --filter @hitchlet/contracts build && pnpm --filter @hitchlet/sdk build
 RUN pnpm deploy --legacy --filter @hitchlet/controller --prod /out/controller
 
 FROM node:24.22.0-bookworm-slim AS runtime
+ARG HITCHLET_BUILD_REVISION=unknown
+LABEL org.opencontainers.image.revision=${HITCHLET_BUILD_REVISION}
 ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000 DATA_DIR=/var/lib/hitchlet GUI_DIR=/app/gui
 WORKDIR /app
 COPY --from=build /out/controller ./

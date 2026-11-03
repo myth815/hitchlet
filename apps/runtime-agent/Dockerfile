@@ -1,4 +1,4 @@
-FROM node:24-bookworm-slim AS build
+FROM node:24.22.0-bookworm-slim AS build
 
 WORKDIR /workspace
 RUN corepack enable
@@ -8,7 +8,7 @@ RUN pnpm --filter @hitchlet/contracts build \
     && pnpm --filter @hitchlet/runtime-agent build \
     && pnpm --filter @hitchlet/runtime-agent deploy --legacy --prod /runtime-agent-out
 
-FROM node:24-bookworm-slim AS dockercli
+FROM node:24.22.0-bookworm-slim AS dockercli
 ARG TARGETARCH
 ARG DOCKER_CLI_VERSION=29.5.2
 RUN apt-get update \
@@ -23,7 +23,9 @@ RUN apt-get update \
     && install -D /tmp/docker/docker /out/usr/local/bin/docker \
     && rm -rf /tmp/docker /tmp/docker.tgz /var/lib/apt/lists/*
 
-FROM node:24-bookworm-slim
+FROM node:24.22.0-bookworm-slim
+ARG HITCHLET_BUILD_REVISION=unknown
+LABEL org.opencontainers.image.revision=${HITCHLET_BUILD_REVISION}
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates iptables conntrack iproute2 \
     && rm -rf /var/lib/apt/lists/*

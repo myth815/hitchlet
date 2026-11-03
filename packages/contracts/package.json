@@ -2,6 +2,9 @@
   "name": "@hitchlet/contracts",
   "version": "0.1.0",
   "private": true,
+  "files": [
+    "dist/**"
+  ],
   "type": "module",
   "exports": {
     ".": {
@@ -30,7 +33,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node ../../scripts/clean-package-dist.mjs @hitchlet/contracts && tsc -p tsconfig.json && node ../../scripts/package-provenance.mjs @hitchlet/contracts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "vitest run"
   },

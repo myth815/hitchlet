@@ -2,6 +2,11 @@
   "name": "@hitchlet/sdk",
   "version": "0.1.0",
   "private": true,
+  "files": [
+    "dist/**",
+    "README.md",
+    "examples/**"
+  ],
   "type": "module",
   "exports": {
     ".": {
@@ -10,12 +15,12 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "node ../../scripts/clean-package-dist.mjs @hitchlet/sdk && tsc -p tsconfig.json && node ../../scripts/package-provenance.mjs @hitchlet/sdk",
     "typecheck": "pnpm --filter @hitchlet/contracts build && tsc --noEmit -p tsconfig.json",
     "test": "pnpm --filter @hitchlet/contracts build && vitest run"
   },
   "dependencies": {
-    "@hitchlet/contracts": "workspace:*"
+    "@hitchlet/contracts": "workspace:0.1.0"
   },
   "devDependencies": {
     "typescript": "5.9.3",
