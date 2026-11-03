@@ -73,13 +73,15 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     });
     const leases = new LeaseService(db);
     let pauseRenewals = false;
+    let pauseReservations = false;
     const tick = () => {
       if (running) return running;
       running = (async () => {
         await tickets.refreshSimulatorFixtureObservation();
         await worker.reconcileBeforeScheduling();
         if (!pauseRenewals) await leases.reconcilePending();
-        if (await tickets.reserveNext()) await worker.reconcile();
+        if (!pauseReservations && (await tickets.reserveNext()))
+          await worker.reconcile();
       })().finally(() => {
         running = undefined;
       });
@@ -111,6 +113,7 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     let dropAcquire = false;
     let dropRenewalReads = false;
     let dropRelease = false;
+    let dropCancel = false;
     let dropAccess = false;
     let dropTicketReads = false;
     let syntheticHostKey = false;
@@ -145,6 +148,7 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
             (dropRelease &&
               req.method === "POST" &&
               url.endsWith("/release")) ||
+            (dropCancel && req.method === "POST" && url.endsWith("/cancel")) ||
             (dropAccess && req.method === "POST" && url.endsWith("/access")) ||
             (dropTicketReads &&
               req.method === "GET" &&
@@ -305,7 +309,19 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     expect(
       new Set(posts.filter((p) => p.path === "/v1/tickets").map((p) => p.key)),
     ).toEqual(new Set([original.acquireIdempotencyKey]));
-    expect((await cli(["wait-ready"])).code).toBe(0);
+    const readyOutput = await cli(["wait-ready"]);
+    expect(readyOutput.code).toBe(0);
+    expect(JSON.parse(readyOutput.stdout)).toMatchObject({
+      placement: {
+        guestOs: "linux",
+        architecture: choices.nodes[0].architecture,
+      },
+      resourceContract: { request: original.request.resources },
+    });
+    const statusOutput = JSON.parse((await cli(["status"])).stdout);
+    expect(statusOutput.placement).toEqual(
+      JSON.parse(readyOutput.stdout).placement,
+    );
     expect((await cli(["claim"])).code).toBe(0);
     const claimed = await readState();
     expect(claimed.lastConfirmedLeaseExpiresAt).toBeTruthy();
@@ -609,6 +625,116 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     expect(await count("SELECT count(*) n FROM tickets")).toBe(
       ticketsBeforePreview,
     );
+    const invalidResource = await cli([
+      "preview",
+      "--version",
+      versionId,
+      "--network",
+      networkId,
+      "--memory-mib",
+      "NaN",
+    ]);
+    expect(invalidResource.code).not.toBe(0);
+    expect(invalidResource.stderr).toContain("INVALID_ARGUMENTS");
+    pauseReservations = true;
+    await running;
+    const requested = await cli([
+      "preview",
+      "--version",
+      versionId,
+      "--network",
+      networkId,
+      "--kind",
+      "container",
+      "--guest-os",
+      "linux",
+      "--architecture",
+      choices.nodes[0].architecture,
+      "--cpu-millis",
+      "1000",
+      "--memory-mib",
+      "1024",
+      "--scratch-mib",
+      "0",
+      "--lease-seconds",
+      "900",
+      "--max-lifetime-seconds",
+      "1800",
+    ]);
+    expect(requested.code).toBe(0);
+    const requestState = await readState();
+    expect(requestState.request).toMatchObject({
+      guestOs: "linux",
+      allowedArchitectures: [choices.nodes[0].architecture],
+      resources: { cpuMillis: 1000, memoryMiB: 1024, scratchMiB: 0 },
+      lease: { requestedSeconds: 900, maximumLifetimeSeconds: 1800 },
+    });
+    expect(requestState.request).not.toHaveProperty("allowedProviders");
+    expect(requestState.request).not.toHaveProperty("allowedNodeIds");
+    expect((await cli(["acquire-or-resume"])).code).toBe(0);
+    const cancelledId = (await readState()).ticketId;
+    dropCancel = true;
+    const lostCancel = await cli([
+      "cancel",
+      "--reason",
+      "test no longer needed",
+    ]);
+    expect(lostCancel.code).not.toBe(0);
+    const pendingCancel = (await readState()).prepared;
+    expect(pendingCancel.kind).toBe("cancel");
+    expect(pendingCancel.ticketId).toBe(cancelledId);
+    expect((await readState()).outputConfirmation).toBeNull();
+    dropCancel = false;
+    dropTicketReads = true;
+    expect((await cli(["resume"])).code).not.toBe(0);
+    expect((await readState()).prepared).toEqual(pendingCancel);
+    dropTicketReads = false;
+    const cancelled = await cli(["resume"]);
+    expect(cancelled.code).toBe(0);
+    expect(JSON.parse(cancelled.stdout)).toMatchObject({
+      ticketId: cancelledId,
+      phase: "released",
+      cleanupConfirmed: true,
+    });
+    expect((await readState()).prepared).toBeNull();
+    expect(await count("SELECT count(*) n FROM tickets")).toBe(3);
+    expect(
+      new Set(
+        posts.filter((p) => p.path.endsWith("/cancel")).map((p) => p.key),
+      ),
+    ).toEqual(new Set([pendingCancel.idempotencyKey]));
+    pauseReservations = false;
+    expect(
+      (await cli(["preview", "--version", versionId, "--network", networkId]))
+        .code,
+    ).toBe(0);
+    expect((await cli(["acquire-or-resume"])).code).toBe(0);
+    expect((await cli(["wait-ready"])).code).toBe(0);
+    expect((await cli(["claim"])).code).toBe(0);
+    dropAccess = true;
+    expect((await cli(["access-with-adapter"])).code).not.toBe(0);
+    const accessBeforeCancel = (await readState()).prepared;
+    expect(accessBeforeCancel.kind).toBe("access");
+    dropAccess = false;
+    const normalCancel = await cli(["cancel"]);
+    expect(normalCancel.code).toBe(0);
+    expect(JSON.parse(normalCancel.stdout)).toMatchObject({
+      phase: "released",
+      terminalReason: "consumer_cancel",
+      cleanupStatus: "complete",
+      cleanupConfirmed: true,
+    });
+    expect((await readState()).prepared).toBeNull();
+    expect(await count("SELECT count(*) n FROM tickets")).toBe(4);
+    expect((await readState()).decisionHistory).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          kind: "superseded-by-cancel",
+          command: accessBeforeCancel,
+          previousOutcome: "unknown",
+        }),
+      ]),
+    );
 
     expect(
       await count(
@@ -645,7 +771,10 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     expect(tickError).toBeUndefined();
     Object.assign(evidence, {
       result: "passed",
-      ticketCount: 2,
+      ticketCount: 4,
+      explicitResourceSelection: true,
+      actualPlacementReported: true,
+      cancelUnknownRecoveredWithSameTicket: true,
       sameTicketAfterProcessRestart: true,
       sameAcquireKey: true,
       identityAndFrozenRequestEnforced: true,

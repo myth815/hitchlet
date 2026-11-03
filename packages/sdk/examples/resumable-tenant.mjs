@@ -18,7 +18,7 @@ const help = `Usage: node resumable-tenant.mjs <command> [options]
 
 Commands:
   catalog
-  preview --version ID --network ID [--kind container|vm] [--guest-os linux|macos|windows] [--architecture arm64|amd64] [--node ID] [--storage ID --subpath PATH --mode RO|RW]
+  preview --version ID --network ID [--kind container|vm] [--guest-os linux|macos|windows] [--architecture arm64|amd64] [--cpu-millis N --memory-mib N --scratch-mib N] [--lease-seconds N --max-lifetime-seconds N] [--node ID] [--storage ID --subpath PATH --mode RO|RW]
   acquire-or-resume
   status
   wait-ready
@@ -26,6 +26,7 @@ Commands:
   access-with-adapter [--adapter /absolute/path/to/consumer-adapter.mjs]
   renew [seconds]
   resume
+  cancel [--reason TEXT]
   confirm-output-and-release --output-saved
 
 Required environment: HITCHLET_ORIGIN, HITCHLET_TOKEN, HITCHLET_DEMO_STATE_DIR.
@@ -198,6 +199,23 @@ function options(args) {
   return result;
 }
 
+function resourceArgument(args, key, fallback, minimum) {
+  if (args[key] === undefined) return fallback;
+  const raw = args[key];
+  const value = Number(raw);
+  if (
+    typeof raw !== "string" ||
+    !/^\d+$/.test(raw) ||
+    !Number.isSafeInteger(value) ||
+    value < minimum
+  )
+    throw new ExampleError(
+      "INVALID_ARGUMENTS",
+      `--${key} must be an integer of at least ${minimum}.`,
+    );
+  return value;
+}
+
 function acquireRequestFromCatalog(catalog, args) {
   const version = catalog.versions.find((item) => item.id === args.version);
   const node = args.node
@@ -226,17 +244,23 @@ function acquireRequestFromCatalog(catalog, args) {
   const request = {
     image: { versionId: version.id },
     resources: {
-      cpuMillis: Math.max(
+      cpuMillis: resourceArgument(
+        args,
+        "cpu-millis",
+        Math.max(1, ...platforms.map((p) => p.minimumResources.cpuMillis)),
         1,
-        ...platforms.map((p) => p.minimumResources.cpuMillis),
       ),
-      memoryMiB: Math.max(
+      memoryMiB: resourceArgument(
+        args,
+        "memory-mib",
+        Math.max(1, ...platforms.map((p) => p.minimumResources.memoryMiB)),
         1,
-        ...platforms.map((p) => p.minimumResources.memoryMiB),
       ),
-      scratchMiB: Math.max(
+      scratchMiB: resourceArgument(
+        args,
+        "scratch-mib",
+        Math.max(0, ...platforms.map((p) => p.minimumResources.scratchMiB)),
         0,
-        ...platforms.map((p) => p.minimumResources.scratchMiB),
       ),
     },
     networkProfileId: network.id,
@@ -245,6 +269,33 @@ function acquireRequestFromCatalog(catalog, args) {
     ...(args.architecture ? { allowedArchitectures: [args.architecture] } : {}),
     ...(node ? { allowedNodeIds: [node.id] } : {}),
   };
+  if (
+    args["lease-seconds"] !== undefined ||
+    args["max-lifetime-seconds"] !== undefined
+  ) {
+    request.lease = {
+      ...(args["lease-seconds"] !== undefined
+        ? {
+            requestedSeconds: resourceArgument(
+              args,
+              "lease-seconds",
+              undefined,
+              1,
+            ),
+          }
+        : {}),
+      ...(args["max-lifetime-seconds"] !== undefined
+        ? {
+            maximumLifetimeSeconds: resourceArgument(
+              args,
+              "max-lifetime-seconds",
+              undefined,
+              1,
+            ),
+          }
+        : {}),
+    };
+  }
   if (args.storage) {
     const storage = catalog.storage.find((item) => item.id === args.storage);
     const mode =
@@ -546,6 +597,11 @@ async function main() {
         safeOutput({
           ticketId: state.ticketId,
           phase: ticket?.phase ?? null,
+          placement: ticket?.placement ?? null,
+          resourceContract: ticket?.acceptedRequest.resources ?? null,
+          networkMode: ticket?.networkMode ?? null,
+          scheduling: ticket?.scheduling ?? null,
+          cleanupStatus: ticket?.cleanupStatus ?? null,
           lastConfirmedLeaseExpiresAt: state.lastConfirmedLeaseExpiresAt,
           preparedKind: state.prepared?.kind ?? null,
           lastDecision: state.lastDecision,
@@ -561,6 +617,9 @@ async function main() {
         safeOutput({
           ticketId: ready.id,
           phase: ready.phase,
+          placement: ready.placement,
+          resourceContract: ready.acceptedRequest.resources,
+          networkMode: ready.networkMode ?? null,
           leaseExpiresAt: ready.lease?.expiresAt ?? null,
         });
         return;
@@ -751,7 +810,7 @@ async function main() {
         } else if (prepared.kind === "renew") {
           state.lastConfirmedLeaseExpiresAt = result.expiresAt;
         }
-        if (prepared.kind === "release") {
+        if (prepared.kind === "release" || prepared.kind === "cancel") {
           const released = await client.tickets.waitUntilReleased(
             ticketIdRequired(),
             { timeoutMilliseconds: 60_000 },
@@ -790,6 +849,65 @@ async function main() {
           kind: prepared.kind,
           confirmed: true,
           lastConfirmedLeaseExpiresAt: state.lastConfirmedLeaseExpiresAt,
+        });
+        return;
+      }
+      case "cancel": {
+        const id = ticketIdRequired();
+        const pending = state.prepared;
+        if (
+          pending &&
+          (pending.ticketId !== id ||
+            !["access", "renew", "release", "cancel"].includes(pending.kind))
+        )
+          throw new ExampleError(
+            "PREPARED_COMMAND_UNRESOLVED",
+            "Resolve the original Acquire / Ticket identity before cancelling.",
+          );
+        if (pending && ["release", "cancel"].includes(pending.kind))
+          await client.tickets.resume(pending);
+        else
+          await client.tickets.cancel(
+            id,
+            args.reason === undefined ? {} : { reason: args.reason },
+            {
+              idempotencyKey: randomUUID(),
+              onPrepared: async (command) => {
+                if (pending) {
+                  state.decisionHistory = [
+                    ...(state.lastDecision ? [state.lastDecision] : []),
+                    {
+                      kind: "superseded-by-cancel",
+                      command: pending,
+                      previousOutcome: "unknown",
+                      recordedAt: new Date().toISOString(),
+                    },
+                  ];
+                  state.lastDecision = null;
+                }
+                state.prepared = command;
+                await persist();
+              },
+            },
+          );
+        const released = await client.tickets.waitUntilReleased(id, {
+          timeoutMilliseconds: 60_000,
+        });
+        state.lastDecision = {
+          kind: "ticket-released",
+          ticketId: id,
+          ownerId: identity.consumerId,
+          command: state.prepared,
+          recordedAt: new Date().toISOString(),
+        };
+        state.prepared = null;
+        await persist();
+        safeOutput({
+          ticketId: id,
+          phase: released.phase,
+          terminalReason: released.terminalReason,
+          cleanupStatus: released.cleanupStatus,
+          cleanupConfirmed: true,
         });
         return;
       }

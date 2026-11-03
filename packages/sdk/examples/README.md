@@ -116,6 +116,21 @@ node packages/sdk/examples/resumable-tenant.mjs preview \
 
 `--guest-os linux|macos|windows`, `--architecture arm64|amd64` and `--kind container|vm` are independent environment requirements. By default the platform chooses a node/provider. `--node ID` is an optional placement override. Unsupported preview (`availability=unsupported`) must be corrected; a compatible but temporarily unavailable environment can queue. The CLI does not start a VM by itself.
 
+The optional `--cpu-millis`, `--memory-mib`, `--scratch-mib`,
+`--lease-seconds` and `--max-lifetime-seconds` flags preserve explicit consumer
+requirements. Without them, the existing catalog-minimum and server lease defaults
+remain. Values are not silently reduced to quotas or image minimums; preview and
+admission explain whether the request can be met. For the verified macOS ARM
+candidate use `--kind vm --guest-os macos --architecture arm64 --cpu-millis 4000
+--memory-mib 8192 --scratch-mib 0`. Current catalog IDs are required.
+
+`status` and `wait-ready` include actual placement, the accepted resource contract
+and network mode. Placement OS/architecture come from the server; the resource
+contract is not a fresh physical measurement. An older server may omit the OS.
+Do not infer it from its host. In particular, the existing `0039abe` Docker server
+does not accept the new `guestOs` request field; use a matching candidate server
+and paired SDK/contracts when selecting guest OS explicitly.
+
 `preview` reports feasibility only; it does not guarantee capacity. If an Acquire
 response is lost, restart the command. The saved `PreparedTicketCommand` and its
 original key are resumed; the example will not make a second logical Acquire.
@@ -137,6 +152,15 @@ queries that same Ticket. It archives and clears the command only when the
 authenticated owner query returns the matching released Ticket. A failed or
 unknown read leaves the prepared command untouched; `acquire` is never started
 automatically. Once cleared, an explicit `preview` can begin another lifecycle.
+
+To abandon the original task, run `node resumable-tenant.mjs cancel --reason
+"test no longer needed"`. Cancellation can terminate work without saving its
+output; it does not claim output confirmation. The example persists the cancel
+command and waits for the released state before reporting cleanup. If access or
+renewal is still unknown on the same Ticket, cancellation atomically preserves
+that command as superseded/unknown and proceeds; a lost cancellation response is
+recovered with `resume`, never another Acquire. A prior release/cancel intent is
+resumed unchanged. A missing/uncertain Ticket identity must first be recovered.
 
 Renew well before the saved confirmed expiry, leaving enough time for network
 retries and any pending server-side renewal decision. For example, after the
@@ -289,3 +313,19 @@ cleanup is still pending, keep the saved prepared command and explicitly run
 only for loopback development. Use the isolated localhost Simulator for the
 repeatable demonstration. This example does not provision Colima, Docker, or
 services.
+
+## Repeat the verified macOS ARM CLI workflow
+
+See [VM CLI test recipe](../../../docs/VM-CLI-TEST-RECIPE.md) for the fixed Vesta
+source, consumer-owned SSH/SFTP commands, tool versions, result manifest and
+cleanup procedure. The reference SSH adapter remains an id/Node probe, not a test
+runner. The blocking adapter holds this CLI's state lock; do not run another
+same-state process expecting it to renew the lease concurrently. A short test
+can renew before the command and stay within the confirmed deadline. Longer jobs
+need their consumer's SDK renewal/checkpoint supervision; no hidden background
+renewal or business scheduler is added here.
+
+The new parameter/cancellation behaviour is tested with an isolated Simulator;
+the recorded macOS ARM real VM result is reused rather than rerun. Linux guest
+preparation is tracked separately in
+[Tart Linux ARM preparation](../../../docs/TART-LINUX-ARM-PREPARATION.md).
