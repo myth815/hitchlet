@@ -2,7 +2,7 @@
 
 ## 范围与执行
 
-- Docker 正式交付 M2 通过 Portainer 接入。2026-11-02 用户更新：review 修复与完整复审已收口，当前推进 Tart 本机驱动、同账本生命周期、可信 Runtime/固定 guest 初始化/SSH、正常管理发布与租客 VM 选择，以受控夹具/合成账本验证；原生网络计划/Softnet 控制读回回收及正式 server 组合已有受控源码。2026-11-03 已按具体授权完成 Studio Tart 2.41.1 / Tahoe macOS ARM / 默认 NAT 的真实资格、发布和单票 CLI 测试，见 `docs/TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md`；临时栈已停止、临时认证已清理，未提供常驻公共租用。Softnet、Linux guest、Windows / Hyper-V 尚未实机验收。后续真实安装、镜像/许可、认证或网络安全变更仍需明确具体范围；恢复边界见 `docs/TART-NETWORK.md` 和 `docs/TART-DRIVER.md`。Hyper-V 与云扩容仍后置。
+- Docker 正式交付 M2 通过 Portainer 接入。2026-11-02 用户更新：review 修复与完整复审已收口，当前推进 Tart 本机驱动、同账本生命周期、可信 Runtime/固定 guest 初始化/SSH、正常管理发布与租客 VM 选择，以受控夹具/合成账本验证；原生网络计划/Softnet 控制读回回收及正式 server 组合已有受控源码。2026-11-03 已按具体授权完成 Studio Tart 2.41.1 / Tahoe macOS ARM / 默认 NAT 的真实资格、发布和单票 CLI 测试，见 `docs/TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md`；临时栈已停止、临时认证已清理，未提供常驻公共租用。Ubuntu 24.04.5 Linux ARM 的固定初始化、正常资格/发布和单票 CLI 实机闭环也已完成，见 `docs/TART-LINUX-ARM-ACCEPTANCE-2026-11-03.md`；临时服务与认证已清理。Softnet、其他 Linux 发行版、Windows / Hyper-V 尚未实机验收。后续真实安装、镜像/许可、认证或网络安全变更仍需明确具体范围；恢复边界见 `docs/TART-NETWORK.md` 和 `docs/TART-DRIVER.md`。Hyper-V 与云扩容仍后置。
 - 按 `docs/IMPLEMENTATION.md` 的固定批次推进。2026-10-20 用户更新后续模型规则：先用 GPT-6 Luna、high 思考预算、正常速度；明确不能胜任后可切换 GPT-6.1 Sol，无需再逐模块请求授权。主智能体审核并实际验证后再进入依赖批次。
 - 2026-10-20 用户仅授权批次5的“共用 tenant/validation 持久执行、验证回收取证与发布闭环”改用 GPT-6.1 Sol；这不是其他模块的模型授权，其他实现仍遵循 Luna 策略。
 - 2026-10-20 用户另行授权仅 D20（Host 观测、注册认证与心跳持久化）改用 GPT-6.1 Sol，完成后仍须主审；D21、D22a 及其他后续模块不在本次例外中。

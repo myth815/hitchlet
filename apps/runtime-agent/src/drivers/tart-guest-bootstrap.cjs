@@ -10,7 +10,8 @@ const ACCOUNT = "admin";
 function runGuestBootstrap(input, overrides) {
   const deps = overrides || defaultDependencies();
   const request = validateRequest(input);
-  if (deps.platform !== "darwin" || deps.arch !== "arm64")
+  const linux = deps.platform === "linux";
+  if (!["darwin", "linux"].includes(deps.platform) || deps.arch !== "arm64")
     fail("guest_platform_unsupported");
   if (Number(String(deps.nodeVersion).replace(/^v/, "").split(".")[0]) !== 24)
     fail("guest_node24_required");
@@ -20,7 +21,7 @@ function runGuestBootstrap(input, overrides) {
   if (
     !prepared ||
     prepared.version !== 1 ||
-    prepared.guestOS !== "macos" ||
+    prepared.guestOS !== (linux ? "linux" : "macos") ||
     prepared.guestArch !== "arm64" ||
     prepared.nodeMajor !== 24 ||
     prepared.defaultSshDisabled !== true ||
@@ -58,7 +59,8 @@ function runGuestBootstrap(input, overrides) {
     .digest("hex");
   const stateDirectory = path.join(deps.root, "allocations", allocationHash);
   const statePath = path.join(stateDirectory, "bootstrap.json");
-  const expectedServiceLabel = SERVICE_PREFIX + allocationHash.slice(0, 24);
+  const expectedServiceLabel =
+    (linux ? "hitchlet-sshd-" : SERVICE_PREFIX) + allocationHash.slice(0, 24);
   const expectedConfigPath = path.join(stateDirectory, "sshd_config");
   const publicKeysDirectory =
     deps.publicKeysRoot || "/var/db/hitchlet-ssh-authorized-keys";
@@ -70,10 +72,15 @@ function runGuestBootstrap(input, overrides) {
     publicAllocationDirectory,
     "authorized_keys",
   );
-  const expectedPlistPath = path.join(
-    deps.launchdDirectory || "/Library/LaunchDaemons",
-    expectedServiceLabel + ".plist",
-  );
+  const expectedServicePath = linux
+    ? path.join(
+        deps.systemdDirectory || "/etc/systemd/system",
+        expectedServiceLabel + ".service",
+      )
+    : path.join(
+        deps.launchdDirectory || "/Library/LaunchDaemons",
+        expectedServiceLabel + ".plist",
+      );
   deps.mkdir(path.dirname(stateDirectory), 0o700);
   assertRootDirectory(
     deps,
@@ -98,7 +105,7 @@ function runGuestBootstrap(input, overrides) {
       state.stateDirectory !== stateDirectory ||
       state.configPath !== expectedConfigPath ||
       state.authorizedKeysPath !== authorizedKeysPath ||
-      state.plistPath !== expectedPlistPath
+      (state.servicePath || state.plistPath) !== expectedServicePath
     )
       fail("guest_allocation_already_bootstrapped");
     if (
@@ -117,7 +124,9 @@ function runGuestBootstrap(input, overrides) {
       stateDirectory: stateDirectory,
       configPath: expectedConfigPath,
       authorizedKeysPath: authorizedKeysPath,
-      plistPath: expectedPlistPath,
+      ...(linux
+        ? { servicePath: expectedServicePath }
+        : { plistPath: expectedServicePath }),
     };
     writeJsonAtomic(deps, statePath, state);
   }
@@ -186,14 +195,22 @@ function runGuestBootstrap(input, overrides) {
   ].join("\n");
   writeOwnedText(deps, state.configPath, sshdConfig, 0o600);
 
-  const plist = launchdPlist(
-    state.serviceLabel,
-    state.configPath,
-    stateDirectory,
-  );
-  writeOwnedText(deps, state.plistPath, plist, 0o644);
+  const service = linux
+    ? systemdUnit(state.configPath)
+    : launchdPlist(state.serviceLabel, state.configPath, stateDirectory);
+  writeOwnedText(deps, expectedServicePath, service, 0o644);
+  if (linux) {
+    const runtimeDirectory = deps.sshRuntimeDirectory || "/run/sshd";
+    deps.mkdir(runtimeDirectory, 0o755);
+    assertPublicDirectory(deps, runtimeDirectory);
+  }
   deps.run("/usr/sbin/sshd", ["-t", "-f", state.configPath]);
-  ensureService(deps, state.serviceLabel, state.plistPath, state.configPath);
+  ensureService(
+    deps,
+    state.serviceLabel,
+    expectedServicePath,
+    state.configPath,
+  );
 
   if (state.state === "applied") {
     if (
@@ -239,6 +256,24 @@ function validStoredReceipt(receipt, request) {
 }
 
 function ensureService(deps, label, plistPath, configPath) {
+  if (deps.platform === "linux") {
+    const unit = label + ".service";
+    if (
+      deps.tryRun("/usr/bin/systemctl", ["is-active", "--quiet", unit])
+        .status === 0
+    )
+      return;
+    ensurePortAvailable(deps, label);
+    deps.run("/usr/sbin/sshd", ["-t", "-f", configPath]);
+    deps.run("/usr/bin/systemctl", ["daemon-reload"]);
+    deps.run("/usr/bin/systemctl", ["enable", "--now", unit]);
+    if (
+      deps.tryRun("/usr/bin/systemctl", ["is-active", "--quiet", unit])
+        .status !== 0
+    )
+      fail("guest_sshd_launch_unverified");
+    return;
+  }
   const loaded = deps.tryRun("/bin/launchctl", ["print", "system/" + label]);
   if (loaded.status === 0) return;
   ensurePortAvailable(deps, label);
@@ -249,6 +284,20 @@ function ensureService(deps, label, plistPath, configPath) {
 }
 
 function ensurePortAvailable(deps, label) {
+  if (deps.platform === "linux") {
+    if (
+      deps.tryRun("/usr/bin/systemctl", [
+        "is-active",
+        "--quiet",
+        label + ".service",
+      ]).status === 0
+    )
+      return;
+    const result = deps.tryRun("/usr/bin/ss", ["-H", "-ltn", "sport = :22"]);
+    if (result.status !== 0) fail("guest_ssh_port_check_unknown");
+    if (result.stdout.trim()) fail("guest_ssh_port_22_in_use");
+    return;
+  }
   if (deps.tryRun("/bin/launchctl", ["print", "system/" + label]).status === 0)
     return;
   const result = deps.tryRun("/usr/sbin/lsof", [
@@ -258,6 +307,23 @@ function ensurePortAvailable(deps, label) {
   ]);
   if (result.status === 0) fail("guest_ssh_port_22_in_use");
   if (result.status !== 1) fail("guest_ssh_port_check_unknown");
+}
+
+function systemdUnit(configPath) {
+  return [
+    "[Unit]",
+    "Description=Hitchlet allocation SSH",
+    "After=network.target",
+    "[Service]",
+    "Type=simple",
+    "ExecStart=/usr/sbin/sshd -D -e -f " + configPath,
+    "RuntimeDirectory=sshd",
+    "RuntimeDirectoryMode=0755",
+    "Restart=on-failure",
+    "[Install]",
+    "WantedBy=multi-user.target",
+    "",
+  ].join("\n");
 }
 
 function launchdPlist(label, configPath, stateDirectory) {
@@ -491,8 +557,13 @@ function fail(code) {
 
 function defaultDependencies() {
   return {
-    root: "/var/db/hitchlet",
-    publicKeysRoot: "/var/db/hitchlet-ssh-authorized-keys",
+    root:
+      process.platform === "linux" ? "/var/lib/hitchlet" : "/var/db/hitchlet",
+    publicKeysRoot:
+      process.platform === "linux"
+        ? "/var/lib/hitchlet-ssh-authorized-keys"
+        : "/var/db/hitchlet-ssh-authorized-keys",
+    systemdDirectory: "/etc/systemd/system",
     launchdDirectory: "/Library/LaunchDaemons",
     platform: process.platform,
     arch: process.arch,

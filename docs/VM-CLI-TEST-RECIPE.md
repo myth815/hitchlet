@@ -4,7 +4,7 @@
 
 ## 当前可复用的证据与运行条件
 
-Studio 已完成 Tart 2.41.1 / Tahoe macOS 26.6.2 / arm64、4 vCPU / 8 GiB 的正常注册、资格、镜像验证发布及一张真实 CLI Ticket。记录见 [实机验收](TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md)。工具、封存模板与缓存保留；临时控制面和 Runtime 已关闭，临时认证已清理。旧测试 URL、Ticket 和目录 ID 不是持续在线服务的接入承诺。
+Studio 已完成 Tart 2.41.1 / Tahoe macOS 26.6.2 / arm64、4 vCPU / 8 GiB 的正常注册、资格、镜像验证发布及一张真实 CLI Ticket。记录见 [实机验收](TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md)。工具、封存模板与缓存保留；临时控制面和 Runtime 已关闭，临时认证已清理。旧测试 URL、Ticket 和目录 ID 不是持续在线服务的接入承诺。 Ubuntu 24.04.5 / Linux ARM 的同一固定 CLI 用例也已真实通过，见 [Linux 验收](TART-LINUX-ARM-ACCEPTANCE-2026-11-03.md)；其 4 vCPU / 4 GiB / 20 GB 模板已保留。选择该版本时改为 `--guest-os linux --memory-mib 4096`，仍由 catalog 选择当前实际逻辑版本。Linux 报告的 MemTotal 扣除内核保留，不把它当分配值不足。两次测试分别为独立临时栈，均已关闭。
 
 下一次运行由运维在具体允许的范围内开启专属服务和认证，返回当前 origin、授权 catalog 和配套 SDK/contracts。消费者不负责注册主机、重建账本或修改网络。现有 Docker 影音服务仍为 `0039abe` 合同：它不接受新 `guestOs` 请求字段。新服务兼容旧 Docker 请求，不等于旧服务能接受新字段；不自动升级现有服务。
 
@@ -84,7 +84,7 @@ node "$EXAMPLE" cancel --reason 'test no longer needed'
 
 取消可能终止未完成工作，不附加“已保存输出”的虚假声明。取消和归还都保存 prepared command；只有认证查询或 `waitUntilReleased` 查实 released 才显示 cleanupConfirmed。未知结果用 `resume`，查询失败保留原状态。同票 access/renew 结果未知时仍可明确 cancel；示例原子保留旧命令引用后提交取消，不强迫先解决不再需要的接用/续租，也不把旧命令记为成功。资源清理 unknown 不清 Claim，不用新票代替旧票。
 
-最后由运维核原生 VM 缺席、Claim 0 和本次临时服务/认证的关闭；模板和缓存是否保留按该次范围说明。消费者业务失败不等于平台释放失败，二者分开记录。本轮新增示例行为用 localhost Simulator 回归验证；真实 macOS ARM 证据复用前次单票，不声称本批又跑了 VM 取消或完整矩阵。
+最后由运维核原生 VM 缺席、Claim 0 和本次临时服务/认证的关闭；模板和缓存是否保留按该次范围说明。消费者业务失败不等于平台释放失败，二者分开记录。本轮新增示例行为用 localhost Simulator 回归验证；真实 macOS ARM 证据与后续 Ubuntu Linux ARM 证据分列；后者测试驱动在输出保存后遇到 SFTP 关闭错误，原票归还意图恢复完成。没有实机 VM 取消或完整矩阵通过的声明。
 
 ## Docker 影音接入
 

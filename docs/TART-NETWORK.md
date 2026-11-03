@@ -10,7 +10,7 @@ NAT 用普通 `tart run --no-graphics`，不启动 Softnet，不申请其 root/S
 
 基本 Node 资格只需真实 resourceLimits、sshBootstrap、cleanupRecovery 三项；`networkPolicyEnforcement=unsupported`，不以免检冒充强隔离已验证。网络 Profile 仍是授权和固定模式的目录，不需逐个 Profile 的强隔离资格。`policy.tartMode=isolated` 显式选择下文 Softnet 路径，仍要求六项证据；旧冻结票据不迁移，Docker 行为不变。
 
-**无条件 Tart server 启动拒绝已移除**：此前拒绝的操作在用户直接确认后单次重试完成，未添加替代总闸。具体资源、身份、SSH 和查实回收检查保持。Studio Tahoe macOS ARM 的真实 Tart / NAT / SSH / 续租 / 回收已经通过，见 [单票 CLI 验收](TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md)；临时栈已关闭，Softnet 强隔离未实机验证。本节之后的默认拒绝、控制 FD 与 Softnet 回执要求只适用于可选强隔离模式。
+**无条件 Tart server 启动拒绝已移除**：此前拒绝的操作在用户直接确认后单次重试完成，未添加替代总闸。具体资源、身份、SSH 和查实回收检查保持。Studio Tahoe macOS ARM 与 Ubuntu Linux ARM 的真实 Tart / NAT / SSH / 续租 / 回收已分别通过，见 [macOS](TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md) / [Linux](TART-LINUX-ARM-ACCEPTANCE-2026-11-03.md) 验收；临时栈已关闭，Softnet 强隔离未实机验证。本节之后的默认拒绝、控制 FD 与 Softnet 回执要求只适用于可选强隔离模式。
 
 ## 合同与执行
 

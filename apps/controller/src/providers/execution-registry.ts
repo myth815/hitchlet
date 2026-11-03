@@ -45,7 +45,7 @@ export function environmentContractReason(
     return "environment_kind_unsupported";
   if (
     typeof guestOs === "string" &&
-    ((provider === "tart" && guestOs !== "macos") ||
+    ((provider === "tart" && !["macos", "linux"].includes(guestOs)) ||
       (provider === "portainer" && guestOs !== "linux"))
   )
     return "guest_os_unsupported";

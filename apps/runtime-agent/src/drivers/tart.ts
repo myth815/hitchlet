@@ -801,7 +801,11 @@ export class TartLocalDriver {
 
     let receipt: TartGuestBootstrapReceipt;
     try {
-      receipt = await this.invokeGuestBootstrap(manifest.vmName, request);
+      receipt = await this.invokeGuestBootstrap(
+        manifest.vmName,
+        request,
+        manifest.templateRef.guestOS,
+      );
     } catch (error) {
       const reason =
         error instanceof Error && error.message === "guest_ssh_port_22_in_use"
@@ -821,6 +825,7 @@ export class TartLocalDriver {
   private async invokeGuestBootstrap(
     vmName: string,
     request: TartGuestBootstrapRequest,
+    guestOS: "darwin" | "linux",
   ): Promise<TartGuestBootstrapReceipt> {
     const helperSource = await readFile(
       new URL("./tart-guest-bootstrap.cjs", import.meta.url),
@@ -834,7 +839,7 @@ export class TartLocalDriver {
         vmName,
         "/usr/bin/sudo",
         "-n",
-        "/opt/homebrew/bin/node",
+        guestOS === "linux" ? "/usr/local/bin/node" : "/opt/homebrew/bin/node",
         "-e",
         script,
       ],

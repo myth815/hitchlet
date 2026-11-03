@@ -1,10 +1,10 @@
 # Tart 接入：Studio NAT 实机验收与边界
 
-2026-11-03：家庭受信任任务默认 NAT；Softnet 强隔离按 Profile 显式选择。NAT 的基本资格、无控制 FD 恢复回收和不提供强网络隔离的边界见 [网络模式](TART-NETWORK.md)。原文中的网络策略/回执门槛仅适用于 Softnet；独立环境、身份、资源、SSH 与查实回收共同保留。已按用户明确批准移除无条件 server 启动拒绝，未增加替代总闸。Studio macOS ARM 的默认 NAT 实机闭环已验，见 [验收记录](TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md)；Softnet 仍未实机验证。
+2026-11-03：家庭受信任任务默认 NAT；Softnet 强隔离按 Profile 显式选择。NAT 的基本资格、无控制 FD 恢复回收和不提供强网络隔离的边界见 [网络模式](TART-NETWORK.md)。原文中的网络策略/回执门槛仅适用于 Softnet；独立环境、身份、资源、SSH 与查实回收共同保留。已按用户明确批准移除无条件 server 启动拒绝，未增加替代总闸。Studio macOS ARM 与 Ubuntu Linux ARM 的默认 NAT 实机闭环已验，见 [macOS 验收](TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md) / [Linux 验收](TART-LINUX-ARM-ACCEPTANCE-2026-11-03.md)；Softnet 仍未实机验证。
 
-Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。当前已补可信 Runtime 通道、固定 guest 初始化、真实 SSH 探针源码，以及正常管理 API/SDK 的发现、注册、资格登记、验证与发布。本批继续补了冻结网络计划、Softnet 控制 FD/策略读回、显式网络回收和正式 server composition 的受控接线。正常入口可显式配置 `EXECUTION_MODE=tart`，默认仍为 `disabled`；**已完成 Studio Tahoe macOS ARM 单票 CLI 实机验收**，不能将其扩大为所有 guest OS、Softnet、GUI 或长期部署已验。此次临时服务已关闭、认证已清理，当前没有常驻可租 VM 服务。
+Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。当前已补可信 Runtime 通道、固定 guest 初始化、真实 SSH 探针源码，以及正常管理 API/SDK 的发现、注册、资格登记、验证与发布。本批继续补了冻结网络计划、Softnet 控制 FD/策略读回、显式网络回收和正式 server composition 的受控接线。正常入口可显式配置 `EXECUTION_MODE=tart`，默认仍为 `disabled`；**已分别完成 Studio Tahoe macOS ARM 与 Ubuntu 24.04.5 Linux ARM 单票 CLI 实机验收**，不能将其扩大为所有 guest OS、Softnet、GUI 或长期部署已验。此次临时服务已关闭、认证已清理，当前没有常驻可租 VM 服务。
 
-影音和 Vesta 的业务属于各自租客工程。Linux guest、Windows 原生、Hyper-V、快照池、Orchard 和云扩容均不是本批交付。
+影音和 Vesta 的业务属于各自租客工程。其他 Linux 发行版、Windows 原生、Hyper-V、快照池、Orchard 和云扩容不在本批实机交付。两种 OS 分别使用独立临时栈，未宣称同一常驻部署的混合目录已经验收。
 
 ## 当前接线与证据
 
@@ -12,13 +12,15 @@ Tart 复用现有 Controller、SQLite、Ticket、Operation、Lease 和 Claim。�
 | -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
 | 本机驱动       | local template clone/set/run/IP、持久归属、inspect/reconcile、终止 tombstone、停止删除与完整盘点                                               | Studio 默认 NAT 真实 clone/set/run/IP、归属、重连与 absent；另有假 CLI 回归 |
 | Runtime 入口   | 独立 `dist/tart-main.js`、显式 namespace 初始化、模板封存、mTLS+Bearer、epoch/nonce/deadline                                                   | 专属 loopback mTLS+Bearer 实机通道；临时认证结束清理，非长期部署            |
-| guest 初始化   | 固定 GuestAgent exec，macOS arm64/Node 24，按分配身份持久初始化、生成 guest 内 host key、独立 sshd、幂等回执                                   | 真实 macOS 26.6.2 / arm64 / Node 24.21.0 guest 初始化与 SSH 通过            |
+| guest 初始化   | 固定 GuestAgent exec，macOS/Linux arm64/Node 24、launchd/systemd，按分配身份持久初始化、生成 guest 内 host key、独立 sshd、幂等回执            | 真实 macOS 26.6.2、Ubuntu 24.04.5 / arm64 / Node 24.21.0 初始化与 SSH 通过  |
 | Controller     | 精确冻结 Operation/Node/revision/native namespace，可信 facts/template 校验，bootstrap RPC 后读回 applied receipt，SSH 指纹及账户/OS/arch 检查 | 真实管理、验证与租客票生命周期；API 指纹核验 SSH、续租和归还通过            |
 | 管理发布       | 发现→禁用/unknown 注册→配置→独立资格报告→草稿→持久验证和回收→重新核模板→发布                                                                   | 真实发现、资格、验证、回收和发布；正常 API，无 SQL 伪造                     |
 | 租客 UI        | 目录可含 `kind: vm`，VM 请求用整 vCPU、virtual_machine、best_effort，无挂载                                                                    | GUI 测试；没有浏览器操作真实 VM                                             |
 | 网络与正式启动 | 冻结 CIDR/访问/拒绝计划，Softnet 编译/控制 FD/策略读回，显式 revoke 后回收，共用 worker/lease 的 server composition                            | 默认 NAT 实机通过；无条件总闸已移除，Softnet/强隔离仍仅受控验证             |
 
 ## Runtime 入口与模板
+
+Linux 固定 Node 入口为 `/usr/local/bin/node`，状态根 `/var/lib/hitchlet`，使用每 Allocation 的 systemd sshd unit；macOS 保留 `/opt/homebrew/bin/node`、`/var/db/hitchlet` 和 launchd。两者共用同一身份/公钥/nonce/回执协议，不增加消费者 OS 专用 API。模板准备后须 sync、正常关机再封存；Linux 清空模板 machine-id 以便克隆再生，已真实核验不同克隆身份。guest 内服务随 VM 删除，未安装宿主自启。
 
 `HITCHLET_TART_RUNTIME_CONFIG` 指向显式配置文件。字段见 `apps/runtime-agent/src/tart-main.ts`：`enabled: true`、监听地址/端口、installation/runtime identity、官方 app 内 executable、独立 `tartHome`、manifest/registry/journal/namespace 路径，以及已有模型的 token/CA/cert/key 文件引用。新增 `networkEnabled` 默认 false；显式开启还需固定的绝对 `softnetExecutable` 路径。配置不接受任意 guest 命令或 Controller 提供的成功回执；Controller 不再附加无条件启动拒绝。
 

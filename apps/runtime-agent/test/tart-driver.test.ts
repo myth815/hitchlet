@@ -293,7 +293,7 @@ it.skipIf(!supportsTartHost)(
       expectedName(identity),
       "/usr/bin/sudo",
       "-n",
-      "/opt/homebrew/bin/node",
+      "/usr/local/bin/node",
       "-e",
     ]);
     expect(execEvent?.args[7]).toContain("runGuestBootstrap");

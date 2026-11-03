@@ -136,6 +136,112 @@ it("requires an explicit prepared-template marker before applying SSH changes", 
   ).toThrow("guest_template_not_prepared");
 });
 
+it("initializes Linux SSH through one owned systemd unit and recovers its original receipt after a guest service restart", async () => {
+  const root = await makeRoot("linux");
+  const calls: Array<{ command: string; args: string[] }> = [];
+  let loaded = false;
+  const deps = dependencies(
+    root,
+    calls,
+    () => loaded,
+    (next) => {
+      loaded = next;
+    },
+    false,
+    "linux",
+  );
+  const helper = await loadHelper();
+  const request = bootstrapRequest();
+  const first = helper.runGuestBootstrap(request, deps);
+  expect(helper.runGuestBootstrap(request, deps)).toEqual(first);
+  loaded = false;
+  expect(helper.runGuestBootstrap(request, deps)).toEqual(first);
+  const unit = "hitchlet-sshd-" + ownerHash().slice(0, 24) + ".service";
+  expect(readFileSync(join(root, "Systemd", unit), "utf8")).toContain(
+    "ExecStart=/usr/sbin/sshd -D -e -f " + find(root, "sshd_config"),
+  );
+  expect(
+    calls.filter((call) => call.command === "/usr/bin/ssh-keygen"),
+  ).toHaveLength(1);
+  expect(
+    calls
+      .filter(
+        (call) =>
+          call.command === "/usr/bin/systemctl" && call.args[0] === "enable",
+      )
+      .map((call) => call.args),
+  ).toEqual([
+    ["enable", "--now", unit],
+    ["enable", "--now", unit],
+  ]);
+  expect(calls.some((call) => call.command === "/bin/launchctl")).toBe(false);
+  expect(first).toMatchObject({
+    status: "applied",
+    account: "admin",
+    nonce: request.nonce,
+    hostKeyFingerprint: fingerprint(hostPublicKey),
+  });
+  expect(() =>
+    helper.runGuestBootstrap(
+      { ...request, nonce: "different-nonce-0123456789" },
+      deps,
+    ),
+  ).toThrow("guest_allocation_already_bootstrapped");
+});
+
+it("keeps Linux bootstrap unknown when SSH is occupied or its port observation fails", async () => {
+  const root = await makeRoot("linux");
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const deps = dependencies(
+    root,
+    calls,
+    () => false,
+    () => {},
+    true,
+    "linux",
+  );
+  const helper = await loadHelper();
+  expect(() => helper.runGuestBootstrap(bootstrapRequest(), deps)).toThrow(
+    "guest_ssh_port_22_in_use",
+  );
+  expect(() =>
+    helper.runGuestBootstrap(bootstrapRequest(), {
+      ...deps,
+      tryRun: (command: string, args: string[]) =>
+        command === "/usr/bin/ss"
+          ? { status: 1, stdout: "" }
+          : deps.tryRun(command, args),
+    }),
+  ).toThrow("guest_ssh_port_check_unknown");
+  expect(
+    calls.some(
+      (call) =>
+        call.command === "/usr/bin/ssh-keygen" ||
+        (call.command === "/usr/bin/systemctl" && call.args[0] === "enable"),
+    ),
+  ).toBe(false);
+});
+
+it("does not apply a macOS prepared marker to a Linux guest", async () => {
+  const root = await makeRoot("macos");
+  const calls: Array<{ command: string; args: string[] }> = [];
+  const helper = await loadHelper();
+  expect(() =>
+    helper.runGuestBootstrap(
+      bootstrapRequest(),
+      dependencies(
+        root,
+        calls,
+        () => false,
+        () => {},
+        false,
+        "linux",
+      ),
+    ),
+  ).toThrow("guest_template_not_prepared");
+  expect(calls).toEqual([]);
+});
+
 async function loadHelper(): Promise<{
   runGuestBootstrap: (request: unknown, deps: unknown) => any;
 }> {
@@ -161,7 +267,7 @@ async function loadHelper(): Promise<{
   };
 }
 
-async function makeRoot(): Promise<string> {
+async function makeRoot(guestOS = "macos"): Promise<string> {
   const root = await mkdtemp(join(tmpdir(), "hitchlet-guest-bootstrap-"));
   roots.push(root);
   await chmod(root, 0o700);
@@ -169,7 +275,7 @@ async function makeRoot(): Promise<string> {
     join(root, "guest-bootstrap-prepared.json"),
     JSON.stringify({
       version: 1,
-      guestOS: "macos",
+      guestOS,
       guestArch: "arm64",
       nodeMajor: 24,
       defaultSshDisabled: true,
@@ -186,10 +292,13 @@ function dependencies(
   isLoaded: () => boolean,
   setLoaded: (loaded: boolean) => void,
   portBusy = false,
+  platform = "darwin",
 ) {
   const launchdDirectory = join(root, "Library", "LaunchDaemons");
   mkdirSync(launchdDirectory, { recursive: true, mode: 0o700 });
   const publicKeysRoot = join(root, "PublicAuthorizedKeys");
+  const systemdDirectory = join(root, "Systemd");
+  mkdirSync(systemdDirectory, { recursive: true, mode: 0o700 });
   const fact = (file: string) => {
     try {
       const value = lstatSync(file);
@@ -221,6 +330,10 @@ function dependencies(
     if (command === "/usr/bin/id") return { status: 0, stdout: "501\n" };
     if (command === "/usr/sbin/lsof")
       return { status: portBusy ? 0 : 1, stdout: "" };
+    if (command === "/usr/bin/ss")
+      return { status: 0, stdout: portBusy ? "LISTEN 0 128 0.0.0.0:22\n" : "" };
+    if (command === "/usr/bin/systemctl" && args[0] === "is-active")
+      return { status: isLoaded() ? 0 : 3, stdout: "" };
     if (command === "/bin/launchctl" && args[0] === "print")
       return { status: isLoaded() ? 0 : 1, stdout: "" };
     return { status: 0, stdout: "" };
@@ -229,7 +342,9 @@ function dependencies(
     root,
     publicKeysRoot,
     launchdDirectory,
-    platform: "darwin",
+    platform,
+    systemdDirectory,
+    sshRuntimeDirectory: join(root, "sshd-run"),
     arch: "arm64",
     nodeVersion: "v24.1.0",
     uid: 0,
@@ -251,7 +366,10 @@ function dependencies(
           mode: 0o644,
         });
       }
-      if (command === "/bin/launchctl" && args[0] === "bootstrap")
+      if (
+        (command === "/bin/launchctl" && args[0] === "bootstrap") ||
+        (command === "/usr/bin/systemctl" && args[0] === "enable")
+      )
         setLoaded(true);
       if (answer.status !== 0) throw new Error("mock_command_failed");
       return answer;

@@ -126,7 +126,7 @@ it("permits new work through both explicitly registered adapters without changin
   expect(tart.calls.destroy).toHaveBeenCalledOnce();
 });
 
-it("registers current implementation limits without claiming a Linux Tart bootstrap", () => {
+it("registers macOS/Linux Tart bootstrap without claiming Windows support", () => {
   const id = "00000000-0000-4000-8000-000000000001";
   const contract = AcceptedAcquireRequestSchema.parse(
     normalizeAcquireRequest(
@@ -157,7 +157,8 @@ it("registers current implementation limits without claiming a Linux Tart bootst
     ),
   );
   expect(environmentContractReason("tart", contract, "macos")).toBeNull();
-  expect(environmentContractReason("tart", contract, "linux")).toBe(
+  expect(environmentContractReason("tart", contract, "linux")).toBeNull();
+  expect(environmentContractReason("tart", contract, "windows")).toBe(
     "guest_os_unsupported",
   );
   expect(environmentContractReason("hyperv", contract, "windows")).toBe(
