@@ -28,7 +28,7 @@ export async function probeSsh(input: {
     );
     client.once("ready", () => {
       client.exec(
-        "id -un && id -u && id -g && node --version && test -w /workspace",
+        "id -un && id -u && id -g && test -w /workspace",
         (error, stream) => {
           if (error) return done(error);
           stream.once("error", done);
@@ -46,8 +46,7 @@ export async function probeSsh(input: {
               code !== 0 ||
               lines[0] !== input.username ||
               lines[1] !== "1000" ||
-              lines[2] !== "1000" ||
-              !lines[3]?.startsWith("v24.")
+              lines[2] !== "1000"
             )
               done(
                 new Error(

@@ -38,7 +38,7 @@ describe("SSH readiness connection lifecycle", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("requires authenticated command success and preserves exact host-key verification", async () => {
+  it("accepts an SSH-only runtime without Node and preserves exact host-key verification", async () => {
     vi.useFakeTimers();
     const client = new TestClient();
     fixture.client = client;
@@ -53,11 +53,11 @@ describe("SSH readiness connection lifecycle", () => {
     expect(options.hostVerifier(input.expectedHostKey)).toBe(true);
     expect(options.hostVerifier(Buffer.from("different-key"))).toBe(false);
     client.emit("ready");
-    stream.emit("data", Buffer.from("workspace\n1000\n1000\nv24.22.2\n"));
+    stream.emit("data", Buffer.from("workspace\n1000\n1000\n"));
     stream.emit("close", 0);
     await promise;
     expect(client.exec).toHaveBeenCalledWith(
-      "id -un && id -u && id -g && node --version && test -w /workspace",
+      "id -un && id -u && id -g && test -w /workspace",
       expect.any(Function),
     );
     expect(vi.getTimerCount()).toBe(0);
@@ -80,10 +80,31 @@ describe("SSH readiness connection lifecycle", () => {
       "Authenticated SSH bootstrap probe failed",
     );
     client.emit("ready");
-    stream.emit("data", Buffer.from(`workspace\n${uid}\n${gid}\nv24.22.2\n`));
+    stream.emit("data", Buffer.from(`workspace\n${uid}\n${gid}\n`));
     stream.emit("close", 0);
     await rejected;
   });
+
+  it.each([1, null])(
+    "rejects an unsuccessful or unconfirmed workspace check (%s)",
+    async (code) => {
+      const client = new TestClient();
+      fixture.client = client;
+      const stream = Object.assign(new EventEmitter(), {
+        stderr: new EventEmitter(),
+      });
+      client.exec.mockImplementation((_command, callback) =>
+        callback(null, stream),
+      );
+      const rejected = expect(probeSsh(input)).rejects.toThrow(
+        "Authenticated SSH bootstrap probe failed",
+      );
+      client.emit("ready");
+      stream.emit("data", Buffer.from("workspace\n1000\n1000\n"));
+      stream.emit("close", code);
+      await rejected;
+    },
+  );
 
   it("rejects a connection closing before readiness without leaving a timeout", async () => {
     vi.useFakeTimers();
