@@ -7,61 +7,26 @@ import { z } from "zod";
 import {
   vmAllocationIdentitySchema,
   vmAllocationOwnerTuple,
-  vmResourceSpecSchema,
   type VmAllocationIdentity,
+  hyperVAbsolutePathSchema,
+  hyperVRequestSchema,
+  hyperVNativeVmSchema,
+  hyperVNativeFactsSchema,
+  type HyperVRequest,
+  type HyperVNativeVm,
+  type HyperVInspection,
 } from "@hitchlet/contracts/internal";
 import { canonical } from "../canonical.js";
 import { currentCommandDeadlineMs } from "../command-exec.js";
 
 const sha = (value: unknown) =>
   createHash("sha256").update(canonical(value)).digest("hex");
-const absolutePath = z
-  .string()
-  .min(3)
-  .refine(
-    (v) =>
-      /^[A-Za-z]:\\/.test(v) &&
-      !v.includes("\0") &&
-      !v.split(/[\\/]/).includes(".."),
-    "local absolute Windows path required",
-  );
-export const hyperVRequestSchema = z
-  .object({
-    identity: vmAllocationIdentitySchema,
-    template: z
-      .object({
-        configPath: absolutePath,
-        configSha256: z.string().regex(/^[a-f0-9]{64}$/),
-        guestOs: z.enum(["windows", "linux"]),
-        architecture: z.literal("amd64"),
-        generation: z.union([z.literal(1), z.literal(2)]),
-      })
-      .strict(),
-    resources: vmResourceSpecSchema,
-    switchName: z.string().min(1).max(200),
-  })
-  .strict();
-export type HyperVRequest = z.infer<typeof hyperVRequestSchema>;
+const absolutePath = hyperVAbsolutePathSchema;
+const vmSchema = hyperVNativeVmSchema;
 const specSchema = hyperVRequestSchema.omit({ identity: true });
 type Spec = z.infer<typeof specSchema>;
-const vmSchema = z
-  .object({
-    id: z.string().uuid(),
-    owner: z.string(),
-    directory: absolutePath,
-    configurationPath: absolutePath,
-    diskPaths: z.array(absolutePath),
-    cpus: z.number().int().positive(),
-    memoryMiB: z.number().int().positive(),
-    dynamicMemory: z.boolean(),
-    generation: z.union([z.literal(1), z.literal(2)]),
-    state: z.enum(["running", "stopped", "other"]),
-    switchNames: z.array(z.string()),
-    dynamicMac: z.boolean(),
-    ipv4: z.array(z.ipv4()),
-  })
-  .strict();
-export type HyperVNativeVm = z.infer<typeof vmSchema>;
+export { hyperVRequestSchema };
+export type { HyperVRequest, HyperVNativeVm, HyperVInspection };
 const observationSchema = z
   .object({
     presence: z.enum(["present", "absent", "unknown"]),
@@ -104,19 +69,6 @@ export type HyperVNativeRunner = (
   request: HyperVNativeCommand,
   timeoutMs: number,
 ) => Promise<unknown>;
-export type HyperVInspection = Readonly<{
-  identity: VmAllocationIdentity;
-  presence: "present" | "absent" | "unknown";
-  inventoryComplete: boolean;
-  reason?: string;
-  vm?: HyperVNativeVm;
-  requestedEnvironment?: {
-    guestOs: "windows" | "linux";
-    architecture: "amd64";
-  };
-  bootstrapStatus: "not_implemented";
-}>;
-
 /** Native lifecycle kernel only: not registered as a rentable ExecutionPort. */
 export class HyperVLocalDriver {
   private readonly locks = new Map<string, Promise<unknown>>();
@@ -142,15 +94,7 @@ export class HyperVLocalDriver {
       specHash: "",
       vmId: null,
     });
-    return z
-      .object({
-        available: z.boolean(),
-        reason: z.string().optional(),
-        hostArchitecture: z.string(),
-        implementedOperations: z.array(z.string()),
-      })
-      .strict()
-      .parse(value);
+    return hyperVNativeFactsSchema.parse(value);
   }
   reconcile(input: unknown): Promise<HyperVInspection> {
     const request = hyperVRequestSchema.parse(input);

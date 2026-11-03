@@ -28,4 +28,4 @@ Windows x86_64 / Hyper-V 后置；WSL Linux 不等于 Windows 原生。其他 Li
 
 Vesta新版本`5e6dba54f`的governance text三项已在真实Ubuntu ARM VM完成，见[新单元格](VESTA-GOVERNANCE-VM-2026-11-04.md)。原票回收、Claim0、临时服务/认证清理均完成；不用继续等选测试或重跑旧用例。后续以实际新消费者需求与部署收口为准。
 
-Hyper-V原生生命周期内核源码已完成，见[内核边界与验证](HYPERV-NATIVE-KERNEL.md)：原ID恢复、未知不重导入、精确VM/磁盘回收及跨allocation独立推进已有受控证据；尚未接可信Runtime/guest SSH和ExecutionPort，不向消费者宣称Windows可租。
+Hyper-V原生生命周期内核源码已完成，见[内核边界与验证](HYPERV-NATIVE-KERNEL.md)：原ID恢复、未知不重导入、精确VM/磁盘回收及跨allocation独立推进已有受控证据；内部[认证Runtime server/client](HYPERV-RUNTIME-TRANSPORT.md)已有受控接线；Windows启动组合、guest SSH和ExecutionPort未完成，不向消费者宣称Windows可租。

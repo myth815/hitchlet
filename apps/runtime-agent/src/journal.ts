@@ -75,6 +75,9 @@ export class FileJournal {
       await file.close();
     }
     await rename(temp, this.path);
+    // Windows does not support opening a directory handle with this fs API.
+    // File fsync + rename still run; NTFS/power-loss durability is not qualified.
+    if (process.platform === "win32") return;
     const directory = await open(dirname(this.path), "r");
     try {
       await directory.sync();

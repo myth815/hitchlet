@@ -29,3 +29,5 @@ export * from "./tart-network.js";
 export * from "./tart-transport.js";
 
 export * from "./vm-runtime-identity.js";
+
+export * from "./hyperv-runtime.js";

@@ -17,7 +17,7 @@
 
 这是原生生命周期**内核**，不是完整Hitchlet Hyper-V provider。生产server/执行注册没有加入hyperv；不会因为类型或模拟对象而向消费者宣称可租Windows。
 
-- guest初始化与SSH交付、可信Runtime HTTP通道、正式ExecutionPort/Operator管理发布接线尚未实现。bootstrapStatus固定为not_implemented，不返回access或ReadyReceipt。
+- guest初始化与SSH交付、正式ExecutionPort/Operator管理发布接线尚未实现。内部认证HTTP server/client已接线，见[Runtime通道](HYPERV-RUNTIME-TRANSPORT.md)；尚无实际Windows启动组合或实机通道。bootstrapStatus固定为not_implemented，不返回access或ReadyReceipt。
 - Native VM新ID/动态MAC不等于Windows SID、Linux machine-id或guest凭据已初始化；这些由后续固定guest配方和真实资格证明。不同guest OS保留独立实现，不套用Tart路径、launchd、ARM或Linux UID。
 - 当前仅校验vmcx配置hash，**不是整个VM磁盘制品证明**。公开发布前仍需固定完整模板/磁盘身份、来源/许可和准备过程。没有下载模板或接受许可。
 - 若导入在完成Notes归属标记前中断，或者仍可能有未完成的原生导入，保持unknown，不凭暂时查无VM或只有目录就自动重发/删除并释放Claim。后续Runtime接线需补该类native job/操作完成取证；当前不能称所有中断场景已恢复。
@@ -33,7 +33,7 @@
 
 ## 后续最小接线
 
-1. 沿现有认证Runtime和持久Operation模式接入该内核，保留真实认证撤销、owner/generation/controlVersion与未知结果语义，不新建通用VM框架或放宽全局resolver。
+1. 内部认证Runtime server/client已接线；补实际Windows启动组合和namespace/专属目录绑定，再沿持久Operation接正式ExecutionPort，保留认证撤销、owner/generation/controlVersion与未知结果语义。
 2. 补Windows首guest的固定初始化/短期公钥SSH/实际OS与架构回读，再补Linux；正式provider复用现有Ticket/Lease/Claim，消费者仍按环境需求申请。源码可继续，不以新建长期身份为先决条件。
 3. 系统功能启用、可能重启、模板来源/许可、owned E盘根与实际switch按[已核宿主前置](HYPERV-PREPARATION-2026-11-04.md)处理；当前未执行。真实资格、发布和一张Vesta票通过后才注册可租能力，控制面离线硬停仍不承诺。
 

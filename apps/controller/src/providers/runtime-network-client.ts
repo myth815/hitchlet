@@ -25,7 +25,9 @@ export type RuntimeAgentJsonPath =
   | "/v1/network-actions"
   | "/v1/storage-facts"
   | "/v1/tart/actions"
-  | "/v1/tart/facts";
+  | "/v1/tart/facts"
+  | "/v1/hyperv/actions"
+  | "/v1/hyperv/facts";
 
 export type RuntimeAgentJsonTransport = Readonly<{
   exchangeJson(
@@ -134,6 +136,8 @@ export class RuntimeAgentHttpTransport implements RuntimeAgentJsonTransport {
         "/v1/storage-facts",
         "/v1/tart/actions",
         "/v1/tart/facts",
+        "/v1/hyperv/actions",
+        "/v1/hyperv/facts",
       ].includes(path)
     )
       throw new Error("Runtime Agent route is unsupported");
