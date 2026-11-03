@@ -1,7 +1,7 @@
 # Resumable Node tenant example
 
 `resumable-tenant.mjs` is a small consumer-side workflow built only on the public
-`@hitchlet/sdk` API. It shows explicit catalog selection, a read-only preview,
+`@hitchlet/sdk` API. It shows environment selection from the authorized catalog, a read-only preview,
 durable ticket-command recovery, confirmed lease tracking, an access handoff, and
 confirmed cleanup. It does not initialize or authorize a platform, publish images,
 or perform work on the tenant's behalf.
@@ -91,14 +91,14 @@ not start a real stack:
 pnpm --filter @hitchlet/controller exec vitest run test/sdk-example.test.ts
 ```
 
-Inspect the authorized catalog and choose the exact existing version, Node,
-network profile, and (optionally) storage profile/subpath/mode. Use the IDs returned
+Inspect the authorized catalog and choose the exact existing version and
+network profile, and (optionally) guest OS, architecture, node override and storage profile/subpath/mode. Use the IDs returned
 by `catalog`; do not guess IDs. A preview stores the request and one generated
-idempotency key only when the selected Node is eligible:
+idempotency key for platform placement (an explicit `--node` override must be eligible):
 
 ```sh
 node packages/sdk/examples/resumable-tenant.mjs preview \
-  --version VERSION_ID --node NODE_ID --network NETWORK_PROFILE_ID
+  --version VERSION_ID --network NETWORK_PROFILE_ID
 node packages/sdk/examples/resumable-tenant.mjs acquire-or-resume
 node packages/sdk/examples/resumable-tenant.mjs status
 node packages/sdk/examples/resumable-tenant.mjs wait-ready
@@ -110,9 +110,11 @@ An optional authorized storage request uses the fixed guest mount path
 
 ```sh
 node packages/sdk/examples/resumable-tenant.mjs preview \
-  --version VERSION_ID --node NODE_ID --network NETWORK_PROFILE_ID \
+  --version VERSION_ID --network NETWORK_PROFILE_ID \
   --storage STORAGE_PROFILE_ID --subpath AUTHORIZED_RELATIVE_SUBPATH --mode RO
 ```
+
+`--guest-os linux|macos|windows`, `--architecture arm64|amd64` and `--kind container|vm` are independent environment requirements. By default the platform chooses a node/provider. `--node ID` is an optional placement override. Unsupported preview (`availability=unsupported`) must be corrected; a compatible but temporarily unavailable environment can queue. The CLI does not start a VM by itself.
 
 `preview` reports feasibility only; it does not guarantee capacity. If an Acquire
 response is lost, restart the command. The saved `PreparedTicketCommand` and its

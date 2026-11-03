@@ -124,6 +124,7 @@ export class TicketQueries {
             provider: row.backend_kind,
             architecture: row.architecture,
             imageArtifactId: row.image_artifact_id,
+            ...(row.guest_os ? { guestOs: row.guest_os } : {}),
           };
     const pending =
       row.renewal_id === null
@@ -161,6 +162,9 @@ export class TicketQueries {
         this.now(),
       ),
       scheduling: {
+        ...(isRecord(reason) && typeof reason.availability === "string"
+          ? { availability: reason.availability }
+          : {}),
         checkedAt: iso(isRecord(reason) ? reason.checkedAtMs : null),
         reasonCodes:
           isRecord(reason) &&

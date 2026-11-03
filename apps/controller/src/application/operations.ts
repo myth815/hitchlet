@@ -23,7 +23,7 @@ import { ImageValidationService } from "./image-validation.js";
 import { ResourceContractSchema } from "@hitchlet/contracts/schemas";
 import { SQLiteValidationStore } from "../storage/validation-store.js";
 import { SQLiteOperationStore } from "../storage/operation-store.js";
-import type { ExecutionMode } from "../providers/execution-dispatcher.js";
+import type { ExecutionSelection } from "../providers/execution-dispatcher.js";
 
 type Row = Record<string, string | number | bigint | null>;
 /** A controller owns this guard only for calls still executing in its own process.
@@ -52,7 +52,7 @@ export class OperationWorker {
       execution: ExecutionPort;
       installationId: string;
       controllerEpoch?: number;
-      enabledExecutionMode?: ExecutionMode | "disabled";
+      enabledExecutionMode?: ExecutionSelection;
       now?: () => number;
       id?: () => string;
       createCalls?: AllocationCreateCalls;

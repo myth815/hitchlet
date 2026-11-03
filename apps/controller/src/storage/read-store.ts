@@ -21,7 +21,7 @@ export class SQLiteReadStore {
   ticketDetail(ticketId: string, consumerId: string | null = null) {
     return this.storage.get<ReadRow>(
       `SELECT t.*, l.id AS lease_id,l.generation AS lease_generation,l.version AS lease_version,l.state AS lease_state,
-      l.claim_by_ms,l.claimed_at_ms,l.expires_at_ms,l.renew_until_ms,l.revoked_at_ms,a.machine_id,a.node_id,a.image_artifact_id,n.backend_kind,ia.architecture,
+      l.claim_by_ms,l.claimed_at_ms,l.expires_at_ms,l.renew_until_ms,l.revoked_at_ms,a.machine_id,a.node_id,a.image_artifact_id,n.backend_kind,ia.architecture,ia.guest_os,
       (SELECT id FROM lease_renewals r WHERE r.lease_id=l.id AND r.state='pending') AS renewal_id,
       (SELECT proposed_version FROM lease_renewals r WHERE r.lease_id=l.id AND r.state='pending') AS renewal_version,
       (SELECT proposed_expires_at_ms FROM lease_renewals r WHERE r.lease_id=l.id AND r.state='pending') AS renewal_expires,

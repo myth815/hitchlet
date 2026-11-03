@@ -17,7 +17,6 @@ import type {
   Locality,
   NonEmptyReadonlyArray,
   PageQuery,
-  ProviderKind,
   RequestedResources,
   RequiredCapability,
   ResourceAmounts,
@@ -146,10 +145,12 @@ export interface AcquireRequest {
   readonly networkProfileId: Id;
   /** 省略默认为 container；请求 VM 必须显式 vm。 */
   readonly kind?: ResourceKind;
+  /** Workload OS, independent of the physical host OS; omission keeps image defaults. */
+  readonly guestOs?: HostOs;
   /** 可接受架构；省略表示授权目录中所有兼容架构，显式给值必须非空。 */
   readonly allowedArchitectures?: NonEmptyReadonlyArray<Architecture>;
   /** 可接受后端；省略表示所有已授权兼容后端，显式给值必须非空。 */
-  readonly allowedProviders?: NonEmptyReadonlyArray<ProviderKind>;
+  readonly allowedProviders?: NonEmptyReadonlyArray<string>;
   /** 放置范围，首版默认且仅允许 local_only。 */
   readonly locality?: Locality;
   /** 允许站点；省略或空数组表示所有已授权本地站点。 */
@@ -379,10 +380,12 @@ export interface AcceptedAcquireRequest {
   readonly networkProfileId: Id;
   /** 对象或请求的判别种类。 */
   readonly kind: ResourceKind;
+  /** Explicit workload OS frozen at admission; absent on legacy or image-default requests. */
+  readonly guestOs?: HostOs;
   /** 可接受架构；省略表示授权目录中所有兼容架构，显式给值必须非空。 */
   readonly allowedArchitectures: NonEmptyReadonlyArray<Architecture>;
   /** 可接受后端；省略表示所有已授权兼容后端，显式给值必须非空。 */
-  readonly allowedProviders: NonEmptyReadonlyArray<ProviderKind>;
+  readonly allowedProviders: NonEmptyReadonlyArray<string>;
   /** 放置范围，首版默认且仅允许 local_only。 */
   readonly locality: Locality;
   /** 允许站点；省略或空数组表示所有已授权本地站点。 */
@@ -448,11 +451,13 @@ export interface TicketPlacementView {
   /** 实际调度节点标识。 */
   readonly nodeId: Id;
   /** 实际执行后端标识，须与原生身份及制品一致。 */
-  readonly provider: ProviderKind;
+  readonly provider: string;
   /** CPU 架构；必须与实际执行环境匹配。 */
   readonly architecture: Architecture;
   /** 本次固定使用的镜像制品标识。 */
   readonly imageArtifactId: Id;
+  /** Workload OS from the immutable artifact, independent of the host; absent on legacy servers. */
+  readonly guestOs?: HostOs | undefined;
 }
 
 /** 最近一次技术健康结果；不代表业务执行成功。 */
@@ -467,6 +472,12 @@ export interface TicketHealthView {
 
 /** 等待原因和下一次检查提示；可匹配数量不构成容量预留承诺。 */
 export interface SchedulingView {
+  /** Unsupported environment vs compatible environment awaiting capacity/admission; absent on legacy servers. */
+  readonly availability?:
+    | "unsupported"
+    | "temporarily_unavailable"
+    | "available"
+    | undefined;
   /** 该校验在可信执行路径完成的时间。 */
   readonly checkedAt: UtcTimestamp | null;
   /** 可稳定匹配的原因码列表，显示文本由界面转换。 */
@@ -755,7 +766,7 @@ export interface ImageArtifactView {
   /** 该对象的稳定标识。 */
   readonly id: Id;
   /** 实际执行后端标识，须与原生身份及制品一致。 */
-  readonly provider: ProviderKind;
+  readonly provider: string;
   /** 对象或请求的判别种类。 */
   readonly kind: ResourceKind;
   /** CPU 架构；必须与实际执行环境匹配。 */

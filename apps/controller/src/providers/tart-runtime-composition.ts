@@ -7,6 +7,7 @@ import { LeaseService } from "../application/leases.js";
 import {
   ExecutionProviderDispatcher,
   type ExecutionMode,
+  type ExecutionSelection,
 } from "./execution-dispatcher.js";
 import type { Storage } from "../storage/index.js";
 import { SQLiteAccessMaterialStore } from "../storage/access-material-store.js";
@@ -27,7 +28,7 @@ export type TartExecutionCompositionOptions = Readonly<{
   secrets: LocalSecretStore;
   installationId: string;
   controllerEpoch: number;
-  enabledExecutionMode?: ExecutionMode | "disabled";
+  enabledExecutionMode?: ExecutionSelection;
   otherExecutionProviders?: Partial<Record<ExecutionMode, ExecutionPort>>;
   now?: () => number;
   /** Narrow fake-runtime seam for synthetic ledger tests. */

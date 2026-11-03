@@ -1,3 +1,4 @@
+import { configuredExecutionModes } from "./providers/execution-registry.js";
 import { readFile, stat } from "node:fs/promises";
 import { PowerExecutionService } from "./application/power-execution.js";
 import {
@@ -171,7 +172,8 @@ export async function buildApp(
       error instanceof ApplicationError
         ? error.code === "not_found"
           ? 404
-          : error.code === "invalid_request"
+          : error.code === "invalid_request" ||
+              error.code === "environment_unsupported"
             ? 422
             : error.code === "queue_limit_exceeded"
               ? 429
@@ -267,7 +269,7 @@ export async function buildApp(
     const auth = new Authenticator(runtime.storage);
     const commands = new TicketService({
       storage: runtime.storage,
-      enabledExecutionMode: config.EXECUTION_MODE,
+      enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
     });
     const queries = new TicketQueries(runtime.storage);
     const ticketCommands = new TicketCommandService(runtime.storage, queries);
@@ -286,7 +288,7 @@ export async function buildApp(
         ? (versionRef) => runtime.secrets!.get(versionRef)
         : undefined,
       runtime.tartFactsForRevision,
-      config.EXECUTION_MODE,
+      configuredExecutionModes(config.EXECUTION_MODE),
     );
     const requireAdmin = async (
       request: Parameters<typeof auth.authenticate>[0],
@@ -306,7 +308,7 @@ export async function buildApp(
     const managementAuthorization = new ManagementService(
       runtime.storage,
       Date.now,
-      config.EXECUTION_MODE,
+      configuredExecutionModes(config.EXECUTION_MODE),
     );
     const journalRequests = new Map<
       string,
@@ -1620,7 +1622,8 @@ export async function buildApp(
         if (
           config.EXECUTION_MODE !== "simulator" &&
           config.EXECUTION_MODE !== "portainer" &&
-          config.EXECUTION_MODE !== "tart"
+          config.EXECUTION_MODE !== "tart" &&
+          config.EXECUTION_MODE !== "registered"
         )
           return reply
             .code(503)

@@ -64,20 +64,35 @@ const options = {
   },
 };
 const catalog = await client.catalog();
-const image = catalog.versions[0],
+const image = catalog.versions.find((v) =>
+    v.platforms.some((p) => p.kind === "container" && p.guestOs === "linux"),
+  ),
   network = catalog.networks[0];
-if (!image || !network || !image.platforms[0])
-  throw new Error("No authorized choices");
-const platform = image.platforms[0];
+const platforms =
+  image?.platforms.filter(
+    (p) => p.kind === "container" && p.guestOs === "linux",
+  ) ?? [];
+if (!image || !network || !platforms.length)
+  throw new Error("No authorized Linux container choices");
 const request = {
   image: { versionId: image.id },
   kind: "container",
-  allowedArchitectures: [platform.architecture],
+  guestOs: "linux", // workload OS; a macOS/Windows Docker host still delivers Linux here
+  // Optional allowedArchitectures; node/machine/provider are chosen by the platform.
   networkProfileId: network.id,
   resources: {
-    ...platform.minimumResources,
-    cpuMillis: Math.max(500, platform.minimumResources.cpuMillis),
-    memoryMiB: Math.max(512, platform.minimumResources.memoryMiB),
+    cpuMillis: Math.max(
+      500,
+      ...platforms.map((p) => p.minimumResources.cpuMillis),
+    ),
+    memoryMiB: Math.max(
+      512,
+      ...platforms.map((p) => p.minimumResources.memoryMiB),
+    ),
+    scratchMiB: Math.max(
+      0,
+      ...platforms.map((p) => p.minimumResources.scratchMiB),
+    ),
     scratchEnforcement: "best_effort",
     isolation: "shared_kernel",
   },
@@ -85,6 +100,9 @@ const request = {
 };
 const preview = await client.preview(request);
 // preview.capacityGuaranteed is always false. No Ticket/Claim was written.
+if (preview.availability === "unsupported")
+  throw new Error("Requested environment is not provided");
+// temporarily_unavailable may queue; actual allocation rechecks capacity atomically.
 const receipt = await client.tickets.acquire(request, options);
 const ticketId = receipt.ticket.id;
 await rm(commandFile, { force: true });

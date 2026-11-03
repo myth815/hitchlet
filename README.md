@@ -57,6 +57,7 @@ StudioARM / Colima Docker 与 Runtime 镜像的发布候选准备和后续验收
 - [完整设计与分阶段开发计划](docs/design/README.md)
 - [从空目录安装、Docker 接入与运维手册](docs/runbook.md)
 - [实际管理 API、SDK 与错误恢复](docs/api-sdk.md)
+- [租客环境需求、实现登记与等待语义](docs/ENVIRONMENT-SELECTION.md)
 - [TypeScript 接口说明](docs/design/contracts/README.md)
 - [消费者公开接口](docs/design/contracts/public.ts)
 - [SDK 调用示例](docs/design/contracts/usage.examples.ts)

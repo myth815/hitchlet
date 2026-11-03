@@ -18,7 +18,7 @@ const help = `Usage: node resumable-tenant.mjs <command> [options]
 
 Commands:
   catalog
-  preview --version ID --node ID --network ID [--storage ID --subpath PATH --mode RO|RW]
+  preview --version ID --network ID [--kind container|vm] [--guest-os linux|macos|windows] [--architecture arm64|amd64] [--node ID] [--storage ID --subpath PATH --mode RO|RW]
   acquire-or-resume
   status
   wait-ready
@@ -200,32 +200,50 @@ function options(args) {
 
 function acquireRequestFromCatalog(catalog, args) {
   const version = catalog.versions.find((item) => item.id === args.version);
-  const node = catalog.nodes.find((item) => item.id === args.node);
+  const node = args.node
+    ? catalog.nodes.find((item) => item.id === args.node)
+    : null;
   const network = catalog.networks.find((item) => item.id === args.network);
-  if (!version || !node || !network)
+  if (!version || (args.node && !node) || !network)
     throw new ExampleError(
       "INVALID_ARGUMENTS",
-      "Choose version, node and network IDs returned by catalog.",
+      "Choose version and network IDs returned by catalog; --node is optional.",
     );
-  const platform = version.platforms.find(
-    (item) => item.architecture === node.architecture,
+  const kind = args.kind ?? "container";
+  const platforms = version.platforms.filter(
+    (item) =>
+      item.kind === kind &&
+      (!args["guest-os"] || item.guestOs === args["guest-os"]) &&
+      (!args.architecture || item.architecture === args.architecture) &&
+      (!node || item.architecture === node.architecture),
   );
+  const platform = platforms[0];
   if (!platform)
     throw new ExampleError(
       "INVALID_ARGUMENTS",
-      "Selected version has no artifact for the selected node architecture.",
+      "Selected version has no artifact for the requested kind, guest OS and architecture.",
     );
   const request = {
     image: { versionId: version.id },
     resources: {
-      ...platform.minimumResources,
-      cpuMillis: Math.max(1, platform.minimumResources.cpuMillis),
-      memoryMiB: Math.max(1, platform.minimumResources.memoryMiB),
+      cpuMillis: Math.max(
+        1,
+        ...platforms.map((p) => p.minimumResources.cpuMillis),
+      ),
+      memoryMiB: Math.max(
+        1,
+        ...platforms.map((p) => p.minimumResources.memoryMiB),
+      ),
+      scratchMiB: Math.max(
+        0,
+        ...platforms.map((p) => p.minimumResources.scratchMiB),
+      ),
     },
     networkProfileId: network.id,
-    kind: "container",
-    allowedArchitectures: [node.architecture],
-    allowedNodeIds: [node.id],
+    kind,
+    ...(args["guest-os"] ? { guestOs: args["guest-os"] } : {}),
+    ...(args.architecture ? { allowedArchitectures: [args.architecture] } : {}),
+    ...(node ? { allowedNodeIds: [node.id] } : {}),
   };
   if (args.storage) {
     const storage = catalog.storage.find((item) => item.id === args.storage);
@@ -468,7 +486,12 @@ async function main() {
         const catalog = await client.catalog();
         const request = acquireRequestFromCatalog(catalog, args);
         const feasibility = await client.preview(request);
-        if (!feasibility.eligibleNodeIds.includes(args.node))
+        if (feasibility.availability === "unsupported")
+          throw new ExampleError(
+            "ENVIRONMENT_UNSUPPORTED",
+            "No registered environment matches the requested kind, guest OS, architecture and recipe.",
+          );
+        if (args.node && !feasibility.eligibleNodeIds.includes(args.node))
           throw new ExampleError(
             "INVALID_ARGUMENTS",
             "Preview did not include the selected node as eligible.",

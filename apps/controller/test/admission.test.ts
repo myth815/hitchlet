@@ -3,7 +3,12 @@ import {
   normalizeAcquireRequest,
   type AcquireNormalizationContext,
 } from "../src/domain/admission.js";
-import type { AcquireRequest } from "@hitchlet/contracts";
+import {
+  AcquireRequestSchema,
+  AcceptedAcquireRequestSchema,
+  TicketPlacementViewSchema,
+  type AcquireRequest,
+} from "@hitchlet/contracts";
 
 const id = "00000000-0000-4000-8000-000000000001";
 const request: AcquireRequest = {
@@ -124,4 +129,35 @@ describe("pure admission normalization", () => {
     expect(accepted.labels).toEqual({ purpose: "build" });
     expect(accepted.storage[0]?.authorizedSubpath).toBe("work");
   });
+});
+
+it("treats guest OS independently of architecture and keeps legacy contracts readable", () => {
+  const parsed = AcquireRequestSchema.parse({
+    ...request,
+    guestOs: "linux",
+    allowedArchitectures: ["arm64"],
+  });
+  expect(parsed.guestOs).toBe("linux");
+  const accepted = normalizeAcquireRequest(
+    { ...request, guestOs: "linux" },
+    context,
+  );
+  expect(AcceptedAcquireRequestSchema.parse(accepted).guestOs).toBe("linux");
+  expect(
+    AcceptedAcquireRequestSchema.parse(
+      normalizeAcquireRequest(request, context),
+    ).guestOs,
+  ).toBeUndefined();
+  const oldPlacement = {
+    machineId: id,
+    nodeId: id,
+    provider: "portainer",
+    architecture: "arm64",
+    imageArtifactId: id,
+  };
+  expect(TicketPlacementViewSchema.parse(oldPlacement).guestOs).toBeUndefined();
+  expect(
+    TicketPlacementViewSchema.parse({ ...oldPlacement, guestOs: "linux" })
+      .guestOs,
+  ).toBe("linux");
 });

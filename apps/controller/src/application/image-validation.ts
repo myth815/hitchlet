@@ -8,7 +8,8 @@ import {
   tartTemplateProofMatches,
   type TartFactsForRevision,
 } from "./tart-facts.js";
-import type { ExecutionMode } from "../providers/execution-dispatcher.js";
+import type { ExecutionSelection } from "../providers/execution-dispatcher.js";
+import { executionEnabled } from "../providers/execution-registry.js";
 
 const JsonObject = z.record(z.string(), z.unknown());
 function object(value: unknown, label: string) {
@@ -27,7 +28,7 @@ export class ImageValidationService {
     private readonly store: SQLiteValidationStore,
     private readonly now = Date.now,
     private readonly tartFactsForRevision?: TartFactsForRevision,
-    private readonly enabledExecutionMode?: ExecutionMode | "disabled",
+    private readonly enabledExecutionMode?: ExecutionSelection,
   ) {}
 
   async schedule(
@@ -75,9 +76,10 @@ export class ImageValidationService {
         "No registered node matches this artifact and connection",
       );
     if (
-      this.enabledExecutionMode &&
-      object(target.config_json, "node config").executionMode !==
-        this.enabledExecutionMode
+      !executionEnabled(
+        this.enabledExecutionMode,
+        object(target.config_json, "node config").executionMode,
+      )
     ) {
       if (retry) return;
       throw new RangeError(

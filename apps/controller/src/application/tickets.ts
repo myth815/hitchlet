@@ -7,7 +7,10 @@ import {
   type AcquireRequest,
   type TerminalReason,
 } from "@hitchlet/contracts";
-import { normalizeAcquireRequest } from "../domain/admission.js";
+import {
+  normalizeAcquireRequest,
+  NoMatchingEnvironmentError,
+} from "../domain/admission.js";
 import { supportsNodeSshRecipe } from "../domain/docker-recipe.js";
 import {
   leaseDeadline,
@@ -17,8 +20,13 @@ import {
 import { StorageError, type Storage } from "../storage/index.js";
 import { SQLiteTicketStore } from "../storage/ticket-store.js";
 import type { TerminationContext } from "../storage/termination-context.js";
-import type { ExecutionMode } from "../providers/execution-dispatcher.js";
+import type { ExecutionSelection } from "../providers/execution-dispatcher.js";
 import {
+  executionEnabled,
+  environmentContractReason,
+} from "../providers/execution-registry.js";
+import {
+  ApplicationError,
   conflict,
   notFound,
   preconditionFailed,
@@ -35,7 +43,7 @@ export interface TicketServiceOptions {
   readonly queueTimeoutSeconds?: number;
   readonly provisioningTimeoutSeconds?: number;
   /** Limits only new reservations; existing operations keep their frozen backend. */
-  readonly enabledExecutionMode?: ExecutionMode | "disabled";
+  readonly enabledExecutionMode?: ExecutionSelection;
 }
 export interface AcquireResult {
   readonly ticketId: string;
@@ -82,6 +90,29 @@ export class TicketService {
       storageRows,
       now,
     } = await this.prepareAcquire(consumerId, request);
+    const candidates = await this.store.schedulingCandidates({
+      imageVersion: versionId,
+      providers: contract.allowedProviders,
+      siteIds: contract.siteIds,
+      nodeIds: contract.allowedNodeIds ?? [],
+      machineIds: contract.allowedMachineIds ?? [],
+      kind: contract.kind,
+      architectures: contract.allowedArchitectures,
+      ...(contract.guestOs ? { guestOs: contract.guestOs } : {}),
+    });
+    let environmentSupported = false;
+    for (const candidate of candidates) {
+      const decision = await this.candidateDecision(
+        candidate,
+        contract,
+        String(network.id),
+        frozen,
+        now,
+      );
+      environmentSupported ||= decision.environmentMatches;
+    }
+    if (!environmentSupported)
+      throw new ApplicationError("environment_unsupported");
     const ticketId = this.id();
     try {
       await this.store.createQueuedTicket({
@@ -257,49 +288,43 @@ export class TicketService {
     if (!lifecycle || typeof lifecycle.id !== "string")
       throw new Error("No lifecycle expiry policy is configured");
     const now = this.now();
-    const accepted = normalizeAcquireRequest(request, {
-      resolvedImageVersionId: versionId,
-      authorizedArchitectures: authorizedArchitectures as ("amd64" | "arm64")[],
-      authorizedProviders: authorizedProviders as (
-        | "portainer"
-        | "hyperv"
-        | "tart"
-      )[],
-      authorizedSiteIds: authorizedSites,
-      authorizedMachineIds: authorizedMachines,
-      authorizedNodeIds: authorizedNodes,
-      resourceMaximums: {
-        cpuMillis: Number(maxResources.cpuMillis),
-        memoryMiB: Number(maxResources.memoryMiB),
-        scratchMiB: Number(maxResources.scratchMiB),
-      },
-      maximumTtlSeconds: maxTtl,
-      maximumLifetimeSeconds: positiveInteger(
-        quota.maxLifetimeSeconds,
-        "maxLifetimeSeconds",
-      ),
-      queueTimeoutSeconds: this.options.queueTimeoutSeconds ?? 1800,
-      provisioningTimeoutSeconds:
-        this.options.provisioningTimeoutSeconds ?? 1200,
-      defaultExpiryPolicyId: String(lifecycle.id),
-    });
+    let accepted: AcceptedAcquireRequest;
+    try {
+      accepted = normalizeAcquireRequest(request, {
+        resolvedImageVersionId: versionId,
+        authorizedArchitectures: authorizedArchitectures as (
+          | "amd64"
+          | "arm64"
+        )[],
+        authorizedProviders,
+        authorizedSiteIds: authorizedSites,
+        authorizedMachineIds: authorizedMachines,
+        authorizedNodeIds: authorizedNodes,
+        resourceMaximums: {
+          cpuMillis: Number(maxResources.cpuMillis),
+          memoryMiB: Number(maxResources.memoryMiB),
+          scratchMiB: Number(maxResources.scratchMiB),
+        },
+        maximumTtlSeconds: maxTtl,
+        maximumLifetimeSeconds: positiveInteger(
+          quota.maxLifetimeSeconds,
+          "maxLifetimeSeconds",
+        ),
+        queueTimeoutSeconds: this.options.queueTimeoutSeconds ?? 1800,
+        provisioningTimeoutSeconds:
+          this.options.provisioningTimeoutSeconds ?? 1200,
+        defaultExpiryPolicyId: String(lifecycle.id),
+      });
+    } catch (error) {
+      if (error instanceof NoMatchingEnvironmentError)
+        throw new ApplicationError("environment_unsupported");
+      throw error;
+    }
+
     const contract = AcceptedAcquireRequestSchema.parse({
       ...accepted,
       storage: request.storage ?? [],
     });
-    if (contract.kind === "vm") {
-      if (contract.resources.request.cpuMillis % 1000 !== 0)
-        throw new RangeError("VM CPU requests must use whole vCPUs");
-      if (
-        contract.resources.isolation !== "virtual_machine" ||
-        contract.resources.scratchEnforcement !== "best_effort" ||
-        contract.access.protocol !== "ssh" ||
-        storageRows.length > 0
-      )
-        throw new RangeError(
-          "Current Tart VM leases require virtual-machine isolation, best-effort scratch, SSH, and no mounts",
-        );
-    }
     const deny = await this.store.networkDenyBaseline();
     if (!deny?.id)
       throw new Error("No platform network deny baseline is configured");
@@ -402,8 +427,10 @@ export class TicketService {
       machineIds: contract.allowedMachineIds ?? [],
       kind: contract.kind,
       architectures: contract.allowedArchitectures,
+      ...(contract.guestOs ? { guestOs: contract.guestOs } : {}),
     });
     const eligibleNodeIds: string[] = [];
+    let environmentMatches = false;
     const reasonCodes = new Set<string>();
     for (const candidate of candidates) {
       const decision = await this.candidateDecision(
@@ -413,6 +440,7 @@ export class TicketService {
         frozen,
         now,
       );
+      environmentMatches ||= decision.environmentMatches;
       if (decision.reasonCodes.length === 0)
         eligibleNodeIds.push(String(candidate.node_id));
       else decision.reasonCodes.forEach((code) => reasonCodes.add(code));
@@ -420,6 +448,10 @@ export class TicketService {
     return {
       observedAtMs: now,
       capacityGuaranteed: false as const,
+      availability: availability(
+        environmentMatches,
+        eligibleNodeIds.length > 0,
+      ),
       eligibleNodeIds: [...new Set(eligibleNodeIds)],
       reasons: [
         ...(eligibleNodeIds.length
@@ -458,8 +490,10 @@ export class TicketService {
         machineIds: allowedMachines,
         kind: contract.kind,
         architectures: allowedArchitectures,
+        ...(contract.guestOs ? { guestOs: contract.guestOs } : {}),
       });
       const matchingNodes = new Set<string>();
+      let environmentMatches = false;
       const reasonCodes = new Set<string>();
       for (const candidate of candidates) {
         const decision = await this.candidateDecision(
@@ -469,6 +503,7 @@ export class TicketService {
           frozen,
           now,
         );
+        environmentMatches ||= decision.environmentMatches;
         if (decision.matches) matchingNodes.add(String(candidate.node_id));
         decision.reasonCodes.forEach((code) => reasonCodes.add(code));
         if (decision.reasonCodes.length) continue;
@@ -586,6 +621,7 @@ export class TicketService {
             ? [...reasonCodes]
             : ["no_matching_nodes"],
           matchingNodeCount: matchingNodes.size,
+          availability: availability(environmentMatches, false),
         },
       );
     }
@@ -746,31 +782,28 @@ export class TicketService {
     networkRevisionId: string,
     frozen: Record<string, unknown>,
     now: number,
-  ): Promise<{ matches: boolean; reasonCodes: string[] }> {
+  ): Promise<{
+    matches: boolean;
+    environmentMatches: boolean;
+    reasonCodes: string[];
+  }> {
     const hardReasons = new Set<string>();
     if (
-      this.options.enabledExecutionMode &&
-      executionMode(candidate.config_json) !== this.options.enabledExecutionMode
+      !executionEnabled(
+        this.options.enabledExecutionMode,
+        executionMode(candidate.config_json),
+      )
     )
       hardReasons.add("execution_mode_disabled");
     const caps = object(
       parseJson(candidate.capabilities_json, "node capabilities"),
     );
-    if (
-      contract.kind === "vm" &&
-      (candidate.backend_kind !== "tart" ||
-        executionMode(candidate.config_json) !== "tart")
-    )
-      hardReasons.add("vm_provider_execution_unsupported");
-    if (
-      contract.kind === "vm" &&
-      (contract.resources.request.cpuMillis % 1000 !== 0 ||
-        contract.access.protocol !== "ssh" ||
-        contract.resources.isolation !== "virtual_machine" ||
-        contract.resources.scratchEnforcement !== "best_effort" ||
-        (Array.isArray(frozen.storage) && frozen.storage.length > 0))
-    )
-      hardReasons.add("vm_contract_unsupported");
+    const implementationReason = environmentContractReason(
+      candidate.backend_kind,
+      contract,
+      candidate.guest_os,
+    );
+    if (implementationReason) hardReasons.add(implementationReason);
     const labels = object(
       parseJson(candidate.machine_labels, "machine labels"),
     );
@@ -884,6 +917,21 @@ export class TicketService {
       )
         hardReasons.add("image_access_unavailable");
     }
+    // Published recipe / declared OS+arch are structural. Expired proof, pressure,
+    // credentials, admission and capacity are recoverable availability conditions.
+    const environmentMatches =
+      !implementationReason &&
+      candidate.artifact_id !== null &&
+      (!contract.guestOs || candidate.guest_os === contract.guestOs) &&
+      stringList(caps.resourceKinds).includes(contract.kind) &&
+      stringList(caps.architectures).includes(String(candidate.architecture)) &&
+      stringList(caps.guestOs).includes(String(candidate.guest_os)) &&
+      ![
+        "labels_unavailable",
+        "image_minimum_resources_unmet",
+        "image_access_unavailable",
+        "access_unavailable",
+      ].some((reason) => hardReasons.has(reason));
     const reasons = new Set(hardReasons);
     if (candidate.connection_revision_id === null)
       reasons.add("provider_connection_unavailable");
@@ -903,7 +951,11 @@ export class TicketService {
       contract.resources.request,
     );
     admission.reasonCodes.forEach((code) => reasons.add(code));
-    return { matches: hardReasons.size === 0, reasonCodes: [...reasons] };
+    return {
+      matches: hardReasons.size === 0,
+      environmentMatches,
+      reasonCodes: [...reasons],
+    };
   }
   private replay(row: Row, hash: string): AcquireResult {
     if (row.request_hash !== hash) throw conflict("idempotency_key_reused");
@@ -911,6 +963,17 @@ export class TicketService {
       throw new Error("Idempotent response is incomplete");
     return { ticketId: row.ticket_id, phase: "queued", replayed: true };
   }
+}
+
+function availability(
+  matches: boolean,
+  ready: boolean,
+): "unsupported" | "temporarily_unavailable" | "available" {
+  return !matches
+    ? "unsupported"
+    : ready
+      ? "available"
+      : "temporarily_unavailable";
 }
 
 function executionMode(

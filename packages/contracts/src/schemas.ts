@@ -156,12 +156,13 @@ export const AcquireRequestSchema = z
     resources: RequestedResourcesSchema,
     networkProfileId: id,
     kind: z.enum(["container", "vm"]).optional(),
+    guestOs: z.enum(["linux", "windows", "macos"]).optional(),
     allowedArchitectures: z
       .array(z.enum(["amd64", "arm64"]))
       .min(1)
       .optional(),
     allowedProviders: z
-      .array(z.enum(["portainer", "hyperv", "tart"]))
+      .array(z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/))
       .min(1)
       .optional(),
     locality: z.literal("local_only").optional(),
@@ -366,12 +367,13 @@ export const AcceptedAcquireRequestSchema = z
     resources: resourceContractSchema,
     networkProfileId: id,
     kind: z.enum(["container", "vm"]),
+    guestOs: z.enum(["linux", "windows", "macos"]).optional(),
     allowedArchitectures: z
       .tuple([z.enum(["amd64", "arm64"])])
       .rest(z.enum(["amd64", "arm64"])),
     allowedProviders: z
-      .tuple([z.enum(["portainer", "hyperv", "tart"])])
-      .rest(z.enum(["portainer", "hyperv", "tart"])),
+      .tuple([z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)])
+      .rest(z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/)),
     locality: z.literal("local_only"),
     siteIds: z.array(siteKey),
     allowedMachineIds: z.tuple([id]).rest(id).optional(),
@@ -410,9 +412,10 @@ export const TicketPlacementViewSchema: z.ZodType<TicketPlacementView> = z
   .object({
     machineId: id,
     nodeId: id,
-    provider: z.enum(["portainer", "hyperv", "tart"]),
+    provider: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
     architecture: z.enum(["amd64", "arm64"]),
     imageArtifactId: id,
+    guestOs: z.enum(["linux", "windows", "macos"]).optional(),
   })
   .strict();
 export const TicketHealthViewSchema: z.ZodType<TicketHealthView> = z
@@ -424,6 +427,9 @@ export const TicketHealthViewSchema: z.ZodType<TicketHealthView> = z
   .strict();
 export const SchedulingViewSchema: z.ZodType<SchedulingView> = z
   .object({
+    availability: z
+      .enum(["unsupported", "temporarily_unavailable", "available"])
+      .optional(),
     checkedAt: utc.nullable(),
     reasonCodes: z.array(z.string()),
     matchingNodeCount: nonnegativeInt,
@@ -673,7 +679,7 @@ export const ImageSummarySchema: z.ZodType<ImageSummary> = z
 export const ImageArtifactViewSchema: z.ZodType<ImageArtifactView> = z
   .object({
     id,
-    provider: z.enum(["portainer", "hyperv", "tart"]),
+    provider: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/),
     kind: z.enum(["container", "vm"]),
     architecture: z.enum(["amd64", "arm64"]),
     guestOs: z.enum(["linux", "windows", "macos"]),

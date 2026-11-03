@@ -300,7 +300,12 @@ describe("D24 structured GUI and recovery", () => {
       />,
     );
     const selects = element.querySelectorAll("select");
-    await change(selects[3]!, "arm64");
+    await change(
+      [...selects].find((s) =>
+        [...s.options].some((o) => o.value === "arm64"),
+      )!,
+      "arm64",
+    );
     await change(selects[0]!, alternateVersionId);
     await click(element, "可行性预检");
     expect(calls[0]!.path).toBe("/v1/catalog/preview");
@@ -769,4 +774,53 @@ describe("profile revocation GUI SDK chain", () => {
     });
     expect(refreshed).toHaveBeenCalledOnce();
   });
+});
+
+it("keeps guest OS separate from node placement and does not submit an unsupported environment", async () => {
+  const acquire = vi.fn();
+  let availability = "temporarily_unavailable";
+  const bodies: Record<string, unknown>[] = [];
+  const client = new HitchletClient("https://controller.test", {
+    fetch: async (input, init) => {
+      if (new URL(String(input)).pathname === "/v1/catalog")
+        return Response.json(catalog);
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({
+        observedAtMs: 2,
+        capacityGuaranteed: false,
+        availability,
+        eligibleNodeIds: [],
+        reasons: [
+          availability === "unsupported"
+            ? "environment_kind_unsupported"
+            : "capacity_exhausted",
+        ],
+      });
+    },
+  });
+  const { element } = await mount(
+    <AuthorizedAcquire
+      client={client}
+      canOperate
+      busy={false}
+      blocked={false}
+      onAcquire={acquire}
+    />,
+  );
+  await change(
+    element.querySelector<HTMLSelectElement>(
+      'select[aria-label="客体操作系统"]',
+    )!,
+    "linux",
+  );
+  await click(element, "可行性预检");
+  expect(bodies[0]).toMatchObject({ guestOs: "linux" });
+  expect(bodies[0]).not.toHaveProperty("allowedNodeIds");
+  await submit(element.querySelector("form")!);
+  expect(acquire).toHaveBeenCalledOnce();
+  availability = "unsupported";
+  await click(element, "可行性预检");
+  await submit(element.querySelector("form")!);
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(element.textContent).toContain("当前没有对应环境能力");
 });

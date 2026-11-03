@@ -1,6 +1,7 @@
 export type ApplicationErrorCode =
   | "management_result_unknown"
   | "agent_epoch_conflict"
+  | "environment_unsupported"
   | "invalid_request"
   | "not_found"
   | "conflict"

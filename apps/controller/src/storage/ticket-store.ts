@@ -283,13 +283,16 @@ export class SQLiteTicketStore {
     machineIds: readonly string[];
     kind: string;
     architectures: readonly string[];
+    guestOs?: string;
   }): Promise<Row[]> {
     const candidates = await this.storage.all<Row>(
       `SELECT n.id AS node_id,n.version AS node_version,n.machine_id,n.runtime_identity_id,n.backend_kind,n.pool_id,n.capabilities_json,n.config_json,n.observed_at_ms,m.version AS machine_version,m.site_id,m.labels_json AS machine_labels,m.admission AS machine_admission,m.observed_power,m.power_lifecycle,m.power_cycle_id,m.power_transition_id,m.shutdown_operation_id,m.accepted_shutdown_receipt_id,m.out_of_band_evidence_id,m.wake_not_before_ms,m.shutdown_accepted_at_ms,m.power_transition_deadline_ms,m.wake_attempt_count,m.updated_at_ms AS machine_updated_at_ms,m.desired_power,m.capabilities_json AS machine_capabilities,power_policy.config_json AS power_policy_json,p.version AS pool_version,p.parent_allocation_id,p.total_cpu_millis,p.total_memory_mib,p.total_scratch_mib,p.system_cpu_millis,p.system_memory_mib,p.system_scratch_mib,a.id AS artifact_id,a.architecture,a.guest_os,a.environment_kind,a.requirements_json,a.minimum_cpu_millis,a.minimum_memory_mib,a.minimum_scratch_mib,a.access_recipe_json,pcr.id AS connection_revision_id,EXISTS(SELECT 1 FROM operations o JOIN agent_commands c ON c.operation_id=o.id AND c.kind='machine.shutdown' JOIN agents ag ON ag.id=c.agent_id AND ag.machine_id=m.id JOIN agent_receipts r ON r.command_id=c.id AND r.agent_id=c.agent_id WHERE o.id=m.shutdown_operation_id AND o.machine_id=m.id AND o.kind='machine.shutdown' AND o.state IN ('running','succeeded') AND r.id=m.accepted_shutdown_receipt_id AND r.phase='accepted' AND r.observed_at_ms>=m.shutdown_accepted_at_ms AND r.received_at_ms<=m.power_transition_deadline_ms) AS shutdown_evidence
-      FROM nodes n JOIN machines m ON m.id=n.machine_id LEFT JOIN policies power_policy ON power_policy.id=m.policy_id AND power_policy.kind='machine' LEFT JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.enabled=1 AND pc.runtime_identity_id=n.runtime_identity_id LEFT JOIN provider_connection_revisions pcr ON pcr.id=pc.current_revision_id AND pcr.verified_runtime_identity_id=n.runtime_identity_id JOIN capacity_pools p ON p.id=n.pool_id LEFT JOIN image_artifacts a ON a.image_version_id=? AND a.backend_kind=n.backend_kind AND a.environment_kind=? AND a.architecture IN (${query.architectures.map(() => "?").join(",")}) WHERE m.source='local' AND n.backend_kind IN (${query.providers.map(() => "?").join(",")}) AND m.site_id IN (${query.siteIds.map(() => "?").join(",")}) AND n.id IN (${query.nodeIds.map(() => "?").join(",")}) AND m.id IN (${query.machineIds.map(() => "?").join(",")}) ORDER BY n.id,a.architecture`,
+      FROM nodes n JOIN machines m ON m.id=n.machine_id LEFT JOIN policies power_policy ON power_policy.id=m.policy_id AND power_policy.kind='machine' LEFT JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.enabled=1 AND pc.runtime_identity_id=n.runtime_identity_id LEFT JOIN provider_connection_revisions pcr ON pcr.id=pc.current_revision_id AND pcr.verified_runtime_identity_id=n.runtime_identity_id JOIN capacity_pools p ON p.id=n.pool_id LEFT JOIN image_artifacts a ON a.image_version_id=? AND a.backend_kind=n.backend_kind AND a.environment_kind=? AND (? IS NULL OR a.guest_os=?) AND a.architecture IN (${query.architectures.map(() => "?").join(",")}) WHERE m.source='local' AND n.backend_kind IN (${query.providers.map(() => "?").join(",")}) AND m.site_id IN (${query.siteIds.map(() => "?").join(",")}) AND n.id IN (${query.nodeIds.map(() => "?").join(",")}) AND m.id IN (${query.machineIds.map(() => "?").join(",")}) ORDER BY n.id,a.architecture`,
       [
         query.imageVersion,
         query.kind,
+        query.guestOs ?? null,
+        query.guestOs ?? null,
         ...query.architectures,
         ...query.providers,
         ...query.siteIds,
@@ -326,7 +329,11 @@ export class SQLiteTicketStore {
     ticketId: string,
     ticketVersion: number,
     now: number,
-    assessment: { reasonCodes: readonly string[]; matchingNodeCount: number },
+    assessment: {
+      reasonCodes: readonly string[];
+      matchingNodeCount: number;
+      availability?: "unsupported" | "temporarily_unavailable" | "available";
+    },
   ): Promise<unknown> {
     return this.storage.run(
       "UPDATE tickets SET scheduling_reason_json=?,version=version+1,updated_at_ms=? WHERE id=? AND version=? AND phase='queued'",

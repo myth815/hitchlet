@@ -239,19 +239,13 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     const choices = JSON.parse(catalog.stdout);
     const nodeId = choices.nodes[0].id;
     expect(
-      (
-        await cli([
-          "preview",
-          "--version",
-          versionId,
-          "--node",
-          nodeId,
-          "--network",
-          networkId,
-        ])
-      ).code,
+      (await cli(["preview", "--version", versionId, "--network", networkId]))
+        .code,
     ).toBe(0);
     const original = await readState();
+    expect(original.request).not.toHaveProperty("allowedNodeIds");
+    expect(original.request).not.toHaveProperty("allowedMachineIds");
+    expect(original.request).not.toHaveProperty("allowedProviders");
 
     dropAcquire = true;
     const lostAcquire = await cli(["acquire-or-resume"]);

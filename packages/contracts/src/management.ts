@@ -133,6 +133,9 @@ export const FeasibilitySchema = z
   .object({
     observedAtMs: time,
     capacityGuaranteed: z.literal(false),
+    availability: z
+      .enum(["unsupported", "temporarily_unavailable", "available"])
+      .optional(),
     eligibleNodeIds: z.array(id),
     reasons: z.array(z.string()),
   })

@@ -1,4 +1,5 @@
 import React from "react";
+import { reasonLabel } from "./format.js";
 import type {
   AcquireRequest,
   HitchletClient,
@@ -30,6 +31,9 @@ export function AuthorizedAcquire({
   const [versionId, setVersion] = React.useState(""),
     [kind, setKind] = React.useState<"container" | "vm">("container"),
     [network, setNetwork] = React.useState(""),
+    [guestOs, setGuestOs] = React.useState<"" | "linux" | "windows" | "macos">(
+      "",
+    ),
     [resources, setResources] = React.useState({
       cpuMillis: 1000,
       memoryMiB: 1024,
@@ -54,8 +58,21 @@ export function AuthorizedAcquire({
   const selected = catalog.data?.versions.find((v) => v.id === versionId);
   const availableArchitectures =
     selected?.platforms
-      .filter((platform) => platform.kind === kind)
+      .filter(
+        (platform) =>
+          platform.kind === kind && (!guestOs || platform.guestOs === guestOs),
+      )
       .map((platform) => platform.architecture) ?? [];
+  const availableGuestOs = [
+    ...new Set(
+      selected?.platforms
+        .filter((p) => p.kind === kind)
+        .map((p) => p.guestOs) ?? [],
+    ),
+  ];
+  React.useEffect(() => {
+    if (guestOs && !availableGuestOs.includes(guestOs)) setGuestOs("");
+  }, [guestOs, availableGuestOs.join("|")]);
   React.useEffect(() => {
     if (architecture && !availableArchitectures.includes(architecture))
       setArchitecture("");
@@ -80,6 +97,7 @@ export function AuthorizedAcquire({
   const request: AcquireRequest = {
     image: { versionId },
     kind,
+    ...(guestOs && availableGuestOs.includes(guestOs) ? { guestOs } : {}),
     networkProfileId: network,
     resources: {
       ...resources,
@@ -132,7 +150,8 @@ export function AuthorizedAcquire({
         className="acquire-form"
         onSubmit={(e) => {
           e.preventDefault();
-          if (preview) onAcquire(request);
+          if (preview && preview.availability !== "unsupported")
+            onAcquire(request);
         }}
       >
         <fieldset disabled={unavailable || previewing}>
@@ -214,6 +233,21 @@ export function AuthorizedAcquire({
                     </option>
                   ),
                 )}
+              </select>
+            </label>
+            <label>
+              客体操作系统
+              <select
+                aria-label="客体操作系统"
+                value={guestOs}
+                onChange={(e) => setGuestOs(e.target.value as typeof guestOs)}
+              >
+                <option value="">镜像支持的任意 OS</option>
+                {availableGuestOs.map((os) => (
+                  <option key={os} value={os}>
+                    {os}
+                  </option>
+                ))}
               </select>
             </label>
             <label>
@@ -305,7 +339,11 @@ export function AuthorizedAcquire({
                 {[
                   ...new Set(
                     selected?.platforms
-                      .filter((p) => p.kind === kind)
+                      .filter(
+                        (p) =>
+                          p.kind === kind &&
+                          (!guestOs || p.guestOs === guestOs),
+                      )
                       .map((p) => p.architecture) ?? [],
                   ),
                 ].map((a) => (
@@ -525,16 +563,28 @@ export function AuthorizedAcquire({
                 当前满足资格的 Node：{preview.eligibleNodeIds.length}
                 ；容量不保证
               </b>
-              <p>{preview.reasons.join("；")}</p>
+              <p>
+                {preview.availability === "unsupported"
+                  ? "当前没有对应环境能力"
+                  : preview.availability === "temporarily_unavailable"
+                    ? "环境已支持，暂待容量或节点恢复"
+                    : "当前环境可匹配"}
+              </p>
+              <p>{preview.reasons.map(reasonLabel).join("；")}</p>
               <p>
                 预检服务端时间 {new Date(preview.observedAtMs).toLocaleString()}
-                。提交后才创建持久 Ticket；未匹配可继续排队，等待原因见详情。
+                。不支持的环境请更换需求；已支持但暂不可分配时可提交排队，等待原因见详情。
               </p>
             </div>
           ) : null}
           <button
             className="primary-button"
-            disabled={!preview || !versionId || !network}
+            disabled={
+              !preview ||
+              preview.availability === "unsupported" ||
+              !versionId ||
+              !network
+            }
           >
             保存请求并申请 →
           </button>

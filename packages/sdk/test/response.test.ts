@@ -3,6 +3,7 @@ import {
   AcquireRequestSchema,
   ApiErrorResponseSchema,
   ImageSelectorSchema,
+  TicketPlacementViewSchema,
 } from "@hitchlet/contracts";
 import { PowerSchemas } from "@hitchlet/contracts/admin";
 import { parseResponse } from "../src/response.js";
@@ -155,4 +156,18 @@ describe("compatible response decoding", () => {
       }),
     ).toThrow();
   });
+});
+
+it("decodes a registered future provider ID without changing the basic consumer interface", () => {
+  const id = "00000000-0000-4000-8000-000000000001";
+  expect(
+    parseResponse(TicketPlacementViewSchema, {
+      machineId: id,
+      nodeId: id,
+      provider: "future_vm",
+      architecture: "arm64",
+      guestOs: "macos",
+      imageArtifactId: id,
+    }).provider,
+  ).toBe("future_vm");
 });

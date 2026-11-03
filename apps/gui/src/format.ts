@@ -31,6 +31,14 @@ export function reasonLabel(code: string) {
   return (
     (
       {
+        environment_unsupported: "当前没有对应的环境能力",
+        guest_os_unsupported: "当前执行实现尚不支持该客体 OS",
+        environment_kind_unsupported: "当前实现不支持该环境类型",
+        tart_contract_unsupported:
+          "Tart 当前需要整核 CPU、SSH、尽力临时盘且无托管挂载",
+        capacity_exhausted: "可用容量不足，等待已有资源归还",
+        capabilities_expired: "能力观测已过期，等待刷新",
+        execution_mode_disabled: "对应执行实现当前未启用",
         awaiting_scheduler: "等待调度器分配",
         no_matching_node: "没有匹配的节点",
         insufficient_capacity: "可用资源不足",

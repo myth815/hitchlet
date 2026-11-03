@@ -1,6 +1,15 @@
 import type { ExecutionPort, ProvisionPlan } from "./port.js";
 
-export type ExecutionMode = "simulator" | "portainer" | "tart";
+import {
+  executionEnabled,
+  isExecutionMode,
+  type ExecutionMode,
+  type ExecutionSelection,
+} from "./execution-registry.js";
+export type {
+  ExecutionMode,
+  ExecutionSelection,
+} from "./execution-registry.js";
 
 /** Selects the adapter from the immutable node configuration frozen into a plan. */
 export class ExecutionProviderDispatcher implements ExecutionPort {
@@ -8,12 +17,12 @@ export class ExecutionProviderDispatcher implements ExecutionPort {
     private readonly providers: Readonly<
       Partial<Record<ExecutionMode, ExecutionPort>>
     >,
-    private readonly enabledExecutionMode?: ExecutionMode | "disabled",
+    private readonly enabledExecutionMode?: ExecutionSelection,
   ) {}
 
   private provider(plan: ProvisionPlan): ExecutionPort {
     const mode = plan.runtimeConfig?.executionMode;
-    if (mode !== "simulator" && mode !== "portainer" && mode !== "tart")
+    if (!isExecutionMode(mode))
       throw new Error("Frozen execution mode is unavailable");
     const provider = this.providers[mode];
     if (!provider)
@@ -57,9 +66,9 @@ export class ExecutionProviderDispatcher implements ExecutionPort {
 
   private assertProvisionEnabled(plan: ProvisionPlan): void {
     const mode = plan.runtimeConfig?.executionMode;
-    if (mode !== "simulator" && mode !== "portainer" && mode !== "tart")
+    if (!isExecutionMode(mode))
       throw new Error("Frozen execution mode is unavailable");
-    if (this.enabledExecutionMode !== mode)
+    if (!executionEnabled(this.enabledExecutionMode ?? "disabled", mode))
       throw new Error(`New ${mode} execution is disabled`);
   }
 }

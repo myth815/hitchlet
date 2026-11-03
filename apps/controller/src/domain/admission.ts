@@ -2,17 +2,22 @@ import type {
   Architecture,
   AcceptedAcquireRequest,
   AcquireRequest,
-  ProviderKind,
   ResourceContract,
   ResourceKind,
 } from "@hitchlet/contracts";
+
+export class NoMatchingEnvironmentError extends RangeError {
+  constructor() {
+    super("Requested placement scope has no authorized candidates");
+  }
+}
 
 export interface AcquireNormalizationContext {
   /** Alias resolution and published-version authorization happen before normalization. */
   readonly resolvedImageVersionId: string;
   /** Exhaustive authorized candidate sets; an empty set means no eligible candidates. */
   readonly authorizedArchitectures: readonly Architecture[];
-  readonly authorizedProviders: readonly ProviderKind[];
+  readonly authorizedProviders: readonly string[];
   readonly authorizedSiteIds: readonly string[];
   readonly authorizedMachineIds: readonly string[];
   readonly authorizedNodeIds: readonly string[];
@@ -58,9 +63,7 @@ export function normalizeAcquireRequest(
     !machines.length ||
     !nodes.length
   )
-    throw new RangeError(
-      "Requested placement scope has no authorized candidates",
-    );
+    throw new NoMatchingEnvironmentError();
   const source = request.resources;
   for (const key of ["cpuMillis", "memoryMiB", "scratchMiB"] as const) {
     if (source[key] > ctx.resourceMaximums[key])
@@ -135,6 +138,7 @@ export function normalizeAcquireRequest(
     resources,
     networkProfileId: request.networkProfileId,
     kind,
+    ...(request.guestOs ? { guestOs: request.guestOs } : {}),
     allowedArchitectures: nonEmpty(architectures),
     allowedProviders: nonEmpty(providers),
     locality: request.locality ?? "local_only",

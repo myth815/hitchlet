@@ -1,3 +1,4 @@
+import { configuredExecutionModes } from "./providers/execution-registry.js";
 import {
   MaintenanceService,
   admissionOpen,
@@ -151,7 +152,7 @@ try {
         secrets,
         installationId: installation.installation_id,
         controllerEpoch: Number(installation.controller_epoch),
-        enabledExecutionMode: config.EXECUTION_MODE,
+        enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
       }).execution;
     }
     const worker = new OperationWorker({
@@ -159,17 +160,17 @@ try {
       storage,
       execution: new ExecutionProviderDispatcher(
         configuredExecutions,
-        config.EXECUTION_MODE,
+        configuredExecutionModes(config.EXECUTION_MODE),
       ),
       installationId: installation.installation_id,
       controllerEpoch: Number(installation.controller_epoch),
-      enabledExecutionMode: config.EXECUTION_MODE,
+      enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
     });
     const tickets = new TicketService({
       storage,
       installationId: installation.installation_id,
       controllerEpoch: Number(installation.controller_epoch),
-      enabledExecutionMode: config.EXECUTION_MODE,
+      enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
     });
     const leases = new LeaseService(storage);
     await tickets.refreshSimulatorFixtureObservation();
@@ -223,7 +224,11 @@ try {
         );
       },
     });
-  } else if (config.EXECUTION_MODE === "portainer" && controlsReady) {
+  } else if (
+    (config.EXECUTION_MODE === "portainer" ||
+      config.EXECUTION_MODE === "registered") &&
+    controlsReady
+  ) {
     recoveryState = "recovering";
     if (!secrets)
       throw new Error("Portainer mode requires the encrypted secret store");
@@ -251,6 +256,8 @@ try {
       Date.now,
       config.PORTAINER_ALLOW_LOOPBACK_HTTP,
       (versionRef) => secrets.get(versionRef),
+      (input) => tartRuntimeFactsForRevision(input, secrets),
+      configuredExecutionModes(config.EXECUTION_MODE),
     );
     const accessMaterials = new SQLiteAccessMaterialStore(storage, secrets);
     const execution = new PortainerExecutionProvider(
@@ -265,7 +272,7 @@ try {
           secrets,
           installationId: installation.installation_id,
           controllerEpoch: epoch,
-          enabledExecutionMode: config.EXECUTION_MODE,
+          enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
         }).execution,
       };
     if (config.SIMULATOR_DATA_DIR)
@@ -274,7 +281,7 @@ try {
       );
     const dispatchedExecution = new ExecutionProviderDispatcher(
       configuredExecutions,
-      config.EXECUTION_MODE,
+      configuredExecutionModes(config.EXECUTION_MODE),
     );
     const imageCache = new ImageCacheWorker(
       new SQLiteImageCacheStore(storage),
@@ -325,13 +332,13 @@ try {
       execution: dispatchedExecution,
       installationId: installation.installation_id,
       controllerEpoch: epoch,
-      enabledExecutionMode: config.EXECUTION_MODE,
+      enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
     });
     const tickets = new TicketService({
       storage,
       installationId: installation.installation_id,
       controllerEpoch: epoch,
-      enabledExecutionMode: config.EXECUTION_MODE,
+      enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
     });
     const leases = new LeaseService(storage);
     let mainWorkHealthy = false;
@@ -346,6 +353,8 @@ try {
     backgroundLoops = new ControllerBackgroundLoops({
       refreshObservations: async () => {
         await admin.refreshPortainerObservations();
+        if (config.EXECUTION_MODE === "registered")
+          await admin.refreshTartObservations();
         const nodes = await storage.all<{
           id: string;
           runtime_identity_id: string;
@@ -456,8 +465,7 @@ try {
       },
     });
   } else if (config.EXECUTION_MODE === "tart" && controlsReady) {
-    // Tart execution stays behind the startup guard until real Tart/Softnet
-    // qualification and controlled deployment have been verified and enabled.
+    // Concrete runtime, template, access and resource checks determine Tart eligibility.
     recoveryState = "recovering";
     if (!secrets)
       throw new Error("Tart mode requires the encrypted secret store");
@@ -477,7 +485,7 @@ try {
       secrets,
       installationId: installation.installation_id,
       controllerEpoch: epoch,
-      enabledExecutionMode: config.EXECUTION_MODE,
+      enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
       otherExecutionProviders: {
         portainer: new PortainerExecutionProvider(
           (plan) => resolvePortainerRuntime(storage, secrets, plan, epoch),
@@ -498,7 +506,7 @@ try {
       false,
       (versionRef) => secrets.get(versionRef),
       (input) => tartRuntimeFactsForRevision(input, secrets),
-      config.EXECUTION_MODE,
+      configuredExecutionModes(config.EXECUTION_MODE),
     );
     const tick = createTartRecoveryTick({ worker, tickets, leases });
     let mainWorkHealthy = false;

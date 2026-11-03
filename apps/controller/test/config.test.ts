@@ -46,3 +46,19 @@ describe("configuration", () => {
     });
   });
 });
+
+it("offers opt-in registered composition without changing disabled or single-backend defaults", () => {
+  expect(loadConfig({ DATA_DIR: "/tmp/hitchlet" }).EXECUTION_MODE).toBe(
+    "disabled",
+  );
+  expect(() =>
+    loadConfig({ DATA_DIR: "/tmp/hitchlet", EXECUTION_MODE: "registered" }),
+  ).toThrow(/HITCHLET_SECRET_KEY_FILE/);
+  expect(
+    loadConfig({
+      DATA_DIR: "/tmp/hitchlet",
+      EXECUTION_MODE: "registered",
+      HITCHLET_SECRET_KEY_FILE: "/tmp/hitchlet.key",
+    }).EXECUTION_MODE,
+  ).toBe("registered");
+});

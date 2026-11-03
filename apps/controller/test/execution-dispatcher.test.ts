@@ -1,3 +1,9 @@
+import {
+  configuredExecutionModes,
+  environmentContractReason,
+} from "../src/providers/execution-registry.js";
+import { AcceptedAcquireRequestSchema } from "@hitchlet/contracts";
+import { normalizeAcquireRequest } from "../src/domain/admission.js";
 import { describe, expect, it, vi } from "vitest";
 import type { ExecutionPort, ProvisionPlan } from "../src/providers/port.js";
 import { ExecutionProviderDispatcher } from "../src/providers/execution-dispatcher.js";
@@ -103,4 +109,71 @@ describe("ExecutionProviderDispatcher", () => {
     );
     expect(docker.calls.inspect).not.toHaveBeenCalled();
   });
+});
+
+it("permits new work through both explicitly registered adapters without changing frozen cleanup routing", async () => {
+  const docker = provider();
+  const tart = provider();
+  const dispatcher = new ExecutionProviderDispatcher(
+    { portainer: docker.execution, tart: tart.execution },
+    configuredExecutionModes("registered"),
+  );
+  await dispatcher.create(plan("portainer", "provision"), {});
+  await dispatcher.create(plan("tart", "provision"), {});
+  await dispatcher.destroy(plan("tart", "cleanup"), {} as never);
+  expect(docker.calls.create).toHaveBeenCalledOnce();
+  expect(tart.calls.create).toHaveBeenCalledOnce();
+  expect(tart.calls.destroy).toHaveBeenCalledOnce();
+});
+
+it("registers current implementation limits without claiming a Linux Tart bootstrap", () => {
+  const id = "00000000-0000-4000-8000-000000000001";
+  const contract = AcceptedAcquireRequestSchema.parse(
+    normalizeAcquireRequest(
+      {
+        image: { versionId: id },
+        kind: "vm",
+        networkProfileId: id,
+        resources: { cpuMillis: 2000, memoryMiB: 2048, scratchMiB: 0 },
+      },
+      {
+        resolvedImageVersionId: id,
+        authorizedArchitectures: ["arm64"],
+        authorizedProviders: ["tart"],
+        authorizedSiteIds: [id],
+        authorizedMachineIds: [id],
+        authorizedNodeIds: [id],
+        resourceMaximums: {
+          cpuMillis: 4000,
+          memoryMiB: 8192,
+          scratchMiB: 8192,
+        },
+        maximumTtlSeconds: 900,
+        maximumLifetimeSeconds: 1800,
+        queueTimeoutSeconds: 300,
+        provisioningTimeoutSeconds: 300,
+        defaultExpiryPolicyId: id,
+      },
+    ),
+  );
+  expect(environmentContractReason("tart", contract, "macos")).toBeNull();
+  expect(environmentContractReason("tart", contract, "linux")).toBe(
+    "guest_os_unsupported",
+  );
+  expect(environmentContractReason("hyperv", contract, "windows")).toBe(
+    "environment_kind_unsupported",
+  );
+  expect(
+    environmentContractReason(
+      "tart",
+      {
+        ...contract,
+        resources: {
+          ...contract.resources,
+          request: { ...contract.resources.request, cpuMillis: 1500 },
+        },
+      },
+      "macos",
+    ),
+  ).toBe("tart_contract_unsupported");
 });

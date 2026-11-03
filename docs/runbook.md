@@ -1,5 +1,7 @@
 # Local operation and Docker integration runbook
 
+Environment selection now supports independent guest OS and platform-selected placement; see [the environment contract](ENVIRONMENT-SELECTION.md). Existing execution modes remain unchanged. `EXECUTION_MODE=registered` explicitly composes Portainer and Tart with the existing encrypted secret store and per-node runtime configuration. It does not install or qualify either backend. Use the paired current contracts/SDK for this new mode; no running deployment was switched by this source change.
+
 ## Fresh standalone M0 installation (no OpenClaw required)
 
 Start from a clean Hitchlet checkout with Node24 and pnpm10 on PATH. The

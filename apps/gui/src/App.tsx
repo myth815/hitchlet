@@ -831,7 +831,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
                           <small>放置</small>
                           <b>
                             {ticket.placement
-                              ? `${ticket.placement.provider} · ${ticket.placement.architecture}`
+                              ? `${ticket.placement.guestOs ?? "OS 未报告"} · ${ticket.placement.architecture} · ${ticket.placement.provider}`
                               : "尚未分配"}
                           </b>
                           <span>

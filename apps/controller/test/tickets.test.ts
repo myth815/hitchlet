@@ -476,7 +476,9 @@ describe("independent admission review", () => {
     ] as const) {
       const { service, storage } = await fixture();
       await storage.run(sql);
-      await service.acquire(consumerId, label, request());
+      await expect(
+        service.acquire(consumerId, label, request()),
+      ).rejects.toMatchObject({ code: "environment_unsupported" });
       expect(await service.reserveNext()).toBeNull();
     }
   });
@@ -2030,6 +2032,25 @@ describe("persistent simulator lifecycle", () => {
     await storage.run(
       "UPDATE nodes SET config_json=json_object('executionMode','portainer'),version=version+1",
     );
+    await storage.run(
+      "UPDATE image_artifacts SET requirements_json=?,access_recipe_json=?",
+      [
+        JSON.stringify({
+          bootstrap: {
+            mechanism: "hitchlet-node-ssh-v1",
+            contractVersion: "1",
+            identityReset: true,
+          },
+        }),
+        JSON.stringify({
+          accessProtocols: ["ssh"],
+          ports: [22],
+          account: "workspace",
+          discovery: "portainer-published-port",
+          readiness: "ssh-public-key-authenticated-fingerprint",
+        }),
+      ],
+    );
     const ticket = await service.acquire(
       "10000000-0000-4000-8000-000000000001",
       "review-real-node",
@@ -2927,8 +2948,8 @@ describe("Tart VM ticket ledger integration", () => {
 
     let clock = now;
     vi.spyOn(Date, "now").mockImplementation(() => clock);
-    await expect(
-      service.preview(consumerId, {
+    expect(
+      await service.preview(consumerId, {
         image: { versionId: "20000000-0000-4000-8000-000000000003" },
         kind: "vm",
         allowedProviders: ["tart"],
@@ -2941,7 +2962,10 @@ describe("Tart VM ticket ledger integration", () => {
         },
         networkProfileId: "30000000-0000-4000-8000-000000000001",
       }),
-    ).rejects.toThrow("whole vCPUs");
+    ).toMatchObject({
+      availability: "unsupported",
+      reasons: expect.arrayContaining(["tart_contract_unsupported"]),
+    });
     const ticket = await service.acquire(consumerId, "tart-vm-lifecycle", {
       image: { versionId: "20000000-0000-4000-8000-000000000003" },
       kind: "vm",
@@ -3535,5 +3559,97 @@ describe("Tart VM ticket ledger integration", () => {
       ),
     ).toMatchObject({ state: "released" });
     expect(cloneCount).toBe(1);
+  });
+});
+
+describe("environment request selection", () => {
+  const consumerId = "10000000-0000-4000-8000-000000000001";
+  it("selects by guest OS without a host/provider hint and reports the allocated artifact OS", async () => {
+    const { service, storage, now } = await fixture();
+    // Physical host OS is unrelated to the container OS.
+    await storage.run("UPDATE machines SET host_os='macos'");
+    const acquired = await service.acquire(consumerId, "guest-linux", {
+      ...request(),
+      guestOs: "linux",
+    });
+    expect(await service.reserveNext()).not.toBeNull();
+    const ticket = await new TicketQueries(storage, () => now).get(
+      consumerId,
+      acquired.ticketId,
+    );
+    expect(ticket?.acceptedRequest.guestOs).toBe("linux");
+    expect(ticket?.placement?.guestOs).toBe("linux");
+    // Replay must not require current availability or produce another Ticket.
+    await storage.run("UPDATE nodes SET admission='disabled'");
+    expect(
+      (
+        await service.acquire(consumerId, "guest-linux", {
+          ...request(),
+          guestOs: "linux",
+        })
+      ).ticketId,
+    ).toBe(acquired.ticketId);
+  });
+  it("rejects absent guest OS capability without making a Ticket, but queues compatible capacity pressure", async () => {
+    const { service, storage, now } = await fixture();
+    expect(
+      await service.preview(consumerId, { ...request(), guestOs: "windows" }),
+    ).toMatchObject({ availability: "unsupported", eligibleNodeIds: [] });
+    await expect(
+      service.acquire(consumerId, "guest-windows", {
+        ...request(),
+        guestOs: "windows",
+      }),
+    ).rejects.toMatchObject({ code: "environment_unsupported" });
+    await expect(
+      service.acquire(consumerId, "future-provider", {
+        ...request(),
+        allowedProviders: ["future_vm"],
+      }),
+    ).rejects.toMatchObject({ code: "environment_unsupported" });
+    expect(await storage.get("SELECT count(*) n FROM tickets")).toMatchObject({
+      n: 0n,
+    });
+    await service.acquire(
+      consumerId,
+      "os-capacity-first",
+      heavierRequest(2000),
+    );
+    await service.reserveNext();
+    expect(
+      await service.preview(consumerId, {
+        ...heavierRequest(2000),
+        guestOs: "linux",
+      }),
+    ).toMatchObject({ availability: "temporarily_unavailable" });
+    const next = await service.acquire(consumerId, "os-capacity-second", {
+      ...heavierRequest(2000),
+      guestOs: "linux",
+    });
+    expect(await service.reserveNext()).toBeNull();
+    expect(
+      (
+        await new TicketQueries(storage, () => now).get(
+          consumerId,
+          next.ticketId,
+        )
+      )?.scheduling,
+    ).toMatchObject({
+      availability: "temporarily_unavailable",
+      matchingNodeCount: 1,
+      reasonCodes: expect.arrayContaining(["capacity_exhausted"]),
+    });
+  });
+  it("classifies stale observation as temporary, not an unsupported OS", async () => {
+    const { service, storage } = await fixture();
+    await storage.run(
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.expiresAt','2000-01-01T00:00:00.000Z')",
+    );
+    expect(
+      await service.preview(consumerId, { ...request(), guestOs: "linux" }),
+    ).toMatchObject({
+      availability: "temporarily_unavailable",
+      reasons: expect.arrayContaining(["capabilities_expired"]),
+    });
   });
 });

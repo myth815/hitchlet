@@ -16,7 +16,7 @@ import { TicketService } from "./tickets.js";
 import { ApplicationError } from "./errors.js";
 import { roleScopes } from "../domain/role-scopes.js";
 import { isNodeObservationFresh } from "../domain/human-use.js";
-import type { ExecutionMode } from "../providers/execution-dispatcher.js";
+import type { ExecutionSelection } from "../providers/execution-dispatcher.js";
 
 export type ManagementActor = {
   consumerId: string;
@@ -35,7 +35,7 @@ export class ManagementService {
   constructor(
     db: Storage,
     private readonly now = Date.now,
-    enabledExecutionMode?: ExecutionMode | "disabled",
+    enabledExecutionMode?: ExecutionSelection,
   ) {
     this.inventory = new SQLiteMachineNodeStore(db, now);
     this.operationStore = new SQLiteOperationStore(db);

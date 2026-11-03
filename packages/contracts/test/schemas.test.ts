@@ -297,7 +297,7 @@ describe("public runtime contracts", () => {
     expect(
       TicketViewSchema.safeParse({
         ...readyTicket,
-        placement: { ...readyTicket.placement, provider: "unknown" },
+        placement: { ...readyTicket.placement, provider: "invalid/provider" },
       }).success,
     ).toBe(false);
     expect(

@@ -16,7 +16,7 @@ const ConfigSchema = z
     DATA_DIR: z.string().min(1),
     GUI_DIR: z.string().default("/app/gui"),
     EXECUTION_MODE: z
-      .enum(["disabled", "simulator", "portainer", "tart"])
+      .enum(["disabled", "simulator", "portainer", "tart", "registered"])
       .default("disabled"),
     SIMULATOR_DATA_DIR: z.string().min(1).optional(),
     HITCHLET_POWER_CONFIG: z.string().min(1).optional(),
@@ -45,13 +45,14 @@ const ConfigSchema = z
       });
     if (
       (config.EXECUTION_MODE === "portainer" ||
-        config.EXECUTION_MODE === "tart") &&
+        config.EXECUTION_MODE === "tart" ||
+        config.EXECUTION_MODE === "registered") &&
       !config.HITCHLET_SECRET_KEY_FILE
     )
       context.addIssue({
         code: "custom",
         path: ["HITCHLET_SECRET_KEY_FILE"],
-        message: "required when EXECUTION_MODE=portainer or tart",
+        message: "required when EXECUTION_MODE=portainer, tart or registered",
       });
     if (
       !config.COOKIE_SECURE &&
