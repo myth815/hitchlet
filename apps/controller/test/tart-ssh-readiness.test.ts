@@ -1,5 +1,8 @@
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({ client: undefined as unknown }));
@@ -24,6 +27,18 @@ class TestClient extends EventEmitter {
 }
 
 afterEach(() => vi.useRealTimers());
+
+it("loads the compiled provider through Node's native ESM loader", () => {
+  const moduleUrl = pathToFileURL(
+    resolve("dist/providers/tart-ssh-readiness.js"),
+  ).href;
+  const result = spawnSync(
+    process.execPath,
+    ["--input-type=module", "-e", `await import(${JSON.stringify(moduleUrl)})`],
+    { encoding: "utf8" },
+  );
+  expect(result.status, result.stderr).toBe(0);
+});
 
 it("submits only the fixed SSH/22 host-key-checked command and verifies guest facts", async () => {
   vi.useFakeTimers();

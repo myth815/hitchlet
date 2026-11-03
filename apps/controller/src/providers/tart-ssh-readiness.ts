@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import { isIPv4 } from "node:net";
-import { Client, utils } from "ssh2";
+import ssh2 from "ssh2";
 import type { TartSshProbeEvidence } from "./tart-provider.js";
+
+const { Client, utils } = ssh2;
 
 const MAX_PROBE_MS = 10_000;
 const MAX_OUTPUT_BYTES = 4096;
