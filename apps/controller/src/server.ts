@@ -10,7 +10,7 @@ import { RotatingLog } from "./rotating-log.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { buildApp } from "./app.js";
-import { assertTartExecutionAdaptersConfigured, loadConfig } from "./config.js";
+import { loadConfig } from "./config.js";
 import { openStorage } from "./storage/index.js";
 import {
   OperationWorker,
@@ -39,7 +39,6 @@ import {
 } from "./application/portainer-background.js";
 
 const config = loadConfig(process.env);
-assertTartExecutionAdaptersConfigured(config.EXECUTION_MODE);
 const storage = await openStorage(config.DATA_DIR);
 const maintenance = new MaintenanceService(
   storage,

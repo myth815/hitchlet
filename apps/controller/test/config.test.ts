@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  assertTartExecutionAdaptersConfigured,
-  loadConfig,
-  redact,
-} from "../src/config.js";
+import { loadConfig, redact } from "../src/config.js";
 describe("configuration", () => {
   it("requires a data directory", () => {
     expect(() => loadConfig({})).toThrow(/DATA_DIR/);
@@ -35,12 +31,6 @@ describe("configuration", () => {
         HITCHLET_SECRET_KEY_FILE: "/tmp/hitchlet.key",
       }).EXECUTION_MODE,
     ).toBe("tart");
-    expect(() => assertTartExecutionAdaptersConfigured("tart")).toThrow(
-      "Tart execution remains closed: real Tart/Softnet qualification and controlled deployment have not been verified and enabled",
-    );
-    expect(() =>
-      assertTartExecutionAdaptersConfigured("disabled"),
-    ).not.toThrow();
   });
   it("ignores unrelated process environment variables", () => {
     expect(loadConfig({ ...process.env, DATA_DIR: "/tmp/hitchlet" }).PORT).toBe(

@@ -1,6 +1,6 @@
 # Tart 网络模式与验证边界
 
-本批实现冻结网络合同到 Softnet 的执行计划、可信 Runtime 策略读回、归还前网络回收，以及现有 Controller worker/Ticket/Lease/Claim 的 composition。真实 Tart server 仍由启动 guard 关闭，Runtime `networkEnabled` 默认 false。源码与受控测试不代表已安装、已具备管理员权限、真实网络合格或可供消费者租用。
+本批实现冻结网络合同到 Softnet 的执行计划、可信 Runtime 策略读回、归还前网络回收，以及现有 Controller worker/Ticket/Lease/Claim 的 composition。用户已明确批准移除无条件 Tart server 启动拒绝；默认执行模式仍为 disabled，Runtime 的可选 Softnet `networkEnabled` 默认 false。源码与受控测试不代表已安装、已具备管理员权限、真实网络合格或可供消费者租用。
 
 ## 默认受信任 NAT（2026-11-03）
 
@@ -10,7 +10,7 @@ NAT 用普通 `tart run --no-graphics`，不启动 Softnet，不申请其 root/S
 
 基本 Node 资格只需真实 resourceLimits、sshBootstrap、cleanupRecovery 三项；`networkPolicyEnforcement=unsupported`，不以免检冒充强隔离已验证。网络 Profile 仍是授权和固定模式的目录，不需逐个 Profile 的强隔离资格。`policy.tartMode=isolated` 显式选择下文 Softnet 路径，仍要求六项证据；旧冻结票据不迁移，Docker 行为不变。
 
-**当前全局 Tart server 启动禁令仍保留**：删除该 guard 的操作被自动审批拒绝且未执行，故本批源码不等于正式入口可运行。真实 Tart/NAT/SSH/回收尚未实机验证。本节之后的默认拒绝、控制 FD 与 Softnet 回执要求只适用于可选强隔离模式。
+**无条件 Tart server 启动拒绝已移除**：此前拒绝的操作在用户直接确认后单次重试完成，未添加替代总闸。具体资源、身份、SSH 和查实回收检查保持；真实 Tart/NAT/SSH/回收尚未实机验证。本节之后的默认拒绝、控制 FD 与 Softnet 回执要求只适用于可选强隔离模式。
 
 ## 合同与执行
 
@@ -47,7 +47,7 @@ Softnet 控制 EOF 只会关闭管理通道，不能单凭 EOF 宣称后端已�
 
 - server composition 已接入有界 Tart Node 观察和既有 ready 完整性巡检。匹配的认证 facts 只刷新健康时间，不延长人工资格或证明 Host 压力、人员 presence。资格失效、模板/身份变化与观察不可达按实际状态处理。这些持续运行和故障路径仍未实机验证，不承诺长期生产接单。
 
-Controller 离线严格到期硬停仍不支持。Linux guest、动态网络修订、真实后端故障、媒体/Vesta 作业和长期生产运行未由本批证明；Tart 的真实执行 guard 保持关闭。
+Controller 离线严格到期硬停仍不支持。Linux guest、动态网络修订、真实后端故障、媒体/Vesta 作业和长期生产运行未由本批证明；本次入口修正未执行真实 VM。
 
 ## 受控验证入口
 

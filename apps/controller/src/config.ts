@@ -66,16 +66,6 @@ const ConfigSchema = z
   .strict();
 export type Config = z.infer<typeof ConfigSchema>;
 
-/** Tart serving stays closed until real Tart/Softnet qualification and controlled deployment are verified and enabled. */
-export function assertTartExecutionAdaptersConfigured(
-  mode: Config["EXECUTION_MODE"],
-): void {
-  if (mode === "tart")
-    throw new Error(
-      "Tart execution remains closed: real Tart/Softnet qualification and controlled deployment have not been verified and enabled",
-    );
-}
-
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const keys = [
     "HOST",
