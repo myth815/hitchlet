@@ -54,8 +54,8 @@ never use it to bless existing stale output.
 See the [Studio ARM release candidate guide](../../../docs/STUDIO-ARM-RELEASE-CANDIDATE.md)
 for the paired Docker image and consumer workflow.
 
-The current checkout's legacy `dist` files have no provenance manifest and are
-rejected by the pairing command until a fresh build succeeds.
+Legacy `dist` files without a current provenance manifest are rejected by the
+pairing command until a fresh build succeeds.
 
 ## Run against the isolated Simulator
 
