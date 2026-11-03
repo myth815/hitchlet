@@ -33,3 +33,5 @@ Hyper-V原生生命周期内核源码已完成，见[内核边界与验证](HYPE
 Hyper-V已补固定Windows/Linux amd64 SSH probe及正常制品草稿登记/读回，见[源码与34项局部验证](HYPERV-READINESS-AND-DRAFTS.md)。下一步是实际模板引导、节点/资格/live模板发布证明和正式组合；未执行远端或伪造发布事实。
 
 Hyper-V的[正常Runtime入口与namespace目录绑定](HYPERV-RUNTIME-ENTRY.md)已补本地受控接线，Windows部署未执行。历史源解析一次授权重试超时无回执，暂停该未知步骤；后续仍以真实模板/引导渠道、系统前置及正式resolver/资格发布为依据，不补造能力。
+
+Runtime可离线组装[独立候选包](RUNTIME-CANDIDATE-PACKAGE.md)，依赖闭包在/tmp实际加载通过；不含Node/配置/认证，未传Windows或部署。该交付不替代真实模板、组件、初始化与资格发布。
