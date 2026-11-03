@@ -23,6 +23,7 @@ import { ImageValidationService } from "./image-validation.js";
 import { ResourceContractSchema } from "@hitchlet/contracts/schemas";
 import { SQLiteValidationStore } from "../storage/validation-store.js";
 import { SQLiteOperationStore } from "../storage/operation-store.js";
+import type { ExecutionMode } from "../providers/execution-dispatcher.js";
 
 type Row = Record<string, string | number | bigint | null>;
 /** A controller owns this guard only for calls still executing in its own process.
@@ -51,6 +52,7 @@ export class OperationWorker {
       execution: ExecutionPort;
       installationId: string;
       controllerEpoch?: number;
+      enabledExecutionMode?: ExecutionMode | "disabled";
       now?: () => number;
       id?: () => string;
       createCalls?: AllocationCreateCalls;
@@ -186,6 +188,9 @@ export class OperationWorker {
                 epoch,
                 now: this.now(),
                 state: "healthy",
+                ...(inspection.accessEndpointUpdate
+                  ? { endpointHost: inspection.accessEndpointUpdate.host }
+                  : {}),
               });
           }
         } else {
@@ -263,8 +268,11 @@ export class OperationWorker {
   }
   /** Retry blocked validation admission and process operations without scanning deadlines. */
   async reconcileScheduledWork(): Promise<number> {
-    await new ImageValidationService(this.validations, () =>
-      this.now(),
+    await new ImageValidationService(
+      this.validations,
+      () => this.now(),
+      undefined,
+      this.options.enabledExecutionMode,
     ).retryBlocked();
     return this.reconcile();
   }
@@ -657,7 +665,30 @@ export class OperationWorker {
       throw new Error("Persisted provision inputs are incomplete");
     const subject = operationSubject(op);
     const frozen = parseObject(row.accepted_contract_json);
-    const isTart = parseObject(row.frozen_config_json).executionMode === "tart";
+    const frozenConfig =
+      typeof row.frozen_config_json === "string"
+        ? parseObject(row.frozen_config_json)
+        : {};
+    const frozenMode = frozenConfig.executionMode;
+    const intentMode = parseObject(op.intent_json).executionMode;
+    const validExecutionMode = (value: unknown) =>
+      value === "simulator" || value === "portainer" || value === "tart";
+    if (
+      validExecutionMode(frozenMode) &&
+      validExecutionMode(intentMode) &&
+      frozenMode !== intentMode
+    )
+      throw new Error(
+        "Frozen execution configuration disagrees with operation intent",
+      );
+    const executionMode = validExecutionMode(frozenMode)
+      ? frozenMode
+      : validExecutionMode(intentMode)
+        ? intentMode
+        : undefined;
+    if (!executionMode)
+      throw new Error("Persisted provision execution mode is unavailable");
+    const isTart = executionMode === "tart";
     const accepted =
       subject.kind === "tenant"
         ? (AcceptedAcquireRequestSchema.parse(
@@ -729,10 +760,7 @@ export class OperationWorker {
         throw new Error("Bound mount facts missing");
       if (persisted.every((m) => typeof m.resolvedSourceRef === "string"))
         mounts = persisted.map((m) => resolvedStorageMountSchema.parse(m));
-      else if (
-        parseObject(row.frozen_config_json).executionMode === "portainer" ||
-        parseObject(row.frozen_config_json).executionMode === "tart"
-      )
+      else if (executionMode === "portainer" || executionMode === "tart")
         throw new Error("Real runtime mount evidence missing");
       // Pre-D23 Simulator contracts stored frozen selections rather than host
       // facts. Their explicit simulated references retain the original hash.
@@ -768,9 +796,7 @@ export class OperationWorker {
       .slice(0, 32)}`;
     let plan: ProvisionPlan = {
       deadlineMs: Number(op.deadline_ms),
-      ...(typeof row.frozen_config_json === "string"
-        ? { runtimeConfig: parseObject(row.frozen_config_json) }
-        : {}),
+      runtimeConfig: { ...frozenConfig, executionMode },
       identity: {
         installationId: this.options.installationId,
         allocationId: stringField(val(op, "allocation_id")),
@@ -826,8 +852,7 @@ export class OperationWorker {
     if (
       typeof row.resolved_provision_contract_id !== "string" &&
       mounts.length &&
-      (parseObject(row.frozen_config_json).executionMode === "portainer" ||
-        parseObject(row.frozen_config_json).executionMode === "tart")
+      (executionMode === "portainer" || executionMode === "tart")
     ) {
       if (!this.options.execution.resolveMounts)
         throw new Error("Runtime storage facts unavailable");

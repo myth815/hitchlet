@@ -8,6 +8,7 @@ import {
   tartTemplateProofMatches,
   type TartFactsForRevision,
 } from "./tart-facts.js";
+import type { ExecutionMode } from "../providers/execution-dispatcher.js";
 
 const JsonObject = z.record(z.string(), z.unknown());
 function object(value: unknown, label: string) {
@@ -26,6 +27,7 @@ export class ImageValidationService {
     private readonly store: SQLiteValidationStore,
     private readonly now = Date.now,
     private readonly tartFactsForRevision?: TartFactsForRevision,
+    private readonly enabledExecutionMode?: ExecutionMode | "disabled",
   ) {}
 
   async schedule(
@@ -72,6 +74,16 @@ export class ImageValidationService {
       throw new RangeError(
         "No registered node matches this artifact and connection",
       );
+    if (
+      this.enabledExecutionMode &&
+      object(target.config_json, "node config").executionMode !==
+        this.enabledExecutionMode
+    ) {
+      if (retry) return;
+      throw new RangeError(
+        "Node execution mode is disabled for new validation work",
+      );
+    }
     if (!deny)
       throw new RangeError("Platform network deny revision is unavailable");
     const authorization = object(

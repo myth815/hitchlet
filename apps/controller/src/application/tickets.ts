@@ -17,6 +17,7 @@ import {
 import { StorageError, type Storage } from "../storage/index.js";
 import { SQLiteTicketStore } from "../storage/ticket-store.js";
 import type { TerminationContext } from "../storage/termination-context.js";
+import type { ExecutionMode } from "../providers/execution-dispatcher.js";
 import {
   conflict,
   notFound,
@@ -33,6 +34,8 @@ export interface TicketServiceOptions {
   readonly id?: () => string;
   readonly queueTimeoutSeconds?: number;
   readonly provisioningTimeoutSeconds?: number;
+  /** Limits only new reservations; existing operations keep their frozen backend. */
+  readonly enabledExecutionMode?: ExecutionMode | "disabled";
 }
 export interface AcquireResult {
   readonly ticketId: string;
@@ -722,6 +725,11 @@ export class TicketService {
     now: number,
   ): Promise<{ matches: boolean; reasonCodes: string[] }> {
     const hardReasons = new Set<string>();
+    if (
+      this.options.enabledExecutionMode &&
+      executionMode(candidate.config_json) !== this.options.enabledExecutionMode
+    )
+      hardReasons.add("execution_mode_disabled");
     const caps = object(
       parseJson(candidate.capabilities_json, "node capabilities"),
     );

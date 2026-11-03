@@ -149,6 +149,8 @@ export type Inspection =
         state: "healthy" | "lost";
         reason?: string;
       }>;
+      /** Provider-verified endpoint refresh for the existing ready receipt. */
+      accessEndpointUpdate?: Readonly<{ host: string }>;
     }
   | {
       presence: "absent";

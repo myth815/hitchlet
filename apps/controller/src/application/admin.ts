@@ -19,6 +19,7 @@ import {
   validTartAttestedCapability,
 } from "../domain/attested-capability.js";
 import type { TartFactsForRevision } from "../providers/runtime-credentials.js";
+import type { ExecutionMode } from "../providers/execution-dispatcher.js";
 import type {
   NodeCapabilityAttestationInput,
   TartNodeRuntimeConfigInput,
@@ -54,6 +55,7 @@ export class AdminService {
     allowLoopbackHttp = false,
     private readonly readSecret?: (versionRef: string) => Promise<string>,
     private readonly tartFactsForRevision?: TartFactsForRevision,
+    enabledExecutionMode?: ExecutionMode | "disabled",
   ) {
     this.reads = new SQLiteAdminReadStore(db);
     this.cacheReads = new SQLiteImageCacheStore(db, now);
@@ -81,6 +83,7 @@ export class AdminService {
       new SQLiteValidationStore(db, now),
       now,
       tartFactsForRevision,
+      enabledExecutionMode,
     );
   }
   discover(input: Parameters<PortainerConnectionService["discover"]>[0]) {

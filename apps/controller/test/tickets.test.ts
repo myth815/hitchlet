@@ -29,6 +29,7 @@ import { createTartExecutionComposition } from "../src/providers/tart-runtime-co
 import { resolveTartCleanupRuntime } from "../src/providers/tart-runtime-resolver.js";
 import type { RuntimeAgentJsonTransport } from "../src/providers/runtime-network-client.js";
 import { TicketService as SourceTicketService } from "../src/application/tickets.js";
+import { ManagementService as SourceManagementService } from "../src/application/management.js";
 
 function tartNetworkObservation(
   identity: TartAllocationIdentity,
@@ -459,6 +460,47 @@ describe("independent admission review", () => {
 });
 
 describe("queued ticket fairness", () => {
+  it("blocks a queued request for a disabled backend before capacity reservation", async () => {
+    const unsupported = await fixture();
+    const closed = new SourceTicketService({
+      storage: unsupported.storage,
+      now: () => unsupported.now,
+      enabledExecutionMode: "portainer",
+    });
+    await closed.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "unsupported-backend",
+      request(),
+    );
+    expect(await closed.reserveNext()).toBeNull();
+    const preview = await new SourceManagementService(
+      unsupported.storage,
+      () => unsupported.now,
+      "portainer",
+    ).feasibility("10000000-0000-4000-8000-000000000001", request());
+    expect(preview.reasons).toContain("execution_mode_disabled");
+    expect(
+      Number(
+        (await unsupported.storage.get<{ n: bigint }>(
+          "SELECT count(*) n FROM capacity_claims WHERE state<>'released'",
+        ))!.n,
+      ),
+    ).toBe(0);
+
+    const simulator = await fixture();
+    const enabled = new SourceTicketService({
+      storage: simulator.storage,
+      now: () => simulator.now,
+      enabledExecutionMode: "simulator",
+    });
+    const ticket = await enabled.acquire(
+      "10000000-0000-4000-8000-000000000001",
+      "enabled-simulator",
+      request(),
+    );
+    expect((await enabled.reserveNext())?.ticketId).toBe(ticket.ticketId);
+  });
+
   it("rotates consumers by the latest durable reservation event and keeps FIFO within each consumer", async () => {
     const { service, storage, now } = await fixture();
     const a1 = await service.acquire(

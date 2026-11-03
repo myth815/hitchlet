@@ -107,7 +107,10 @@ export type TartExecutionProviderOptions = Readonly<{
     plan: ProvisionPlan,
     authorization: NonNullable<ProvisionPlan["cleanupAuthorization"]>,
   ): Promise<ResolvedTartCleanupRuntime>;
-  accessMaterials: Pick<SQLiteAccessMaterialStore, "getOrCreate">;
+  accessMaterials: Pick<
+    SQLiteAccessMaterialStore,
+    "getOrCreate" | "readExisting"
+  >;
   ssh: Readonly<{
     /** Resolves only after host-key confirmation and public-key authentication. */
     verify(
@@ -631,10 +634,13 @@ export class TartExecutionProvider implements ExecutionPort {
     )
       return unknown();
     const username = savedAccess.username;
+    const savedHost = savedAccess.host;
     const hostFingerprint = savedAccess.hostKeyFingerprint;
     const clientFingerprint = savedAccess.clientPublicKeyFingerprint;
     if (
       typeof username !== "string" ||
+      typeof savedHost !== "string" ||
+      !isIPv4(savedHost) ||
       typeof hostFingerprint !== "string" ||
       typeof clientFingerprint !== "string"
     )
@@ -693,7 +699,76 @@ export class TartExecutionProvider implements ExecutionPort {
     }
     if (bootstrap.networkEvidenceReference !== currentNetwork.reference)
       return lost("TART_BOOTSTRAP_NETWORK_MISMATCH");
-    return { presence: "present", evidence, integrity: { state: "healthy" } };
+    if (!observed.ipAddress || !isIPv4(observed.ipAddress)) return unknown();
+    if (observed.ipAddress === savedHost)
+      return { presence: "present", evidence, integrity: { state: "healthy" } };
+
+    let materials: Awaited<
+      ReturnType<typeof this.options.accessMaterials.readExisting>
+    >;
+    let ssh: TartSshProbeEvidence;
+    const deadlineMs = Math.min(
+      plan.deadlineMs,
+      this.now() + EVIDENCE_MAX_AGE_MS,
+    );
+    try {
+      if (deadlineMs <= this.now()) return unknown();
+      materials = await this.options.accessMaterials.readExisting(
+        plan.identity.allocationId,
+      );
+      if (
+        deadlineMs <= this.now() ||
+        materials.fingerprint !== clientFingerprint
+      )
+        return unknown();
+      ssh = await this.options.ssh.verify({
+        host: observed.ipAddress,
+        port: 22,
+        username,
+        privateKey: materials.privateKey,
+        hostPublicKey: bootstrap.hostPublicKey,
+        hostKeyFingerprint: hostFingerprint,
+        clientPublicKeyFingerprint: clientFingerprint,
+        guestOS: plan.artifact.guestOS!,
+        architecture: "arm64",
+        deadlineMs,
+      });
+    } catch {
+      return unknown();
+    }
+    if (
+      this.now() >= deadlineMs ||
+      ssh.authenticated !== true ||
+      ssh.username !== username ||
+      ssh.hostKeyFingerprint !== hostFingerprint ||
+      ssh.clientPublicKeyFingerprint !== clientFingerprint ||
+      ssh.guestOS !== plan.artifact.guestOS ||
+      ssh.architecture !== plan.artifact.architecture ||
+      ssh.scratchWritable !== true
+    )
+      return unknown();
+    let confirmed: TartInspection;
+    try {
+      confirmed = tartInspectionSchema.parse(
+        await resolved.runtime.inspect(tartIdentity(plan)),
+      );
+    } catch {
+      return unknown();
+    }
+    if (
+      confirmed.presence !== "present" ||
+      !sameProvisionIdentity(confirmed.identity, plan.identity) ||
+      confirmed.vmName !== observed.vmName ||
+      confirmed.ipAddress !== observed.ipAddress ||
+      !sameJson(confirmed.bootstrapReceipt, bootstrap)
+    )
+      return unknown();
+    return {
+      presence: "present",
+      evidence,
+      integrity: { state: "healthy" },
+      accessEndpointUpdate: { host: observed.ipAddress },
+    };
   }
 
   private async networkEvidence(

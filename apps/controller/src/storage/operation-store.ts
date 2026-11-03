@@ -98,19 +98,46 @@ export class SQLiteOperationStore {
     now: number;
     state: "healthy" | "unknown";
     reason?: string;
+    endpointHost?: string;
   }): Promise<boolean> {
+    if (input.endpointHost !== undefined && input.state !== "healthy")
+      throw new Error(
+        "An access endpoint can only refresh with healthy evidence",
+      );
     try {
+      const operationResult =
+        input.endpointHost === undefined
+          ? "json_set(COALESCE(result_json,'{}'),'$.integrity',json(?))"
+          : "json_set(json_set(COALESCE(result_json,'{}'),'$.access.host',?),'$.integrity',json(?))";
+      const allocationReceipt =
+        input.endpointHost === undefined
+          ? "actual_resources_json"
+          : "json_set(actual_resources_json,'$.receipt.access.host',?)";
+      const operationParams =
+        input.endpointHost === undefined
+          ? [
+              JSON.stringify({
+                state: input.state,
+                reason: input.reason ?? null,
+                observedAtMs: input.now,
+                nextCheckAtMs: input.now + 30_000,
+              }),
+            ]
+          : [
+              input.endpointHost,
+              JSON.stringify({
+                state: input.state,
+                reason: input.reason ?? null,
+                observedAtMs: input.now,
+                nextCheckAtMs: input.now + 30_000,
+              }),
+            ];
       await this.db.batchTransaction([
         {
           kind: "run",
-          sql: "UPDATE operations SET result_json=json_set(COALESCE(result_json,'{}'),'$.integrity',json(?)),owner_token=NULL,locked_until_ms=NULL,version=version+1,updated_at_ms=? WHERE id=? AND state='succeeded' AND owner_token=? AND version=? AND controller_epoch=? AND controller_epoch=(SELECT controller_epoch FROM installations WHERE singleton=1) AND EXISTS(SELECT 1 FROM allocations a JOIN tickets t ON t.id=a.ticket_id WHERE a.id=operations.allocation_id AND a.id=? AND a.ticket_id=? AND a.desired_state='present' AND a.control_version=? AND t.phase='ready')",
+          sql: `UPDATE operations SET result_json=${operationResult},owner_token=NULL,locked_until_ms=NULL,version=version+1,updated_at_ms=? WHERE id=? AND state='succeeded' AND owner_token=? AND version=? AND controller_epoch=? AND controller_epoch=(SELECT controller_epoch FROM installations WHERE singleton=1) AND EXISTS(SELECT 1 FROM allocations a JOIN tickets t ON t.id=a.ticket_id WHERE a.id=operations.allocation_id AND a.id=? AND a.ticket_id=? AND a.desired_state='present' AND a.control_version=? AND t.phase='ready')`,
           params: [
-            JSON.stringify({
-              state: input.state,
-              reason: input.reason ?? null,
-              observedAtMs: input.now,
-              nextCheckAtMs: input.now + 30_000,
-            }),
+            ...operationParams,
             input.now,
             input.operationId,
             input.token,
@@ -124,8 +151,9 @@ export class SQLiteOperationStore {
         },
         {
           kind: "run",
-          sql: "UPDATE allocations SET observed_state=?,version=version+1,updated_at_ms=? WHERE id=? AND desired_state='present' AND control_version=? AND EXISTS(SELECT 1 FROM tickets t WHERE t.id=allocations.ticket_id AND t.phase='ready') AND EXISTS(SELECT 1 FROM operations o WHERE o.id=? AND o.state='succeeded' AND o.version=? AND o.controller_epoch=? AND o.owner_token IS NULL)",
+          sql: `UPDATE allocations SET actual_resources_json=${allocationReceipt},observed_state=?,version=version+1,updated_at_ms=? WHERE id=? AND desired_state='present' AND control_version=? AND EXISTS(SELECT 1 FROM tickets t WHERE t.id=allocations.ticket_id AND t.phase='ready') AND EXISTS(SELECT 1 FROM operations o WHERE o.id=? AND o.state='succeeded' AND o.version=? AND o.controller_epoch=? AND o.owner_token IS NULL)`,
           params: [
+            ...(input.endpointHost === undefined ? [] : [input.endpointHost]),
             input.state === "healthy" ? "running" : "unknown",
             input.now,
             input.allocationId,

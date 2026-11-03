@@ -4,9 +4,14 @@ import {
 } from "../application/operations.js";
 import { TicketService } from "../application/tickets.js";
 import { LeaseService } from "../application/leases.js";
+import {
+  ExecutionProviderDispatcher,
+  type ExecutionMode,
+} from "./execution-dispatcher.js";
 import type { Storage } from "../storage/index.js";
 import { SQLiteAccessMaterialStore } from "../storage/access-material-store.js";
 import type { LocalSecretStore } from "../storage/secret-store.js";
+import type { ExecutionPort } from "./port.js";
 import {
   TartExecutionProvider,
   type TartExecutionProviderOptions,
@@ -22,6 +27,8 @@ export type TartExecutionCompositionOptions = Readonly<{
   secrets: LocalSecretStore;
   installationId: string;
   controllerEpoch: number;
+  enabledExecutionMode?: ExecutionMode | "disabled";
+  otherExecutionProviders?: Partial<Record<ExecutionMode, ExecutionPort>>;
   now?: () => number;
   /** Narrow fake-runtime seam for synthetic ledger tests. */
   resolveRuntime?: TartExecutionProviderOptions["resolveRuntime"];
@@ -70,15 +77,20 @@ export function createTartExecutionComposition(
   const worker = new OperationWorker({
     createCalls: new AllocationCreateCalls(),
     storage: options.storage,
-    execution,
+    execution: new ExecutionProviderDispatcher(
+      { ...options.otherExecutionProviders, tart: execution },
+      options.enabledExecutionMode ?? "tart",
+    ),
     installationId: options.installationId,
     controllerEpoch: options.controllerEpoch,
+    enabledExecutionMode: options.enabledExecutionMode ?? "tart",
     now,
   });
   const tickets = new TicketService({
     storage: options.storage,
     installationId: options.installationId,
     controllerEpoch: options.controllerEpoch,
+    enabledExecutionMode: options.enabledExecutionMode ?? "tart",
     now,
   });
   const leases = new LeaseService(options.storage, now);

@@ -52,6 +52,17 @@ export class SQLiteAccessMaterialStore {
     return material(winnerPrivateKey, winner.access_secret_ref);
   }
 
+  async readExisting(allocationId: string) {
+    const current = await this.db.get<Row>(
+      "SELECT access_secret_ref FROM allocations WHERE id=? AND purpose IN ('tenant','validation')",
+      [allocationId],
+    );
+    if (!current || typeof current.access_secret_ref !== "string")
+      throw new Error("Existing access material is missing");
+    const privateKey = await this.secrets.get(current.access_secret_ref);
+    return material(privateKey, current.access_secret_ref);
+  }
+
   async read(secretRef: string) {
     return this.secrets.get(secretRef);
   }

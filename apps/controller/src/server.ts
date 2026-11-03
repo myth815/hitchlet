@@ -18,18 +18,21 @@ import {
 } from "./application/operations.js";
 import { TicketService } from "./application/tickets.js";
 import { LeaseService } from "./application/leases.js";
+import { createTartRecoveryTick } from "./application/tart-recovery.js";
 import { PersistentSimulator } from "./providers/simulator.js";
 import { LocalSecretStore } from "./storage/secret-store.js";
 import { SQLiteAccessMaterialStore } from "./storage/access-material-store.js";
 import { PortainerExecutionProvider } from "./providers/portainer-provider.js";
 import { createTartExecutionComposition } from "./providers/tart-runtime-composition.js";
+import { ExecutionProviderDispatcher } from "./providers/execution-dispatcher.js";
+import type { ExecutionMode } from "./providers/execution-dispatcher.js";
 import { NodeRuntimeConfigSchema } from "./http/admin-protocol.js";
 import { AdminService } from "./application/admin.js";
 import { probePortainer } from "./providers/portainer-probe.js";
 import { ImageCacheWorker } from "./application/image-cache.js";
 import { SQLiteImageCacheStore } from "./storage/image-cache-store.js";
 import { PortainerImageCacheProvider } from "./providers/portainer-cache.js";
-import type { ProvisionPlan } from "./providers/port.js";
+import type { ExecutionPort, ProvisionPlan } from "./providers/port.js";
 import {
   ControllerBackgroundLoops,
   reconcileLeaseAndExpiryIntents,
@@ -129,17 +132,45 @@ try {
     );
     if (!installation)
       throw new Error("Simulator installation identity is unavailable");
+    const configuredExecutions: Partial<Record<ExecutionMode, ExecutionPort>> =
+      {
+        simulator: new PersistentSimulator(config.SIMULATOR_DATA_DIR!),
+      };
+    if (secrets) {
+      configuredExecutions.portainer = new PortainerExecutionProvider(
+        (plan) =>
+          resolvePortainerRuntime(
+            storage,
+            secrets,
+            plan,
+            Number(installation.controller_epoch),
+          ),
+        new SQLiteAccessMaterialStore(storage, secrets),
+      );
+      configuredExecutions.tart = createTartExecutionComposition({
+        storage,
+        secrets,
+        installationId: installation.installation_id,
+        controllerEpoch: Number(installation.controller_epoch),
+        enabledExecutionMode: config.EXECUTION_MODE,
+      }).execution;
+    }
     const worker = new OperationWorker({
       createCalls: new AllocationCreateCalls(),
       storage,
-      execution: new PersistentSimulator(config.SIMULATOR_DATA_DIR!),
+      execution: new ExecutionProviderDispatcher(
+        configuredExecutions,
+        config.EXECUTION_MODE,
+      ),
       installationId: installation.installation_id,
       controllerEpoch: Number(installation.controller_epoch),
+      enabledExecutionMode: config.EXECUTION_MODE,
     });
     const tickets = new TicketService({
       storage,
       installationId: installation.installation_id,
       controllerEpoch: Number(installation.controller_epoch),
+      enabledExecutionMode: config.EXECUTION_MODE,
     });
     const leases = new LeaseService(storage);
     await tickets.refreshSimulatorFixtureObservation();
@@ -227,6 +258,25 @@ try {
       (plan) => resolvePortainerRuntime(storage, secrets, plan, epoch),
       accessMaterials,
     );
+    const configuredExecutions: Partial<Record<ExecutionMode, ExecutionPort>> =
+      {
+        portainer: execution,
+        tart: createTartExecutionComposition({
+          storage,
+          secrets,
+          installationId: installation.installation_id,
+          controllerEpoch: epoch,
+          enabledExecutionMode: config.EXECUTION_MODE,
+        }).execution,
+      };
+    if (config.SIMULATOR_DATA_DIR)
+      configuredExecutions.simulator = new PersistentSimulator(
+        config.SIMULATOR_DATA_DIR,
+      );
+    const dispatchedExecution = new ExecutionProviderDispatcher(
+      configuredExecutions,
+      config.EXECUTION_MODE,
+    );
     const imageCache = new ImageCacheWorker(
       new SQLiteImageCacheStore(storage),
       new PortainerImageCacheProvider(async (operation) => {
@@ -273,14 +323,16 @@ try {
     const worker = new OperationWorker({
       createCalls: new AllocationCreateCalls(),
       storage,
-      execution,
+      execution: dispatchedExecution,
       installationId: installation.installation_id,
       controllerEpoch: epoch,
+      enabledExecutionMode: config.EXECUTION_MODE,
     });
     const tickets = new TicketService({
       storage,
       installationId: installation.installation_id,
       controllerEpoch: epoch,
+      enabledExecutionMode: config.EXECUTION_MODE,
     });
     const leases = new LeaseService(storage);
     let mainWorkHealthy = false;
@@ -426,6 +478,18 @@ try {
       secrets,
       installationId: installation.installation_id,
       controllerEpoch: epoch,
+      enabledExecutionMode: config.EXECUTION_MODE,
+      otherExecutionProviders: {
+        portainer: new PortainerExecutionProvider(
+          (plan) => resolvePortainerRuntime(storage, secrets, plan, epoch),
+          new SQLiteAccessMaterialStore(storage, secrets),
+        ),
+        ...(config.SIMULATOR_DATA_DIR
+          ? {
+              simulator: new PersistentSimulator(config.SIMULATOR_DATA_DIR),
+            }
+          : {}),
+      },
     });
     const { worker, tickets, leases } = composition;
     const admin = new AdminService(
@@ -435,32 +499,20 @@ try {
       false,
       (versionRef) => secrets.get(versionRef),
       (input) => tartRuntimeFactsForRevision(input, secrets),
+      config.EXECUTION_MODE,
     );
-    await worker.reconcileBeforeScheduling();
-    await leases.reconcilePending();
-    let reconciling = false;
-    const tick = async () => {
-      if (reconciling) return;
-      reconciling = true;
-      try {
-        await worker.reconcileScheduledWork();
-        for (let index = 0; index < 32; index++)
-          if (!(await tickets.reserveNext())) break;
-        await worker.reconcile();
-      } finally {
-        reconciling = false;
-      }
-    };
-    await tick();
-    recoveryState = "ready";
-    let mainWorkHealthy = true;
+    const tick = createTartRecoveryTick({ worker, tickets, leases });
+    let mainWorkHealthy = false;
     let cleanupWorkHealthy = false;
-    let intentWorkHealthy = true;
+    let intentWorkHealthy = false;
+    let initialRecoveryFailed = false;
     const refreshTartRecovery = () => {
       recoveryState =
         mainWorkHealthy && cleanupWorkHealthy && intentWorkHealthy
           ? "ready"
-          : "unavailable";
+          : initialRecoveryFailed
+            ? "unavailable"
+            : "recovering";
     };
     refreshTartRecovery();
     backgroundLoops = new ControllerBackgroundLoops({
@@ -485,6 +537,7 @@ try {
         if (kind === "reconcile") mainWorkHealthy = false;
         if (kind === "cleanup") cleanupWorkHealthy = false;
         if (kind === "lease") intentWorkHealthy = false;
+        if (kind === "reconcile") initialRecoveryFailed = true;
         refreshTartRecovery();
         app?.log.error(
           {

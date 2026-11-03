@@ -192,7 +192,13 @@ async function controllerProcess(
   };
 }
 
-async function fixture(options: { blocked?: boolean; capacity?: number } = {}) {
+async function fixture(
+  options: {
+    blocked?: boolean;
+    capacity?: number;
+    enabledExecutionMode?: "disabled" | "simulator" | "portainer" | "tart";
+  } = {},
+) {
   const dir = await mkdtemp(join(tmpdir(), "hitchlet-validation-"));
   cleanup.push(() => rm(dir, { recursive: true, force: true }));
   const db = await openStorage(dir);
@@ -248,6 +254,8 @@ async function fixture(options: { blocked?: boolean; capacity?: number } = {}) {
     now,
     false,
     async () => "test secret",
+    undefined,
+    options.enabledExecutionMode,
   );
   const discovered = await admin.discover({
     endpointUrl: "https://portainer.test",
@@ -1384,6 +1392,61 @@ describe("publication commit fences and grant revocation", () => {
 });
 
 describe("shared durable validation lifecycle (simulated execution; no hardware claim)", () => {
+  it("rejects a new validation on a disabled backend before creating capacity or allocation rows", async () => {
+    const f = await fixture({ enabledExecutionMode: "disabled" });
+
+    await expect(f.admin.scheduleValidation(f.request)).rejects.toThrow(
+      "Node execution mode is disabled for new validation work",
+    );
+    expect(
+      Number(
+        (await f.db.get<{ n: bigint }>("SELECT count(*) n FROM allocations"))!
+          .n,
+      ),
+    ).toBe(0);
+    expect(
+      Number(
+        (await f.db.get<{ n: bigint }>(
+          "SELECT count(*) n FROM capacity_claims WHERE state<>'released'",
+        ))!.n,
+      ),
+    ).toBe(0);
+  });
+
+  it("does not reserve a blocked validation retry after its backend is disabled", async () => {
+    const f = await fixture({ capacity: 500 });
+    const scheduled = await f.admin.scheduleValidation(f.request);
+    expect(scheduled.scheduler).toBe("blocked");
+    await f.db.run(
+      "UPDATE capacity_pools SET total_cpu_millis=4000,version=version+1",
+    );
+    const disabledWorker = new OperationWorker({
+      createCalls: new AllocationCreateCalls(),
+      storage: f.db,
+      execution: f.simulator,
+      installationId: f.installationId,
+      controllerEpoch: 1,
+      enabledExecutionMode: "disabled",
+      now: f.now,
+    });
+
+    await disabledWorker.reconcileScheduledWork();
+
+    expect(
+      Number(
+        (await f.db.get<{ n: bigint }>(
+          "SELECT count(*) n FROM capacity_claims WHERE state<>'released'",
+        ))!.n,
+      ),
+    ).toBe(0);
+    expect(
+      Number(
+        (await f.db.get<{ n: bigint }>("SELECT count(*) n FROM allocations"))!
+          .n,
+      ),
+    ).toBe(0);
+  });
+
   it("applies the same attended Machine ceiling to internal validations and never releases previous claims on policy reduction", async () => {
     const f = await fixture();
     const first = await f.admin.scheduleValidation(f.request);
@@ -2131,10 +2194,17 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
         );
       }),
     );
-    const app = await buildApp(loadConfig({ DATA_DIR: f.dir }), {
-      storage: f.db,
-      secrets,
-    });
+    const app = await buildApp(
+      loadConfig({
+        DATA_DIR: f.dir,
+        EXECUTION_MODE: "portainer",
+        HITCHLET_SECRET_KEY_FILE: keyFile,
+      }),
+      {
+        storage: f.db,
+        secrets,
+      },
+    );
     cleanup.push(() => app.close());
     const headers = {
       authorization: `Bearer ${token}`,

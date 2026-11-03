@@ -272,6 +272,7 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
   let currentNetwork: TartNetworkPlan | undefined;
   let cleanupReceipt: TartNetworkCleanupReceipt | undefined;
   let cleanupReceiptOverride: TartNetworkCleanupReceipt | undefined;
+  let sshHostKeyMatches = true;
   let observation: TartInspection = {
     presence: "absent",
     identity: owner,
@@ -410,13 +411,16 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
     }),
     accessMaterials: {
       getOrCreate: async () => ({ ...client, secretRef: "secret:test-only" }),
+      readExisting: async () => ({ ...client, secretRef: "secret:test-only" }),
     },
     now: () => fakeNow,
     ssh: {
       verify: async (input) => ({
         authenticated: true,
         username: input.username,
-        hostKeyFingerprint: input.hostKeyFingerprint,
+        hostKeyFingerprint: sshHostKeyMatches
+          ? input.hostKeyFingerprint
+          : `SHA256:${"f".repeat(43)}`,
         clientPublicKeyFingerprint: input.clientPublicKeyFingerprint,
         guestOS: input.guestOS,
         architecture: input.architecture,
@@ -526,6 +530,24 @@ it("resumes one owned VM after guest apply failure and readies it with the same 
   if (observation.presence !== "present")
     throw new Error("expected present VM");
   const readyObservation = observation;
+  observation = { ...readyObservation, ipAddress: "192.0.2.45" };
+  expect(await provider.inspect(observePlan)).toMatchObject({
+    presence: "present",
+    integrity: { state: "healthy" },
+    accessEndpointUpdate: { host: "192.0.2.45" },
+  });
+  sshHostKeyMatches = false;
+  expect(await provider.inspect(observePlan)).toMatchObject({
+    presence: "unknown",
+  });
+  sshHostKeyMatches = true;
+  const { ipAddress: _ipAddress, ...observationWithoutAddress } =
+    readyObservation;
+  observation = observationWithoutAddress;
+  expect(await provider.inspect(observePlan)).toMatchObject({
+    presence: "unknown",
+  });
+  observation = readyObservation;
   observation = { ...readyObservation, state: "stopped" };
   expect(await provider.inspect(observePlan)).toMatchObject({
     presence: "present",

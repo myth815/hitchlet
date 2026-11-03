@@ -265,7 +265,10 @@ export async function buildApp(
         },
       );
     const auth = new Authenticator(runtime.storage);
-    const commands = new TicketService({ storage: runtime.storage });
+    const commands = new TicketService({
+      storage: runtime.storage,
+      enabledExecutionMode: config.EXECUTION_MODE,
+    });
     const queries = new TicketQueries(runtime.storage);
     const ticketCommands = new TicketCommandService(runtime.storage, queries);
     const leases = new LeaseService(runtime.storage);
@@ -283,6 +286,7 @@ export async function buildApp(
         ? (versionRef) => runtime.secrets!.get(versionRef)
         : undefined,
       runtime.tartFactsForRevision,
+      config.EXECUTION_MODE,
     );
     const requireAdmin = async (
       request: Parameters<typeof auth.authenticate>[0],
@@ -299,7 +303,11 @@ export async function buildApp(
       return actor;
     };
     const managementJournal = new AdminCommandJournal(runtime.storage);
-    const managementAuthorization = new ManagementService(runtime.storage);
+    const managementAuthorization = new ManagementService(
+      runtime.storage,
+      Date.now,
+      config.EXECUTION_MODE,
+    );
     const journalRequests = new Map<
       string,
       { consumerId: string; key: string; path: string }
