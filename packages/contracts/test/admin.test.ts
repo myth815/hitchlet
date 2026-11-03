@@ -163,3 +163,56 @@ describe("shared administrator contracts", () => {
     expect(node.shape.observedHealth.safeParse("running").success).toBe(false);
   });
 });
+
+it("keeps native template OS/architecture independent in draft administration", () => {
+  const base = {
+    backendKind: "hyperv",
+    kind: "vm",
+    architecture: "amd64",
+    guestOs: "windows",
+    artifactRef: "windows-fixture-v1",
+    digest: "sha256:" + "b".repeat(64),
+    minimumResources: { cpuMillis: 2000, memoryMiB: 2048, scratchMiB: 0 },
+    requirements: {
+      bootstrap: {
+        mechanism: "hyperv-guest-bootstrap-v1",
+        contractVersion: "1",
+        identityReset: true,
+      },
+      requiredCapabilities: [],
+    },
+    access: {
+      accessProtocols: ["ssh"],
+      ports: [22],
+      account: "workspace",
+      allowedSourceCidrs: [],
+      discovery: "guest_ipv4",
+      readiness: "authenticated_ssh",
+    },
+  };
+  expect(AdminSchemas.DraftArtifactSchema.safeParse(base).success).toBe(true);
+  expect(
+    AdminSchemas.DraftArtifactSchema.safeParse({ ...base, guestOs: "linux" })
+      .success,
+  ).toBe(true);
+  expect(
+    AdminSchemas.DraftArtifactSchema.safeParse({
+      ...base,
+      architecture: "arm64",
+    }).success,
+  ).toBe(false);
+  expect(
+    AdminSchemas.DraftArtifactSchema.safeParse({
+      ...base,
+      backendKind: "tart",
+      architecture: "arm64",
+    }).success,
+  ).toBe(false);
+  expect(
+    AdminSchemas.DraftArtifactSchema.safeParse({
+      ...base,
+      backendKind: "portainer",
+      kind: "container",
+    }).success,
+  ).toBe(false);
+});

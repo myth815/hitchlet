@@ -12,6 +12,7 @@ import {
 } from "@hitchlet/contracts/internal";
 import type { SQLiteAccessMaterialStore } from "../storage/access-material-store.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
+import { createHyperVReadinessPorts } from "./hyperv-ssh-readiness.js";
 import { ExecutionProviderDispatcher } from "./execution-dispatcher.js";
 import type {
   ExecutionMode,
@@ -517,11 +518,15 @@ export class HyperVExecutionProvider implements ExecutionPort {
 }
 /** Explicit local composition, not automatic registration of an unqualified node. */
 export function registerHyperVExecutionProvider(
-  options: HyperVExecutionProviderOptions,
+  options: Omit<HyperVExecutionProviderOptions, "ssh"> &
+    Partial<Pick<HyperVExecutionProviderOptions, "ssh">>,
   other: Partial<Record<ExecutionMode, ExecutionPort>> = {},
   selection: ExecutionSelection = ["hyperv"],
 ) {
-  const execution = new HyperVExecutionProvider(options);
+  const execution = new HyperVExecutionProvider({
+    ...options,
+    ssh: options.ssh ?? createHyperVReadinessPorts().ssh,
+  });
   return {
     execution,
     dispatcher: new ExecutionProviderDispatcher(

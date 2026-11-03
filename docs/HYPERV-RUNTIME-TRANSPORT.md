@@ -38,3 +38,5 @@ server/client 是可测试组合函数，没有新增可执行启动入口，也
 受控 Hyper-V server、controller client、合同和相邻 Tart transport/内核/日志回归通过；含本机临时 mTLS 的真实 HTTP 往返，但后端是受控 driver，不是原生 Hyper-V。测试证书仅在临时目录内创建并回收，没有建立持久服务凭据。
 
 未重复 Docker/Studio ARM/macOS/Linux 已验实机票，未更改正在服务 Go 影音的冻结兼容包。远端 PowerShell Parser 因自动审批拒绝而未执行；本批没有重试、换入口或上传源文件。精确待批动作及原因保留在本机任务交接，待白天统一汇报。
+
+固定guest SSH probe与制品草稿的接续实现、验证和真实未覆盖见[后续批次](HYPERV-READINESS-AND-DRAFTS.md)。实际模板初始化渠道仍未实现。

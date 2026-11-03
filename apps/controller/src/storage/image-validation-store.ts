@@ -63,10 +63,10 @@ export class SQLiteImageValidationStore {
     name: string;
     description?: string;
     version: string;
-    backendKind?: "portainer" | "tart";
+    backendKind?: "portainer" | "tart" | "hyperv";
     kind?: "container" | "vm";
     architecture: "amd64" | "arm64";
-    guestOs?: "linux" | "macos";
+    guestOs?: "linux" | "macos" | "windows";
     artifactRef: string;
     digest: string;
     minimumResources: {
@@ -185,10 +185,10 @@ export class SQLiteImageValidationStore {
   async createVersion(input: {
     imageId: string;
     version: string;
-    backendKind?: "portainer" | "tart";
+    backendKind?: "portainer" | "tart" | "hyperv";
     kind?: "container" | "vm";
     architecture: "amd64" | "arm64";
-    guestOs?: "linux" | "macos";
+    guestOs?: "linux" | "macos" | "windows";
     artifactRef: string;
     digest: string;
     minimumResources: {
@@ -267,10 +267,10 @@ export class SQLiteImageValidationStore {
   async addDraftArtifact(
     versionId: string,
     input: {
-      backendKind?: "portainer" | "tart";
+      backendKind?: "portainer" | "tart" | "hyperv";
       kind?: "container" | "vm";
       architecture: "amd64" | "arm64";
-      guestOs?: "linux" | "macos";
+      guestOs?: "linux" | "macos" | "windows";
       artifactRef: string;
       digest: string;
       minimumResources: {
@@ -515,10 +515,10 @@ export class SQLiteImageValidationStore {
 }
 
 function draftPlatform(input: {
-  backendKind?: "portainer" | "tart";
+  backendKind?: "portainer" | "tart" | "hyperv";
   kind?: "container" | "vm";
   architecture: "amd64" | "arm64";
-  guestOs?: "linux" | "macos";
+  guestOs?: "linux" | "macos" | "windows";
   artifactRef: string;
   digest: string;
   bootstrap?: unknown;
@@ -550,16 +550,20 @@ function draftPlatform(input: {
   const access = input.access as Record<string, unknown> | null;
   if (
     kind !== "vm" ||
-    input.architecture !== "arm64" ||
-    !["linux", "macos"].includes(guestOs) ||
+    input.architecture !== (backendKind === "hyperv" ? "amd64" : "arm64") ||
+    !(
+      backendKind === "hyperv" ? ["linux", "windows"] : ["linux", "macos"]
+    ).includes(guestOs) ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(input.artifactRef) ||
     !/^sha256:[a-f0-9]{64}$/.test(input.digest) ||
-    input.minimumResources.scratchMiB !== 0 ||
+    (backendKind === "tart" && input.minimumResources.scratchMiB !== 0) ||
     !bootstrap ||
     typeof bootstrap !== "object" ||
     Array.isArray(bootstrap) ||
     (bootstrap as Record<string, unknown>).mechanism !==
-      "tart-guest-bootstrap-v1" ||
+      (backendKind === "hyperv"
+        ? "hyperv-guest-bootstrap-v1"
+        : "tart-guest-bootstrap-v1") ||
     (bootstrap as Record<string, unknown>).contractVersion !== "1" ||
     (bootstrap as Record<string, unknown>).identityReset !== true ||
     !access ||
@@ -573,7 +577,7 @@ function draftPlatform(input: {
     access.readiness !== "authenticated_ssh"
   )
     throw new RangeError(
-      "Tart drafts require an immutable local arm64 VM template, Tart guest bootstrap, SSH-only access, and zero scratch minimum",
+      "VM drafts require a matching local OS/architecture template, backend guest bootstrap and SSH-only access; Tart requires zero scratch minimum",
     );
   return { backendKind, kind, guestOs } as const;
 }

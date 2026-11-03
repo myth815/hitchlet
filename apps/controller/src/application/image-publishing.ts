@@ -42,6 +42,9 @@ export class ImagePublishingService {
             return false;
           }
         }
+        // Other native backends require their own live template/runtime proof.
+        // In particular, a Hyper-V draft is not a Docker Engine to probe.
+        if (target.backendKind !== "portainer") return false;
         if (!this.readSecret) return false;
         try {
           const live = await this.probe({

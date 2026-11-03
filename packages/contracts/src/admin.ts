@@ -79,10 +79,10 @@ const storageConfig = z
 const sha = z.string().regex(/^sha256:[a-f0-9]{64}$/);
 function validateDraftPlatform(
   value: {
-    backendKind: "portainer" | "tart";
+    backendKind: "portainer" | "tart" | "hyperv";
     kind: "container" | "vm";
     architecture: "amd64" | "arm64";
-    guestOs: "linux" | "macos";
+    guestOs: "linux" | "macos" | "windows";
     artifactRef: string;
   },
   context: z.RefinementCtx,
@@ -101,9 +101,25 @@ function validateDraftPlatform(
       });
     return;
   }
+  if (value.backendKind === "hyperv") {
+    if (
+      value.kind !== "vm" ||
+      value.architecture !== "amd64" ||
+      !["windows", "linux"].includes(value.guestOs) ||
+      !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.artifactRef)
+    )
+      context.addIssue({
+        code: "custom",
+        message:
+          "Hyper-V artifacts must name a local amd64 Windows or Linux VM template",
+        path: ["artifactRef"],
+      });
+    return;
+  }
   if (
     value.kind !== "vm" ||
     value.architecture !== "arm64" ||
+    !["linux", "macos"].includes(value.guestOs) ||
     !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(value.artifactRef)
   )
     context.addIssue({
@@ -603,11 +619,11 @@ export const ImageDraftSchema = z
     name: z.string().min(1).max(120),
     description: z.string().max(2000).optional(),
     version: z.string().min(1).max(120),
-    backendKind: z.enum(["portainer", "tart"]).default("portainer"),
+    backendKind: z.enum(["portainer", "tart", "hyperv"]).default("portainer"),
     kind: z.enum(["container", "vm"]).default("container"),
     architecture: z.enum(["amd64", "arm64"]),
-    guestOs: z.enum(["linux", "macos"]).default("linux"),
-    /** OCI digest ref for Portainer; sealed local Tart template name for Tart. */
+    guestOs: z.enum(["linux", "macos", "windows"]).default("linux"),
+    /** OCI digest ref for Portainer; local native template name for VM backends. */
     artifactRef: z.string().min(1).max(240),
     digest: sha,
     minimumResources,
@@ -619,11 +635,11 @@ export const ImageDraftSchema = z
   .superRefine(validateDraftPlatform);
 export const DraftArtifactSchema = z
   .object({
-    backendKind: z.enum(["portainer", "tart"]).default("portainer"),
+    backendKind: z.enum(["portainer", "tart", "hyperv"]).default("portainer"),
     kind: z.enum(["container", "vm"]).default("container"),
     architecture: z.enum(["amd64", "arm64"]),
-    guestOs: z.enum(["linux", "macos"]).default("linux"),
-    /** OCI digest ref for Portainer; sealed local Tart template name for Tart. */
+    guestOs: z.enum(["linux", "macos", "windows"]).default("linux"),
+    /** OCI digest ref for Portainer; local native template name for VM backends. */
     artifactRef: z.string().min(1).max(240),
     digest: sha,
     minimumResources,
@@ -635,10 +651,10 @@ export const DraftArtifactSchema = z
 export const ImageVersionDraftSchema = z
   .object({
     version: z.string().min(1).max(120),
-    backendKind: z.enum(["portainer", "tart"]).default("portainer"),
+    backendKind: z.enum(["portainer", "tart", "hyperv"]).default("portainer"),
     kind: z.enum(["container", "vm"]).default("container"),
     architecture: z.enum(["amd64", "arm64"]),
-    guestOs: z.enum(["linux", "macos"]).default("linux"),
+    guestOs: z.enum(["linux", "macos", "windows"]).default("linux"),
     artifactRef: z.string().min(1).max(240),
     digest: sha,
     minimumResources,
@@ -774,10 +790,10 @@ export const DraftVersionViewSchema = z
       z
         .object({
           id,
-          provider: z.enum(["portainer", "tart"]),
+          provider: z.enum(["portainer", "tart", "hyperv"]),
           kind: z.enum(["container", "vm"]),
           architecture: z.enum(["amd64", "arm64"]),
-          guestOs: z.enum(["linux", "macos"]),
+          guestOs: z.enum(["linux", "macos", "windows"]),
           artifactRef: z.string(),
           digest: sha,
           minimumResources,
