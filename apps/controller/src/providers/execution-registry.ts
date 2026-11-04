@@ -16,7 +16,7 @@ export type ExecutionSelection =
 export function configuredExecutionModes(
   mode: ExecutionMode | "disabled" | "registered",
 ): ExecutionSelection {
-  return mode === "registered" ? ["portainer", "tart"] : mode;
+  return mode === "registered" ? ["portainer", "tart", "hyperv"] : mode;
 }
 export function isExecutionMode(mode: unknown): mode is ExecutionMode {
   return typeof mode === "string" && Object.hasOwn(executionDefinitions, mode);

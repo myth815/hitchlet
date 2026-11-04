@@ -1,3 +1,5 @@
+import { createHyperVExecutionComposition } from "./providers/hyperv-runtime-composition.js";
+import { hyperVRuntimeFactsForRevision } from "./providers/runtime-credentials.js";
 import { configuredExecutionModes } from "./providers/execution-registry.js";
 import {
   MaintenanceService,
@@ -154,6 +156,13 @@ try {
         controllerEpoch: Number(installation.controller_epoch),
         enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
       }).execution;
+      configuredExecutions.hyperv = createHyperVExecutionComposition({
+        storage,
+        secrets,
+        installationId: installation.installation_id,
+        controllerEpoch: Number(installation.controller_epoch),
+        enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
+      }).execution;
     }
     const worker = new OperationWorker({
       createCalls: new AllocationCreateCalls(),
@@ -258,6 +267,7 @@ try {
       (versionRef) => secrets.get(versionRef),
       (input) => tartRuntimeFactsForRevision(input, secrets),
       configuredExecutionModes(config.EXECUTION_MODE),
+      (input) => hyperVRuntimeFactsForRevision(input, secrets),
     );
     const accessMaterials = new SQLiteAccessMaterialStore(storage, secrets);
     const execution = new PortainerExecutionProvider(
@@ -268,6 +278,13 @@ try {
       {
         portainer: execution,
         tart: createTartExecutionComposition({
+          storage,
+          secrets,
+          installationId: installation.installation_id,
+          controllerEpoch: epoch,
+          enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
+        }).execution,
+        hyperv: createHyperVExecutionComposition({
           storage,
           secrets,
           installationId: installation.installation_id,
@@ -353,8 +370,10 @@ try {
     backgroundLoops = new ControllerBackgroundLoops({
       refreshObservations: async () => {
         await admin.refreshPortainerObservations();
-        if (config.EXECUTION_MODE === "registered")
+        if (config.EXECUTION_MODE === "registered") {
           await admin.refreshTartObservations();
+          await admin.refreshHyperVObservations();
+        }
         const nodes = await storage.all<{
           id: string;
           runtime_identity_id: string;
@@ -464,7 +483,10 @@ try {
         );
       },
     });
-  } else if (config.EXECUTION_MODE === "tart" && controlsReady) {
+  } else if (
+    (config.EXECUTION_MODE === "tart" || config.EXECUTION_MODE === "hyperv") &&
+    controlsReady
+  ) {
     // Concrete runtime, template, access and resource checks determine Tart eligibility.
     recoveryState = "recovering";
     if (!secrets)
@@ -477,10 +499,14 @@ try {
     );
     if (!installation)
       throw new Error(
-        "Installation is not initialized. Initialize the control ledger before Tart mode.",
+        "Installation is not initialized. Initialize the control ledger before native VM mode.",
       );
     const epoch = Number(installation.controller_epoch);
-    const composition = createTartExecutionComposition({
+    const composition = (
+      config.EXECUTION_MODE === "hyperv"
+        ? createHyperVExecutionComposition
+        : createTartExecutionComposition
+    )({
       storage,
       secrets,
       installationId: installation.installation_id,
@@ -507,6 +533,7 @@ try {
       (versionRef) => secrets.get(versionRef),
       (input) => tartRuntimeFactsForRevision(input, secrets),
       configuredExecutionModes(config.EXECUTION_MODE),
+      (input) => hyperVRuntimeFactsForRevision(input, secrets),
     );
     const tick = createTartRecoveryTick({ worker, tickets, leases });
     let mainWorkHealthy = false;
@@ -523,7 +550,10 @@ try {
     };
     refreshTartRecovery();
     backgroundLoops = new ControllerBackgroundLoops({
-      refreshObservations: () => admin.refreshTartObservations(),
+      refreshObservations: () =>
+        config.EXECUTION_MODE === "hyperv"
+          ? admin.refreshHyperVObservations()
+          : admin.refreshTartObservations(),
       reconcile: tick,
       reconcileCleanup: () => worker.reconcileCleanupLane(),
       reconcileLeaseIntents: () =>
@@ -570,6 +600,8 @@ try {
           secrets,
           tartFactsForRevision: (input) =>
             tartRuntimeFactsForRevision(input, secrets),
+          hyperVFactsForRevision: (input) =>
+            hyperVRuntimeFactsForRevision(input, secrets),
         }
       : {}),
   });

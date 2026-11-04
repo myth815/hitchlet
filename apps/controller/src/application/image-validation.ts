@@ -1,3 +1,4 @@
+import { hyperVTemplateProofMatches } from "./hyperv-facts.js";
 import { runtimeStorageMountSchema } from "@hitchlet/contracts/internal";
 import { randomUUID } from "node:crypto";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
@@ -29,6 +30,7 @@ export class ImageValidationService {
     private readonly now = Date.now,
     private readonly tartFactsForRevision?: TartFactsForRevision,
     private readonly enabledExecutionMode?: ExecutionSelection,
+    private readonly hyperVFactsForRevision?: import("../providers/runtime-credentials.js").HyperVFactsForRevision,
   ) {}
 
   async schedule(
@@ -174,6 +176,8 @@ export class ImageValidationService {
     }
     const requested = input.resources.request;
     const isTart = target.backend_kind === "tart";
+    const isHyperV = target.backend_kind === "hyperv",
+      isVm = isTart || isHyperV;
     if (
       isTart &&
       networkPolicy.tartMode !== undefined &&
@@ -181,7 +185,8 @@ export class ImageValidationService {
       networkPolicy.tartMode !== "isolated"
     )
       throw new RangeError("Invalid Tart network mode");
-    const trustedNat = isTart && networkPolicy.tartMode !== "isolated";
+    const trustedNat =
+      isHyperV || (isTart && networkPolicy.tartMode !== "isolated");
     let tartProofVerified = !isTart;
     if (isTart && this.tartFactsForRevision) {
       try {
@@ -203,6 +208,27 @@ export class ImageValidationService {
         tartProofVerified = false;
       }
     }
+    let hyperVProofVerified = !isHyperV;
+    if (isHyperV && this.hyperVFactsForRevision) {
+      try {
+        const facts = await this.hyperVFactsForRevision({
+          installationId: String(target.installation_id),
+          runtimeIdentityId: String(target.runtime_identity_id),
+          connectionRevisionId: String(target.connection_revision_id),
+          nodeId: String(target.node_id),
+          config: object(target.config_json, "node config"),
+        });
+        hyperVProofVerified = hyperVTemplateProofMatches(facts, {
+          nativeRuntimeNamespaceId: String(target.native_runtime_namespace_id),
+          artifactRef: String(target.artifact_ref),
+          digest: String(target.content_digest),
+          architecture: String(target.architecture),
+          guestOs: String(target.guest_os),
+        });
+      } catch {
+        hyperVProofVerified = false;
+      }
+    }
     const minimum = {
       cpuMillis: Number(target.minimum_cpu_millis),
       memoryMiB: Number(target.minimum_memory_mib),
@@ -216,7 +242,7 @@ export class ImageValidationService {
       requested.memoryMiB < minimum.memoryMiB ||
       requested.scratchMiB < minimum.scratchMiB ||
       input.resources.isolation !==
-        (isTart ? "virtual_machine" : "shared_kernel") ||
+        (isVm ? "virtual_machine" : "shared_kernel") ||
       input.resources.accelerators.length > 0
     )
       throw new RangeError(
@@ -240,7 +266,7 @@ export class ImageValidationService {
           ))) ||
       !stringArray(caps.architectures).includes(String(target.architecture)) ||
       !stringArray(caps.guestOs).includes(String(target.guest_os)) ||
-      !stringArray(caps.resourceKinds).includes(isTart ? "vm" : "container") ||
+      !stringArray(caps.resourceKinds).includes(isVm ? "vm" : "container") ||
       !accessProtocols.some((protocol) => nodeAccess.includes(protocol)) ||
       !Number.isFinite(expiry) ||
       expiry <= this.now() ||
@@ -251,13 +277,15 @@ export class ImageValidationService {
       Number(target.observed_at_ms ?? 0) + 120_000 <= this.now() ||
       target.observed_power !== "on";
     let blockReason =
-      isTart && !tartProofVerified
-        ? "tart_template_proof_unavailable_or_mismatched"
-        : block
-          ? "node_capacity_or_network_capability_unverified"
-          : null;
+      isHyperV && !hyperVProofVerified
+        ? "hyperv_template_proof_unavailable_or_mismatched"
+        : isTart && !tartProofVerified
+          ? "tart_template_proof_unavailable_or_mismatched"
+          : block
+            ? "node_capacity_or_network_capability_unverified"
+            : null;
     if (
-      isTart &&
+      isVm &&
       (input.storage.length > 0 ||
         requested.cpuMillis % 1000 !== 0 ||
         input.resources.scratchEnforcement === "required" ||
@@ -269,7 +297,9 @@ export class ImageValidationService {
         recipe.discovery !== "guest_ipv4" ||
         recipe.readiness !== "authenticated_ssh")
     )
-      blockReason = "tart_validation_request_unsupported";
+      blockReason = isHyperV
+        ? "hyperv_validation_request_unsupported"
+        : "tart_validation_request_unsupported";
     if (!block) {
       const capacity = JsonObject.parse(caps.capacity) as Record<
         string,
@@ -332,7 +362,9 @@ export class ImageValidationService {
           ? []
           : networkPolicy.allowedIngressSourceCidrs,
         enforcement: trustedNat
-          ? "tart_nat"
+          ? isHyperV
+            ? "hyperv_nat"
+            : "tart_nat"
           : isTart
             ? "tart_agent"
             : "docker_iptables",

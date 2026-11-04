@@ -50,7 +50,8 @@ export class AccessService {
     if (
       !simulator &&
       row.execution_mode !== "portainer" &&
-      row.execution_mode !== "tart"
+      row.execution_mode !== "tart" &&
+      row.execution_mode !== "hyperv"
     )
       throw conflict("execution_mode_unsupported");
     if (

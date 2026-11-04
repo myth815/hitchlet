@@ -34,7 +34,12 @@ export interface ReservationWrite {
   readonly machineVersion: number;
   readonly runtimeIdentityId: string;
   readonly connectionRevisionId: string;
-  readonly executionMode: "simulator" | "portainer" | "tart" | "unconfigured";
+  readonly executionMode:
+    | "simulator"
+    | "portainer"
+    | "tart"
+    | "hyperv"
+    | "unconfigured";
   readonly runtimeConfigJson: string;
   readonly operationId: string;
   readonly installationId: string | null;

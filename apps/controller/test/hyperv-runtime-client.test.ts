@@ -76,7 +76,7 @@ it("keeps native lifecycle internal and returns unready/unknown honestly with bo
     resources: { cpus: 4, memoryMiB: 4096 },
     switchName: "Existing Switch",
   });
-  expect(await client.facts()).toEqual(facts);
+  expect(await client.facts()).toEqual({ ...facts, templates: [] });
   expect(calls.map((c) => c.path)).toEqual([
     ...Array(4).fill("/v1/hyperv/actions"),
     "/v1/hyperv/facts",

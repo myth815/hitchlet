@@ -506,6 +506,8 @@ export class HyperVExecutionProvider implements ExecutionPort {
         accessProtocol: "ssh",
       },
       details: {
+        // Correlate the pre-create intent while retaining Hyper-V’s actual GUID as id.
+        nativeName: "hyperv-" + hash(owner(plan.identity)),
         nativeVmId: got.vm.id,
         state: got.vm.state,
         ipv4: got.vm.ipv4,

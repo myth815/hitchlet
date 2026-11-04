@@ -263,6 +263,10 @@ it.each(["windows", "linux"] as const)(
     const objects = await f.dispatcher.create(f.plan, f.journal);
     expect(f.journal.beforeCreate).toHaveBeenCalledOnce();
     expect(f.recorded).toEqual(objects);
+    expect(objects[0]!.details?.nativeName).toBe(
+      vi.mocked(f.journal.beforeCreate!).mock.calls[0]![0].name,
+    );
+    expect(objects[0]!.details?.nativeVmId).toBe(objects[0]!.id);
     expect(objects[0]!.evidence.resourcesHash).toBe(
       createHash("sha256")
         .update(JSON.stringify(f.plan.resources))

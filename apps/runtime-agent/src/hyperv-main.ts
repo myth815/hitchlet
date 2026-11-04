@@ -10,6 +10,8 @@ import {
 } from "./drivers/hyperv.js";
 import type { HyperVGuestBootstrapPort } from "./drivers/hyperv-guest.js";
 import { FileJournal } from "./journal.js";
+import { HyperVTemplateRegistry } from "./hyperv-templates.js";
+import { createPowerShellDirectBootstrap } from "./drivers/hyperv-powershell-direct.js";
 import { createHyperVRuntimeServer } from "./hyperv-server.js";
 import { listenRuntimeServer } from "./server.js";
 
@@ -29,6 +31,13 @@ const configSchema = z
     caFile: localPath,
     certFile: localPath,
     keyFile: localPath,
+    guestBootstrap: z
+      .object({
+        kind: z.literal("powershell_direct_windows_v1"),
+        credentialFile: localPath,
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((c, ctx) => {
@@ -148,13 +157,16 @@ export async function createHyperVRuntimeApplication(
     config,
     dependencies.inspectRoot,
   );
+  const guestBootstrap =
+    dependencies.guestBootstrap ??
+    (config.guestBootstrap
+      ? createPowerShellDirectBootstrap(config.guestBootstrap)
+      : undefined);
   const driver = new HyperVLocalDriver({
     manifestDirectory: join(config.stateDirectory, "allocations"),
     workRoot: config.workRoot,
     ...(dependencies.nativeRunner ? { run: dependencies.nativeRunner } : {}),
-    ...(dependencies.guestBootstrap
-      ? { guestBootstrap: dependencies.guestBootstrap }
-      : {}),
+    ...(guestBootstrap ? { guestBootstrap } : {}),
   });
   const journal = new FileJournal(join(config.stateDirectory, "journal.json"));
   await journal.initialize();
@@ -162,6 +174,11 @@ export async function createHyperVRuntimeApplication(
     { ...config, nativeRuntimeNamespaceId: namespaceId },
     driver,
     journal,
+    () =>
+      new HyperVTemplateRegistry(
+        join(config.stateDirectory, "templates"),
+        namespaceId,
+      ).facts(),
   );
   return { server, driver, journal, config, namespaceId };
 }
@@ -172,6 +189,16 @@ async function start() {
   if (process.argv[2] === "--init") {
     const id = await initializeHyperVNamespace(raw);
     process.stdout.write(`Hyper-V namespace initialized: ${id}\n`);
+    return;
+  }
+  if (process.argv[2] === "--seal-template") {
+    const c = parseHyperVRuntimeConfig(raw),
+      namespace = await readHyperVNamespace(c);
+    const proof = await new HyperVTemplateRegistry(
+      join(c.stateDirectory, "templates"),
+      namespace,
+    ).seal(JSON.parse(await readFile(process.argv[3]!, "utf8")));
+    process.stdout.write(JSON.stringify(proof) + "\n");
     return;
   }
   const app = await createHyperVRuntimeApplication(raw);
@@ -199,10 +226,13 @@ if (
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
   if (
-    process.argv.length > 3 ||
-    (process.argv.length === 3 && process.argv[2] !== "--init")
+    process.argv.length > 4 ||
+    (process.argv.length === 3 && process.argv[2] !== "--init") ||
+    (process.argv.length === 4 && process.argv[2] !== "--seal-template")
   ) {
-    process.stderr.write("Usage: hyperv-main [--init]\n");
+    process.stderr.write(
+      "Usage: hyperv-main [--init | --seal-template descriptor.json]\n",
+    );
     process.exitCode = 1;
   } else
     void start().catch(() => {

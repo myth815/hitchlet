@@ -1,5 +1,8 @@
 import { dockerImageReferencePath } from "../domain/docker-image-reference.js";
-import { tartRuntimeFactsSchema } from "@hitchlet/contracts/internal";
+import {
+  hyperVRuntimeFactsSchema,
+  tartRuntimeFactsSchema,
+} from "@hitchlet/contracts/internal";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 
@@ -225,4 +228,8 @@ export function safeMountPath(value: string) {
     !value.endsWith("/") &&
     value.split("/").every((part) => part !== "." && part !== "..")
   );
+}
+
+export function projectHyperVEvidence(value: string) {
+  return hyperVRuntimeFactsSchema.parse(JSON.parse(value));
 }

@@ -1,3 +1,4 @@
+import { hyperVTemplateProofMatches } from "./hyperv-facts.js";
 import type { PortainerProbe } from "../providers/port.js";
 import { ApplicationError } from "./errors.js";
 import type { Storage } from "../storage/index.js";
@@ -13,6 +14,7 @@ export class ImagePublishingService {
     now = Date.now,
     private readonly readSecret?: (versionRef: string) => Promise<string>,
     private readonly tartFactsForRevision?: TartFactsForRevision,
+    private readonly hyperVFactsForRevision?: import("../providers/runtime-credentials.js").HyperVFactsForRevision,
   ) {
     this.store = new SQLiteImagePublicationStore(db, now);
   }
@@ -32,6 +34,27 @@ export class ImagePublishingService {
               config: target.config,
             });
             return tartTemplateProofMatches(facts, {
+              nativeRuntimeNamespaceId: target.nativeRuntimeNamespaceId,
+              artifactRef: target.artifactRef,
+              digest: target.digest,
+              architecture: target.architecture,
+              guestOs: target.guestOs,
+            });
+          } catch {
+            return false;
+          }
+        }
+        if (target.backendKind === "hyperv") {
+          if (!this.hyperVFactsForRevision) return false;
+          try {
+            const facts = await this.hyperVFactsForRevision({
+              installationId: target.installationId,
+              runtimeIdentityId: target.runtimeIdentityId,
+              connectionRevisionId: target.connectionRevisionId,
+              nodeId: target.nodeId,
+              config: target.config,
+            });
+            return hyperVTemplateProofMatches(facts, {
               nativeRuntimeNamespaceId: target.nativeRuntimeNamespaceId,
               artifactRef: target.artifactRef,
               digest: target.digest,

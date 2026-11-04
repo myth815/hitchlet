@@ -4,6 +4,8 @@ import type { PortainerProbe } from "../providers/port.js";
 import { SQLiteProviderConnectionStore } from "../storage/admin-stores.js";
 import {
   TartConnectionInputSchema,
+  HyperVConnectionInputSchema,
+  type HyperVConnectionInput,
   type TartConnectionInput,
 } from "@hitchlet/contracts/admin";
 import type { TartFactsForRevision } from "../providers/runtime-credentials.js";
@@ -45,6 +47,7 @@ export class PortainerConnectionService {
     private readonly allowLoopbackHttp = false,
     private readonly readSecret?: (versionRef: string) => Promise<string>,
     private readonly tartFactsForRevision?: TartFactsForRevision,
+    private readonly hyperVFactsForRevision?: import("../providers/runtime-credentials.js").HyperVFactsForRevision,
   ) {}
   async discoverTart(input: TartConnectionInput & { operationId?: string }) {
     const operationId = input.operationId ?? randomUUID();
@@ -83,6 +86,55 @@ export class PortainerConnectionService {
       );
       return this.discoveryReceipt(operationId);
     }
+  }
+  async discoverHyperV(
+    input: HyperVConnectionInput & { operationId?: string },
+  ) {
+    const operationId = input.operationId ?? randomUUID();
+    const target = {
+      runtimeIdentityId: input.runtimeIdentityId,
+      runtimeProfile: input.runtimeProfile,
+    };
+    const started = await this.store.beginTartDiscovery(
+      operationId,
+      target,
+      "hyperv",
+    );
+    if (started.complete) return this.discoveryReceipt(operationId);
+    try {
+      if (!this.hyperVFactsForRevision)
+        throw Error("Hyper-V facts unavailable");
+      const facts = await this.hyperVFactsForRevision({
+        installationId: started.installationId,
+        runtimeIdentityId: input.runtimeIdentityId,
+        connectionRevisionId: started.revisionId,
+        nodeId: started.connectionId,
+        config: input.runtimeProfile,
+      });
+      if (
+        !facts.available ||
+        facts.hostArchitecture !== "AMD64" ||
+        facts.hostOS !== "windows" ||
+        !facts.hostCpuCount ||
+        !facts.hostMemoryBytes ||
+        !facts.hyperVVersion
+      )
+        throw Error("Hyper-V host facts incomplete");
+      await this.store.completeTartDiscovery(
+        operationId,
+        target,
+        started.connectionId,
+        started.revisionId,
+        facts,
+        "hyperv",
+      );
+    } catch {
+      await this.store.markUnknown(
+        operationId,
+        "hyperv_facts_unavailable_or_mismatched",
+      );
+    }
+    return this.discoveryReceipt(operationId);
   }
   async discover(input: {
     endpointUrl: string;
@@ -205,6 +257,22 @@ export class PortainerConnectionService {
       const intent = TartDiscoveryIntentSchema.parse(rawIntent);
       return this.discoverTart({
         ...TartConnectionInputSchema.parse({
+          runtimeIdentityId: intent.runtimeIdentityId,
+          runtimeProfile: intent.runtimeProfile,
+        }),
+        operationId,
+      });
+    }
+    if (
+      rawIntent &&
+      typeof rawIntent === "object" &&
+      !Array.isArray(rawIntent) &&
+      (rawIntent as Record<string, unknown>).type === "hyperv.discovery"
+    ) {
+      const intent = rawIntent as Record<string, unknown>;
+      return this.discoverHyperV({
+        ...HyperVConnectionInputSchema.parse({
+          backendKind: "hyperv",
           runtimeIdentityId: intent.runtimeIdentityId,
           runtimeProfile: intent.runtimeProfile,
         }),

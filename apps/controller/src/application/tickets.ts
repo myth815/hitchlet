@@ -978,7 +978,7 @@ function availability(
 
 function executionMode(
   value: unknown,
-): "simulator" | "portainer" | "tart" | "unconfigured" {
+): "simulator" | "portainer" | "tart" | "hyperv" | "unconfigured" {
   if (typeof value !== "string") return "unconfigured";
   try {
     const config: unknown = JSON.parse(value);
@@ -989,7 +989,8 @@ function executionMode(
       "executionMode" in config &&
       (config.executionMode === "simulator" ||
         config.executionMode === "portainer" ||
-        config.executionMode === "tart")
+        config.executionMode === "tart" ||
+        config.executionMode === "hyperv")
     )
       return config.executionMode;
   } catch {

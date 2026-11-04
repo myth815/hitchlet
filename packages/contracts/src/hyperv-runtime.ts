@@ -167,10 +167,29 @@ export const hyperVNativeFactsSchema = z
     reason: z.string().optional(),
     hostArchitecture: z.string(),
     implementedOperations: z.array(z.string()),
+    hostOS: z.literal("windows").optional(),
+    hostCpuCount: z.number().int().positive().safe().optional(),
+    hostMemoryBytes: z.number().int().positive().safe().optional(),
+    hyperVVersion: z.string().min(1).optional(),
   })
   .strict();
+export const hyperVTemplateProofSchema = z
+  .object({
+    name: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+    template: hyperVRequestSchema.shape.template,
+    artifactDigest: z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    proofKind: z.literal("sealed_export_bundle_v1"),
+    sealedAt: z.string().datetime({ offset: true }),
+  })
+  .strict();
+export type HyperVTemplateProof = z.infer<typeof hyperVTemplateProofSchema>;
 export const hyperVRuntimeFactsSchema = hyperVNativeFactsSchema.extend({
   nativeRuntimeNamespaceId: z.string().uuid(),
+  hostOS: z.literal("windows").optional(),
+  hostCpuCount: z.number().int().positive().safe().optional(),
+  hostMemoryBytes: z.number().int().positive().safe().optional(),
+  hyperVVersion: z.string().min(1).optional(),
+  templates: z.array(hyperVTemplateProofSchema).default([]),
 });
 export type HyperVRuntimeFacts = z.infer<typeof hyperVRuntimeFactsSchema>;
 

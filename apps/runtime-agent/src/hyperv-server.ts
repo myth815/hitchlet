@@ -20,6 +20,9 @@ export function createHyperVRuntimeServer(
     "inspect" | "reconcile" | "stop" | "destroy" | "facts" | "bootstrapApply"
   >,
   journal: FileJournal,
+  templates: () => Promise<
+    import("@hitchlet/contracts/internal").HyperVTemplateProof[]
+  > = async () => [],
 ) {
   return createVmRuntimeServer(config, journal, {
     backend: "hyperv",
@@ -31,6 +34,7 @@ export function createHyperVRuntimeServer(
     facts: async () => ({
       ...(await driver.facts()),
       nativeRuntimeNamespaceId: config.nativeRuntimeNamespaceId,
+      templates: await templates(),
     }),
     execute: (action) =>
       action.kind === "bootstrap.apply"

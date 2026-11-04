@@ -111,6 +111,24 @@ it("requires concrete local roots/credential references without introducing an e
   expect(() =>
     parseHyperVRuntimeConfig({ ...f.config, enabled: true }),
   ).toThrow();
+  expect(
+    parseHyperVRuntimeConfig({
+      ...f.config,
+      guestBootstrap: {
+        kind: "powershell_direct_windows_v1",
+        credentialFile: join(f.root, "guest.xml"),
+      },
+    }).guestBootstrap?.kind,
+  ).toBe("powershell_direct_windows_v1");
+  expect(() =>
+    parseHyperVRuntimeConfig({
+      ...f.config,
+      guestBootstrap: {
+        kind: "powershell_direct_windows_v1",
+        credentialFile: "relative",
+      },
+    }),
+  ).toThrow();
 });
 it("requires existing TLS/token files and does not manufacture credentials on startup", async () => {
   const f = await fixture();

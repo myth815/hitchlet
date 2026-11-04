@@ -1,3 +1,5 @@
+import { SQLiteHyperVAdminStore } from "../storage/hyperv-admin-store.js";
+import { hyperVTemplateProofMatches } from "./hyperv-facts.js";
 import { SQLiteProfileRevocationStore } from "../storage/profile-revocation-store.js";
 import { ImagePublishingService } from "./image-publishing.js";
 import type { Storage } from "../storage/index.js";
@@ -17,6 +19,7 @@ import { SQLiteImageCacheStore } from "../storage/image-cache-store.js";
 import {
   validAttestedCapability,
   validTartAttestedCapability,
+  validHyperVAttestedCapability,
 } from "../domain/attested-capability.js";
 import type { TartFactsForRevision } from "../providers/runtime-credentials.js";
 import type { ExecutionSelection } from "../providers/execution-dispatcher.js";
@@ -38,6 +41,7 @@ type TartObservationSnapshot = Awaited<
 /** Admin use-case facade: transport handlers call these cohesive persistence workflows. */
 export class AdminService {
   private readonly connections: SQLiteProviderConnectionStore;
+  private readonly hyperv: SQLiteHyperVAdminStore;
   private readonly connectionUseCases: PortainerConnectionService;
   private readonly inventory: SQLiteMachineNodeStore;
   private readonly revocations: SQLiteProfileRevocationStore;
@@ -56,7 +60,9 @@ export class AdminService {
     private readonly readSecret?: (versionRef: string) => Promise<string>,
     private readonly tartFactsForRevision?: TartFactsForRevision,
     enabledExecutionMode?: ExecutionSelection,
+    private readonly hyperVFactsForRevision?: import("../providers/runtime-credentials.js").HyperVFactsForRevision,
   ) {
+    this.hyperv = new SQLiteHyperVAdminStore(db, now);
     this.reads = new SQLiteAdminReadStore(db);
     this.cacheReads = new SQLiteImageCacheStore(db, now);
     this.publishing = new ImagePublishingService(
@@ -65,6 +71,7 @@ export class AdminService {
       now,
       readSecret,
       tartFactsForRevision,
+      hyperVFactsForRevision,
     );
     this.connections = new SQLiteProviderConnectionStore(db, now);
     this.connectionUseCases = new PortainerConnectionService(
@@ -74,6 +81,7 @@ export class AdminService {
       allowLoopbackHttp,
       readSecret,
       tartFactsForRevision,
+      hyperVFactsForRevision,
     );
     this.inventory = new SQLiteMachineNodeStore(db, now);
     this.revocations = new SQLiteProfileRevocationStore(db, now);
@@ -84,6 +92,7 @@ export class AdminService {
       now,
       tartFactsForRevision,
       enabledExecutionMode,
+      hyperVFactsForRevision,
     );
   }
   discover(input: Parameters<PortainerConnectionService["discover"]>[0]) {
@@ -93,6 +102,71 @@ export class AdminService {
     input: Parameters<PortainerConnectionService["discoverTart"]>[0],
   ) {
     return this.connectionUseCases.discoverTart(input);
+  }
+  discoverHyperV(
+    input: Parameters<PortainerConnectionService["discoverHyperV"]>[0],
+  ) {
+    return this.connectionUseCases.discoverHyperV(input);
+  }
+  async configureHyperVNodeRuntime(
+    input: Omit<
+      Parameters<SQLiteHyperVAdminStore["configureRuntime"]>[0],
+      "config"
+    > & {
+      config: import("@hitchlet/contracts/admin").HyperVNodeRuntimeConfigInput;
+    },
+  ) {
+    if (!this.readSecret) throw Error("Encrypted secret store required");
+    for (const key of [
+      "tokenSecretRef",
+      "caSecretRef",
+      "clientCertSecretRef",
+      "clientKeySecretRef",
+    ] as const)
+      await this.readSecret(input.config.runtimeAgent[key]);
+    return this.hyperv.configureRuntime(input);
+  }
+  async attestHyperVNodeCapabilities(
+    input: {
+      nodeId: string;
+      expectedVersion: number;
+      operatorId: string;
+      requestId: string;
+    } & Extract<NodeCapabilityAttestationInput, { backendKind: "hyperv" }>,
+  ) {
+    const target = await this.hyperv.attestationTarget(input.nodeId);
+    if (
+      !target ||
+      Number(target.version) !== input.expectedVersion ||
+      !this.hyperVFactsForRevision
+    )
+      throw Error("Hyper-V attestation target unavailable");
+    const facts = await this.hyperVFactsForRevision({
+      installationId: String(target.installation_id),
+      runtimeIdentityId: String(target.runtime_identity_id),
+      connectionRevisionId: String(target.current_revision_id),
+      nodeId: input.nodeId,
+      config: JSON.parse(String(target.config_json)),
+    });
+    if (
+      !hyperVTemplateProofMatches(facts, {
+        nativeRuntimeNamespaceId: String(target.native_id),
+        artifactRef: input.templateRef,
+        digest: input.templateDigest,
+        architecture: input.architecture,
+        guestOs: input.guestOs,
+      }) ||
+      facts.hyperVVersion !== input.expectedHyperVVersion
+    )
+      throw RangeError(
+        "Hyper-V qualification does not match current template/host facts",
+      );
+    return this.hyperv.attestCapabilities({
+      ...input,
+      networkProfileRevisionIds: input.networkProfileRevisionIds ?? [],
+      facts,
+      expectedConnectionRevisionId: String(target.current_revision_id),
+    });
   }
   listConnections() {
     return this.connections.listConnections();
@@ -396,6 +470,76 @@ export class AdminService {
       expired: outcomes.filter((value) => value === "expired").length,
     };
   }
+  async refreshHyperVObservations() {
+    const checkedAt = this.now();
+    const snapshots = await this.hyperv.dueObservations(checkedAt, 45_000, 16);
+    const settled = await Promise.allSettled(
+      snapshots.map(async (snapshot) => {
+        let capabilities: Record<string, unknown> | undefined;
+        try {
+          const parsed: unknown = JSON.parse(snapshot.capabilitiesJson);
+          if (isRecord(parsed)) capabilities = parsed;
+        } catch {
+          // Invalid stored qualification is not refreshed by live observation.
+        }
+        if (
+          !capabilities ||
+          !validHyperVAttestedCapability(capabilities, checkedAt)
+        ) {
+          const expired =
+            !capabilities || capabilityExpired(capabilities, checkedAt);
+          if (
+            await this.hyperv.recordObservation(
+              snapshot,
+              expired ? "unknown" : "degraded",
+            )
+          )
+            return expired ? ("expired" as const) : ("unhealthy" as const);
+          return "unchanged" as const;
+        }
+        try {
+          if (!this.hyperVFactsForRevision)
+            throw new Error(
+              "Authenticated Hyper-V Runtime facts probe is unavailable",
+            );
+          const parsedConfig: unknown = JSON.parse(snapshot.configJson);
+          if (!isRecord(parsedConfig))
+            throw new Error("Hyper-V Node config is invalid");
+          const facts = await this.hyperVFactsForRevision({
+            installationId: snapshot.installationId,
+            runtimeIdentityId: snapshot.runtimeIdentityId,
+            connectionRevisionId: snapshot.currentRevisionId,
+            nodeId: snapshot.nodeId,
+            config: parsedConfig,
+          });
+          assertHyperVObservationMatches(snapshot, capabilities, facts);
+          if (
+            await this.hyperv.recordObservation(snapshot, "healthy", checkedAt)
+          )
+            return "refreshed" as const;
+        } catch {
+          if (await this.hyperv.recordObservation(snapshot, "degraded"))
+            return "unhealthy" as const;
+        }
+        return "unchanged" as const;
+      }),
+    );
+    const failure = settled.find(
+      (item): item is PromiseRejectedResult => item.status === "rejected",
+    );
+    if (failure) throw failure.reason;
+    const outcomes = settled.map((item) => {
+      if (item.status !== "fulfilled")
+        throw new Error("Hyper-V observation result did not settle");
+      return item.value;
+    });
+    return {
+      checked: snapshots.length,
+      refreshed: outcomes.filter((value) => value === "refreshed").length,
+      unhealthy: outcomes.filter((value) => value === "unhealthy").length,
+      expired: outcomes.filter((value) => value === "expired").length,
+    };
+  }
   listNodes() {
     return this.inventory.listNodes();
   }
@@ -542,7 +686,9 @@ function assertTartObservationMatches(
       guestOs,
     })
   )
-    throw new Error("Live Tart observation does not match the attested Node");
+    throw new Error(
+      "Live Hyper-V observation does not match the attested Node",
+    );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -579,4 +725,44 @@ function assertObservationMatches(
     snapshot.memoryMiB > Math.floor(evidence.memoryBytes / 1024 ** 2)
   )
     throw new Error("Live Portainer observation does not match attested Node");
+}
+
+function assertHyperVObservationMatches(
+  snapshot: Awaited<
+    ReturnType<SQLiteHyperVAdminStore["dueObservations"]>
+  >[number],
+  capability: Record<string, unknown>,
+  facts: import("@hitchlet/contracts/internal").HyperVRuntimeFacts,
+) {
+  const guestOs = Array.isArray(capability.guestOs)
+    ? capability.guestOs[0]
+    : undefined;
+  const capacity = capability.capacity;
+  if (
+    facts.nativeRuntimeNamespaceId !== snapshot.nativeNamespaceId ||
+    facts.nativeRuntimeNamespaceId !== capability.nativeNamespaceId ||
+    facts.hostOS !== "windows" ||
+    snapshot.hostOs !== "windows" ||
+    facts.hostArchitecture !== "AMD64" ||
+    snapshot.architecture !== "amd64" ||
+    facts.hyperVVersion !== capability.hyperVVersion ||
+    capability.providerVersion !== `Hyper-V/${facts.hyperVVersion}` ||
+    capability.connectionRevisionId !== snapshot.revisionId ||
+    !isRecord(capacity) ||
+    capacity.cpuMillis !== snapshot.cpuMillis ||
+    capacity.memoryMiB !== snapshot.memoryMiB ||
+    snapshot.cpuMillis > (facts.hostCpuCount ?? 0) * 1000 ||
+    snapshot.memoryMiB > Math.floor((facts.hostMemoryBytes ?? 0) / 1024 ** 2) ||
+    (guestOs !== "linux" && guestOs !== "windows") ||
+    !hyperVTemplateProofMatches(facts, {
+      nativeRuntimeNamespaceId: snapshot.nativeNamespaceId,
+      artifactRef: String(capability.templateRef),
+      digest: String(capability.templateDigest),
+      architecture: String(capability.architecture),
+      guestOs,
+    })
+  )
+    throw new Error(
+      "Live Hyper-V observation does not match the attested Node",
+    );
 }

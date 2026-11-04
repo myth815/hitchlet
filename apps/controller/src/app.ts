@@ -98,6 +98,7 @@ import {
   NodeAdmissionModeReceiptSchema,
   NodeRuntimeConfigSchema,
   TartNodeRuntimeConfigSchema,
+  HyperVNodeRuntimeConfigSchema,
   NodeCapabilityAttestationSchema,
   NodeCapabilityAttestationReceiptSchema,
   NetworkProfileInputSchema,
@@ -146,6 +147,7 @@ export interface AppRuntime {
   readonly recoveryState?: () => "ready" | "recovering" | "unavailable";
   readonly secrets?: LocalSecretStore;
   readonly tartFactsForRevision?: TartFactsForRevision;
+  readonly hyperVFactsForRevision?: import("./providers/runtime-credentials.js").HyperVFactsForRevision;
 }
 type Row = Record<string, string | number | bigint | null>;
 export async function buildApp(
@@ -289,6 +291,7 @@ export async function buildApp(
         : undefined,
       runtime.tartFactsForRevision,
       configuredExecutionModes(config.EXECUTION_MODE),
+      runtime.hyperVFactsForRevision,
     );
     const requireAdmin = async (
       request: Parameters<typeof auth.authenticate>[0],
@@ -824,7 +827,9 @@ export async function buildApp(
       const body = parseInput(ProviderConnectionInputSchema, request.body);
       const result =
         "runtimeProfile" in body
-          ? await admin.discoverTart(body)
+          ? "backendKind" in body && body.backendKind === "hyperv"
+            ? await admin.discoverHyperV(body)
+            : await admin.discoverTart(body)
           : await admin.discover(body);
       reply.header("Cache-Control", "no-store");
       return reply.code(202).send(ProviderOperationReceiptSchema.parse(result));
@@ -972,6 +977,21 @@ export async function buildApp(
       });
       return reply.code(200).header("ETag", `"${result.version}"`).send(result);
     });
+    app.put(
+      "/v1/nodes/:nodeId/hyperv-runtime-config",
+      async (request, reply) => {
+        const actor = await requireAdmin(request, true);
+        const body = parseInput(HyperVNodeRuntimeConfigSchema, request.body);
+        const result = await admin.configureHyperVNodeRuntime({
+          nodeId: uuidParam(request.params, "nodeId"),
+          expectedVersion: ifMatchVersion(request.headers["if-match"]),
+          config: body,
+          operatorId: actor.consumerId,
+          requestId: request.id,
+        });
+        return reply.header("ETag", `"${result.version}"`).send(result);
+      },
+    );
     app.post(
       "/v1/nodes/:nodeId/capability-attestations",
       async (request, reply) => {
@@ -979,13 +999,21 @@ export async function buildApp(
         const body = parseInput(NodeCapabilityAttestationSchema, request.body);
         const result = NodeCapabilityAttestationReceiptSchema.parse(
           "backendKind" in body
-            ? await admin.attestTartNodeCapabilities({
-                nodeId: uuidParam(request.params, "nodeId"),
-                expectedVersion: ifMatchVersion(request.headers["if-match"]),
-                ...body,
-                operatorId: actor.consumerId,
-                requestId: request.id,
-              })
+            ? body.backendKind === "hyperv"
+              ? await admin.attestHyperVNodeCapabilities({
+                  nodeId: uuidParam(request.params, "nodeId"),
+                  expectedVersion: ifMatchVersion(request.headers["if-match"]),
+                  ...body,
+                  operatorId: actor.consumerId,
+                  requestId: request.id,
+                })
+              : await admin.attestTartNodeCapabilities({
+                  nodeId: uuidParam(request.params, "nodeId"),
+                  expectedVersion: ifMatchVersion(request.headers["if-match"]),
+                  ...body,
+                  operatorId: actor.consumerId,
+                  requestId: request.id,
+                })
             : await admin.attestNodeCapabilities({
                 nodeId: uuidParam(request.params, "nodeId"),
                 expectedVersion: ifMatchVersion(request.headers["if-match"]),

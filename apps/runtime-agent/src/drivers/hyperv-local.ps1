@@ -7,7 +7,13 @@ $r=[Console]::In.ReadToEnd() | ConvertFrom-Json
 if($r.action -notin @('facts','prepare','inspect','import','configure','start','stop','remove')){throw 'hyperv_action_unsupported'}
 $available=$null -ne (Get-Command Get-VM -ErrorAction SilentlyContinue)
 if($r.action -eq 'facts'){
- @{available=$available;hostArchitecture=[string]$env:PROCESSOR_ARCHITECTURE;implementedOperations=@('inspect','import','configure','start','stop','remove')} | ConvertTo-Json -Depth 8 -Compress
+ $facts=@{available=$available;hostArchitecture=[string]$env:PROCESSOR_ARCHITECTURE;implementedOperations=@('inspect','import','configure','start','stop','remove')}
+ if($available){
+  $computer=Get-CimInstance Win32_ComputerSystem
+  $module=Get-Module Hyper-V -ListAvailable | Sort-Object Version -Descending | Select-Object -First 1
+  $facts.hostOS='windows';$facts.hostCpuCount=[int]$computer.NumberOfLogicalProcessors;$facts.hostMemoryBytes=[long]$computer.TotalPhysicalMemory;$facts.hyperVVersion=$module.Version.ToString()
+ }
+ $facts | ConvertTo-Json -Depth 8 -Compress
  exit
 }
 if(!$available){throw 'hyperv_tools_unavailable'}

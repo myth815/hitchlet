@@ -344,7 +344,9 @@ export class OperationWorker {
     }
     const executionMode = parseObject(op.intent_json).executionMode;
     const trackFlight =
-      executionMode === "portainer" || executionMode === "tart";
+      executionMode === "portainer" ||
+      executionMode === "tart" ||
+      executionMode === "hyperv";
     if (op.kind === "allocation.provision" && trackFlight)
       this.createCalls.enter(flightKey);
     try {
@@ -539,7 +541,8 @@ export class OperationWorker {
       return this.defer(op, token, "create_effect_outcome_unknown");
     if (
       parseObject(op.intent_json).executionMode === "portainer" ||
-      parseObject(op.intent_json).executionMode === "tart"
+      parseObject(op.intent_json).executionMode === "tart" ||
+      parseObject(op.intent_json).executionMode === "hyperv"
     )
       await this.store.assertProvisionActive(
         String(op.id),
@@ -553,7 +556,8 @@ export class OperationWorker {
     );
     if (
       parseObject(op.intent_json).executionMode === "portainer" ||
-      parseObject(op.intent_json).executionMode === "tart"
+      parseObject(op.intent_json).executionMode === "tart" ||
+      parseObject(op.intent_json).executionMode === "hyperv"
     )
       await this.store.assertProvisionActive(
         String(op.id),
@@ -672,7 +676,10 @@ export class OperationWorker {
     const frozenMode = frozenConfig.executionMode;
     const intentMode = parseObject(op.intent_json).executionMode;
     const validExecutionMode = (value: unknown) =>
-      value === "simulator" || value === "portainer" || value === "tart";
+      value === "simulator" ||
+      value === "portainer" ||
+      value === "tart" ||
+      value === "hyperv";
     if (
       validExecutionMode(frozenMode) &&
       validExecutionMode(intentMode) &&
@@ -688,7 +695,7 @@ export class OperationWorker {
         : undefined;
     if (!executionMode)
       throw new Error("Persisted provision execution mode is unavailable");
-    const isTart = executionMode === "tart";
+    const isTart = executionMode === "tart" || executionMode === "hyperv";
     const accepted =
       subject.kind === "tenant"
         ? (AcceptedAcquireRequestSchema.parse(
@@ -760,7 +767,11 @@ export class OperationWorker {
         throw new Error("Bound mount facts missing");
       if (persisted.every((m) => typeof m.resolvedSourceRef === "string"))
         mounts = persisted.map((m) => resolvedStorageMountSchema.parse(m));
-      else if (executionMode === "portainer" || executionMode === "tart")
+      else if (
+        executionMode === "portainer" ||
+        executionMode === "tart" ||
+        executionMode === "hyperv"
+      )
         throw new Error("Real runtime mount evidence missing");
       // Pre-D23 Simulator contracts stored frozen selections rather than host
       // facts. Their explicit simulated references retain the original hash.
@@ -775,7 +786,11 @@ export class OperationWorker {
       allowedEgress: parseEgress(network.allowedEgress),
       allowedIngressSourceCidrs: stringList(network.allowedIngressSourceCidrs),
       managementDenyRules: parseDenyRules(network.managementDenyRules),
-      enforcement: enforcement(network.enforcement),
+      enforcement: enforcement(
+        executionMode === "hyperv" && network.mode === "trusted_nat"
+          ? "hyperv_nat"
+          : network.enforcement,
+      ),
       verificationRequired:
         network.mode === "trusted_nat"
           ? natVerification(network.enforcement, network.verificationRequired)
@@ -855,7 +870,9 @@ export class OperationWorker {
     if (
       typeof row.resolved_provision_contract_id !== "string" &&
       mounts.length &&
-      (executionMode === "portainer" || executionMode === "tart")
+      (executionMode === "portainer" ||
+        executionMode === "tart" ||
+        executionMode === "hyperv")
     ) {
       if (!this.options.execution.resolveMounts)
         throw new Error("Runtime storage facts unavailable");
@@ -1150,8 +1167,8 @@ function storageMode(value: unknown): "read_only" | "read_write" {
     throw new Error("Persisted storage mode is invalid");
   return value;
 }
-function guestOS(value: unknown): "linux" | "macos" {
-  if (value !== "linux" && value !== "macos")
+function guestOS(value: unknown): "linux" | "macos" | "windows" {
+  if (value !== "linux" && value !== "macos" && value !== "windows")
     throw new Error("Persisted Tart guest OS is invalid");
   return value;
 }
@@ -1162,11 +1179,12 @@ function architecture(value: unknown): "amd64" | "arm64" {
 }
 function enforcement(
   value: unknown,
-): "docker_iptables" | "tart_agent" | "tart_nat" {
+): "docker_iptables" | "tart_agent" | "tart_nat" | "hyperv_nat" {
   if (
     value !== "docker_iptables" &&
     value !== "tart_agent" &&
-    value !== "tart_nat"
+    value !== "tart_nat" &&
+    value !== "hyperv_nat"
   )
     throw new Error("Persisted network enforcement is invalid");
   return value;
@@ -1210,7 +1228,10 @@ function expectedManifest(value: unknown): string[] | undefined {
   }
 }
 function natVerification(enforcement: unknown, value: unknown): false {
-  if (enforcement !== "tart_nat" || value !== false)
+  if (
+    !["tart_nat", "hyperv_nat"].includes(String(enforcement)) ||
+    value !== false
+  )
     throw new Error("Persisted NAT mode is inconsistent");
   return false;
 }

@@ -63,6 +63,32 @@ export class InventoryCommands {
       { key, retry: false },
     );
   }
+  discoverHyperV(
+    body: import("@hitchlet/contracts/admin").HyperVConnectionInput,
+    key: string,
+  ) {
+    return this.http.request(
+      "/v1/provider-connections",
+      "POST",
+      S.HyperVConnectionInputSchema.parse(body),
+      (v) => parseResponse(S.ProviderOperationReceiptSchema, v),
+      { key, retry: false },
+    );
+  }
+  configureHyperVRuntime(
+    id: string,
+    body: import("@hitchlet/contracts/admin").HyperVNodeRuntimeConfigInput,
+    expectedVersion: number,
+    key: string,
+  ) {
+    return this.http.request(
+      `/v1/nodes/${path(id)}/hyperv-runtime-config`,
+      "PUT",
+      S.HyperVNodeRuntimeConfigSchema.parse(body),
+      (v) => parseResponse(S.NodeRuntimeConfigReceiptSchema, v),
+      { key, expectedVersion, retry: false },
+    );
+  }
   discovery(id: string) {
     return this.http.request(
       `/v1/provider-discovery/${path(id)}`,

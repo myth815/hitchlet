@@ -601,6 +601,27 @@ export class SQLiteMachineNodeStore {
         throw new RangeError(
           "Tart machine budget must fit authenticated macOS arm64 host capacity facts; node remains unqualified until manual attestation",
         );
+    } else if (String(connection.backend_kind) === "hyperv") {
+      if (
+        machine.host_os !== "windows" ||
+        machine.architecture !== "amd64" ||
+        evidence.nativeRuntimeNamespaceId !== connection.native_id ||
+        evidence.available !== true ||
+        evidence.hostOS !== "windows" ||
+        evidence.hostArchitecture !== "AMD64" ||
+        typeof evidence.hostCpuCount !== "number" ||
+        !Number.isSafeInteger(evidence.hostCpuCount) ||
+        evidence.hostCpuCount < 1 ||
+        typeof evidence.hostMemoryBytes !== "number" ||
+        !Number.isSafeInteger(evidence.hostMemoryBytes) ||
+        evidence.hostMemoryBytes < 1 ||
+        Number(pool.total_cpu_millis) > evidence.hostCpuCount * 1000 ||
+        Number(pool.total_memory_mib) >
+          Math.floor(evidence.hostMemoryBytes / 1024 ** 2)
+      )
+        throw RangeError(
+          "Hyper-V machine budget must fit authenticated Windows amd64 host facts",
+        );
     } else if (
       evidence.architecture !== machine.architecture ||
       evidence.os !== "linux" ||
@@ -639,8 +660,8 @@ export class SQLiteMachineNodeStore {
           String(pool.id),
           JSON.stringify({
             providerEndpointId: connection.provider_endpoint_id,
-            ...(String(connection.backend_kind) === "tart"
-              ? { executionMode: "tart" }
+            ...(["tart", "hyperv"].includes(String(connection.backend_kind))
+              ? { executionMode: String(connection.backend_kind) }
               : {}),
           }),
           time,

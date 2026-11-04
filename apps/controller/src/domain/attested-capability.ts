@@ -112,3 +112,53 @@ export function validTartAttestedCapability(
     )
   );
 }
+
+export function validHyperVAttestedCapability(
+  value: unknown,
+  now: number,
+): value is Record<string, unknown> {
+  if (!isRecord(value)) return false;
+  const expiry =
+    typeof value.expiresAt === "string" ? Date.parse(value.expiresAt) : NaN;
+  const report = value.manualReport;
+  const scopes = isRecord(report) ? report.scopes : undefined;
+  const names = ["resourceLimits", "sshBootstrap", "cleanupRecovery"];
+  return (
+    Number.isFinite(expiry) &&
+    expiry > now &&
+    value.admissionMode === "constant_online_manual_inventory" &&
+    value.offline === false &&
+    value.powerEnabled === false &&
+    value.cpuHardLimit === "verified" &&
+    value.memoryHardLimit === "verified" &&
+    value.networkMode === "trusted_nat" &&
+    value.networkPolicyEnforcement === "unsupported" &&
+    typeof value.capabilityFingerprint === "string" &&
+    /^[a-f0-9]{64}$/.test(value.capabilityFingerprint) &&
+    typeof value.connectionRevisionId === "string" &&
+    typeof value.nativeNamespaceId === "string" &&
+    typeof value.hyperVVersion === "string" &&
+    value.providerVersion === `Hyper-V/${value.hyperVVersion}` &&
+    typeof value.templateRef === "string" &&
+    typeof value.templateDigest === "string" &&
+    /^sha256:[a-f0-9]{64}$/.test(value.templateDigest) &&
+    value.architecture === "amd64" &&
+    Array.isArray(value.architectures) &&
+    value.architectures.length === 1 &&
+    value.architectures[0] === "amd64" &&
+    Array.isArray(value.guestOs) &&
+    value.guestOs.length === 1 &&
+    (value.guestOs[0] === "linux" || value.guestOs[0] === "windows") &&
+    isRecord(value.capacity) &&
+    Number.isSafeInteger(value.capacity.cpuMillis) &&
+    Number.isSafeInteger(value.capacity.memoryMiB) &&
+    isRecord(report) &&
+    typeof report.sha256 === "string" &&
+    /^[a-f0-9]{64}$/.test(report.sha256) &&
+    isRecord(scopes) &&
+    Object.keys(scopes).length === names.length &&
+    names.every(
+      (name) => isRecord(scopes[name]) && scopes[name].status === "passed",
+    )
+  );
+}

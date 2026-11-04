@@ -380,7 +380,7 @@ it("connects the controller client through the existing real mTLS transport, wit
     deadlineMs: Date.now() + 60_000,
   });
   expect(await client.inspect(identity)).toEqual(inspection);
-  expect(await client.facts()).toEqual(facts);
+  expect(await client.facts()).toEqual({ ...facts, templates: [] });
   const request = {
     identity,
     vmId: "11111111-1111-4111-8111-111111111111",

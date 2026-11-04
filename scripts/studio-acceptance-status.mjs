@@ -107,7 +107,8 @@ export async function inspectRetainedStudio({
     expectedEngineId: expectedEngine,
     origin: "https://127.0.0.1:33101",
     httpOrigin: "http://127.0.0.1:33100",
-    startupPersistence: "foreground only; no autostart installed",
+    startupPersistence:
+      "not inspected; an external user service may manage this supervisor",
     serviceVersion: "not inferred from the requesting checkout",
   };
   if (plain === null && tls === null) return result;

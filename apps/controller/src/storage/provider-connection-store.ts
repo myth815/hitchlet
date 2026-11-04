@@ -10,6 +10,7 @@ import {
   parseJson,
   projectEvidence,
   projectTartEvidence,
+  projectHyperVEvidence,
   type Row,
 } from "./admin-store-utils.js";
 
@@ -41,7 +42,9 @@ export class SQLiteProviderConnectionStore {
           ? null
           : String(r.backend_kind) === "tart"
             ? projectTartEvidence(String(r.evidence_json))
-            : projectEvidence(String(r.evidence_json)),
+            : String(r.backend_kind) === "hyperv"
+              ? projectHyperVEvidence(String(r.evidence_json))
+              : projectEvidence(String(r.evidence_json)),
     }));
   }
   discoveryOperation(operationId: string) {
@@ -56,6 +59,7 @@ export class SQLiteProviderConnectionStore {
       runtimeIdentityId: string;
       runtimeProfile: Record<string, unknown>;
     },
+    backend: "tart" | "hyperv" = "tart",
   ) {
     const installation = await this.db.get<Row>(
       "SELECT installation_id,controller_epoch FROM installations WHERE singleton=1",
@@ -72,7 +76,7 @@ export class SQLiteProviderConnectionStore {
       revisionId =
         typeof saved?.revisionId === "string" ? saved.revisionId : randomUUID(),
       intent = {
-        type: "tart.discovery",
+        type: `${backend}.discovery`,
         runtimeIdentityId: target.runtimeIdentityId,
         runtimeProfile: target.runtimeProfile,
         connectionId,
@@ -100,7 +104,7 @@ export class SQLiteProviderConnectionStore {
       throw new RangeError("Tart discovery operation not found");
     const persisted = parseJson(String(op.intent_json));
     if (
-      persisted.type !== "tart.discovery" ||
+      persisted.type !== `${backend}.discovery` ||
       persisted.runtimeIdentityId !== target.runtimeIdentityId ||
       JSON.stringify(persisted.runtimeProfile) !==
         JSON.stringify(target.runtimeProfile)
@@ -133,11 +137,14 @@ export class SQLiteProviderConnectionStore {
     },
     connectionId: string,
     revisionId: string,
-    facts: TartRuntimeFacts,
+    facts:
+      | TartRuntimeFacts
+      | import("@hitchlet/contracts/internal").HyperVRuntimeFacts,
+    backend: "tart" | "hyperv" = "tart",
   ) {
     const runtime = await this.db.get<Row>(
-      "SELECT id FROM runtime_identities WHERE backend_kind='tart' AND native_kind='tart_host' AND native_id=?",
-      [facts.nativeRuntimeNamespaceId],
+      "SELECT id FROM runtime_identities WHERE backend_kind=? AND native_kind=? AND native_id=?",
+      [backend, backend + "_host", facts.nativeRuntimeNamespaceId],
     );
     const existing = await this.db.get<Row>(
       "SELECT id FROM provider_connections WHERE runtime_identity_id=?",
@@ -171,9 +178,11 @@ export class SQLiteProviderConnectionStore {
         ? [
             {
               kind: "run" as const,
-              sql: "INSERT INTO runtime_identities(id,backend_kind,native_kind,native_id,created_at_ms) VALUES(?,'tart','tart_host',?,?)",
+              sql: "INSERT INTO runtime_identities(id,backend_kind,native_kind,native_id,created_at_ms) VALUES(?,?,?,?,?)",
               params: [
                 target.runtimeIdentityId,
+                backend,
+                backend + "_host",
                 facts.nativeRuntimeNamespaceId,
                 time,
               ],
@@ -182,8 +191,8 @@ export class SQLiteProviderConnectionStore {
         : []),
       {
         kind: "run",
-        sql: "INSERT INTO provider_connections(id,backend_kind,runtime_identity_id,created_at_ms,updated_at_ms) VALUES(?,'tart',?,?,?)",
-        params: [connectionId, target.runtimeIdentityId, time, time],
+        sql: "INSERT INTO provider_connections(id,backend_kind,runtime_identity_id,created_at_ms,updated_at_ms) VALUES(?,?,?,?,?)",
+        params: [connectionId, backend, target.runtimeIdentityId, time, time],
       },
       {
         kind: "run",

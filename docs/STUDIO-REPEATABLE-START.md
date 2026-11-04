@@ -43,3 +43,11 @@ node --test scripts/studio-acceptance-status.test.mjs
 ```
 
 需要常驻时再明确安装用户LaunchAgent的具体目录/制品、仅loopback监听与复用身份范围。此处不生成长期凭据，不自动安装自启，也不把手工foreground称为生产可用性保证。
+
+## 2026-11-04 用户级自启实况
+
+用户单独批准后，Studio 已安装 `com.myth815.hitchlet-studio-acceptance` 用户 LaunchAgent，登录时 RunAtLoad、KeepAlive，使用固定 Node 24 和原冻结 0039abee+d0128a8 包，复用原账本/身份/专属 Colima（6 vCPU/8 GiB）。监听仍是 loopback 33100/33101；不是系统 daemon 或新公共部署，也没有自动升级到当前 checkout。
+
+macOS 文稿提示获用户允许后，launchctl 已读回 running、runs=1、原进程未退出；再次只读 check 为 ready、原 Engine/installation 一致、五个发布版本可见、started=false。尚未做用户退出重登或整机重启验收，不为验证自启而打断正在准备的消费者。控制面用户退出期间的可用性不作保证。
+
+此安装是单独批准的本地操作；resume/check 脚本仍不自行安装自启。状态脚本无法仅凭服务在线推断谁在监督，因此 startupPersistence 标记为未检查，而不再固定宣称“未安装自启”。历史 foreground 记录保留为当时证据，不能盖过本次 launchctl 事实。

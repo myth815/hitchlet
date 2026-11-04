@@ -180,8 +180,12 @@ it("registers macOS/Linux Tart bootstrap without claiming Windows support", () =
   ).toBe("tart_contract_unsupported");
 });
 
-it("keeps default registered production composition unchanged while supporting explicit Hyper-V injection", async () => {
-  expect(configuredExecutionModes("registered")).toEqual(["portainer", "tart"]);
+it("includes the registered Hyper-V adapter without changing explicit single-backend selection", async () => {
+  expect(configuredExecutionModes("registered")).toEqual([
+    "portainer",
+    "tart",
+    "hyperv",
+  ]);
   const hyperv = provider();
   const dispatcher = new ExecutionProviderDispatcher(
     { hyperv: hyperv.execution },

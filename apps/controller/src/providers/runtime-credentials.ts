@@ -153,3 +153,73 @@ export function tartRuntimeFactsForRevision(
     runtimeIdentityId: input.runtimeIdentityId,
   });
 }
+
+export type HyperVFactsForRevisionInput = TartFactsForRevisionInput;
+export type HyperVFactsForRevision = (
+  input: HyperVFactsForRevisionInput,
+) => Promise<import("@hitchlet/contracts/internal").HyperVRuntimeFacts>;
+export async function hyperVRuntimeFactsForNode(
+  input: {
+    profile: RuntimeAgentProfile;
+    secrets: SecretReader;
+    installationId: string;
+    runtimeIdentityId: string;
+  },
+  timeoutMs = 30_000,
+  transport?: RuntimeAgentJsonTransport,
+) {
+  const { readHyperVRuntimeFacts } = await import("./hyperv-runtime-client.js");
+  return readHyperVRuntimeFacts(
+    transport ?? runtimeAgentTransport(input.profile, input.secrets, timeoutMs),
+    input.installationId,
+    input.runtimeIdentityId,
+    timeoutMs,
+  );
+}
+export async function hyperVRuntimeFactsForRevision(
+  input: HyperVFactsForRevisionInput,
+  secrets: SecretReader,
+) {
+  const { HyperVNodeRuntimeConfigSchema } = await import(
+    "@hitchlet/contracts/admin"
+  );
+  const profile = HyperVNodeRuntimeConfigSchema.parse(
+    input.config.runtimeProfile ?? input.config,
+  );
+  return hyperVRuntimeFactsForNode({
+    profile,
+    secrets,
+    installationId: input.installationId,
+    runtimeIdentityId: input.runtimeIdentityId,
+  });
+}
+export async function createHyperVRuntimeClient(
+  input: {
+    profile: RuntimeAgentProfile;
+    secrets: SecretReader;
+    installationId: string;
+    runtimeIdentityId: string;
+    controllerEpoch: number;
+    deadlineMs: number;
+  },
+  transport?: RuntimeAgentJsonTransport,
+) {
+  const { HyperVRuntimeHttpClient } = await import(
+    "./hyperv-runtime-client.js"
+  );
+  const remaining = input.deadlineMs - Date.now();
+  if (remaining < 1) throw Error("Hyper-V Runtime deadline expired");
+  return new HyperVRuntimeHttpClient({
+    transport:
+      transport ??
+      runtimeAgentTransport(
+        input.profile,
+        input.secrets,
+        Math.min(240000, remaining),
+      ),
+    installationId: input.installationId,
+    runtimeIdentityId: input.runtimeIdentityId,
+    controllerEpoch: input.controllerEpoch,
+    deadlineMs: input.deadlineMs,
+  });
+}

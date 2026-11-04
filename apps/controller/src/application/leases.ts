@@ -76,7 +76,8 @@ export class LeaseService {
     if (
       row.execution_mode !== "simulator" &&
       row.execution_mode !== "portainer" &&
-      row.execution_mode !== "tart"
+      row.execution_mode !== "tart" &&
+      row.execution_mode !== "hyperv"
     )
       throw conflict("execution_mode_unsupported");
     if (Number(row.generation) !== request.generation)
@@ -180,7 +181,8 @@ export class LeaseService {
         row.lease_state !== "active" ||
         (row.execution_mode !== "simulator" &&
           row.execution_mode !== "portainer" &&
-          row.execution_mode !== "tart") ||
+          row.execution_mode !== "tart" &&
+          row.execution_mode !== "hyperv") ||
         Number(row.lease_version) !== Number(row.expected_version) ||
         row.network_revoked === 1 ||
         row.network_revoked === 1n ||

@@ -23,3 +23,7 @@
 8项新增入口/namespace用例、3项相邻Tart入口及4项Hyper-V server回归通过。新增用例涵盖显式一次初始化/不覆盖、正常启动不换ID、目录/installation/runtime变化拒绝、坏marker不重置、不制造认证、编译模块无导入副作用，以及本机临时mTLS从真实application工厂返回绑定namespace和available=false事实；native root与runner均为受控替身，未执行VM动作。
 
 用户对历史被拒源文件传输已给出具体新授权，仅重试一次。该次原维护调用获准执行但60秒超时、无解析回执：无法确认源码是否到达或Parser完成，**不是新的审批拒绝，也不是语法通过**。仅提交Parser.ParseInput命令，未执行hyperv-local.ps1内容；没有重复未知请求或换通道。同一维护通道的只读检查确认原解析进程仍在运行，随后按精确命令/账户/创建时间回收并查实缺席；没有重复传输源码。准确状态留本机任务交接。系统组件启用、重启和宿主设置仍未执行。
+
+## 2026-11-04 后续状态
+
+上文记录的是入口交付时状态。之后 Windows 宿主已获具体授权完成 Hyper-V 启用及正常重启；仍未部署 guest 或创建 VM。完整导出摘要、PowerShell Direct 固定 guest 初始化源码及正式管理/租客接线已继续补齐，参见 [管理与 guest 接线](HYPERV-MANAGEMENT-AND-GUEST.md)。历史远端解析限制保持原记录，没有用本次源码工作绕过。

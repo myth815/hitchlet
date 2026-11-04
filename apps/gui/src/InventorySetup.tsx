@@ -214,11 +214,19 @@ export function InventorySetup({ client, disabled, action }: ManagementUI) {
           </span>
           <span>
             {selectedConnection.evidence &&
-            "nativeRuntimeNamespaceId" in selectedConnection.evidence ? (
+            "tartVersion" in selectedConnection.evidence ? (
               <>
                 Tart {selectedConnection.evidence.tartVersion} ·
                 {selectedConnection.evidence.hostOS}/
                 {selectedConnection.evidence.hostArch} · 本地模板{" "}
+                {selectedConnection.evidence.templates.length}
+              </>
+            ) : selectedConnection.evidence &&
+              "hostArchitecture" in selectedConnection.evidence ? (
+              <>
+                Hyper-V {selectedConnection.evidence.hyperVVersion ?? "unknown"}{" "}
+                · {selectedConnection.evidence.hostOS ?? "unknown"}/
+                {selectedConnection.evidence.hostArchitecture} · 本地模板{" "}
                 {selectedConnection.evidence.templates.length}
               </>
             ) : (

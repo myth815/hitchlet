@@ -12,6 +12,7 @@ import {
 } from "./schemas.js";
 import { ManagementSchemas as M } from "./management.js";
 import { tartRuntimeFactsSchema } from "./tart-transport.js";
+import { hyperVRuntimeFactsSchema } from "./hyperv-runtime.js";
 
 const id = z.string().uuid();
 const admissionState = z.enum(["enabled", "draining", "disabled"]);
@@ -428,9 +429,21 @@ export const TartConnectionInputSchema = z
     runtimeProfile: TartNodeRuntimeConfigSchema,
   })
   .strict();
+/** Hyper-V reuses the same authenticated Runtime credential model; switch choice is operator-owned. */
+export const HyperVNodeRuntimeConfigSchema = TartNodeRuntimeConfigSchema.extend(
+  { switchName: z.string().min(1).max(200) },
+).strict();
+export const HyperVConnectionInputSchema = z
+  .object({
+    backendKind: z.literal("hyperv"),
+    runtimeIdentityId: id,
+    runtimeProfile: HyperVNodeRuntimeConfigSchema,
+  })
+  .strict();
 export const ProviderConnectionInputSchema = z.union([
   PortainerConnectionInputSchema,
   TartConnectionInputSchema,
+  HyperVConnectionInputSchema,
 ]);
 const capabilityReport = z
   .object({
@@ -545,10 +558,39 @@ export const TartCapabilityAttestationSchema = z
         )),
     "Isolated Tart requires its three network qualification scopes",
   );
+export const HyperVCapabilityAttestationSchema = z
+  .object({
+    backendKind: z.literal("hyperv"),
+    expectedNamespaceId: id,
+    expectedHyperVVersion: z.string().min(1).max(100),
+    templateRef: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/),
+    templateDigest: sha,
+    guestOs: z.enum(["windows", "linux"]),
+    architecture: z.literal("amd64"),
+    checkedAt: z.string().datetime({ offset: true }),
+    validForSeconds: attestationLifetime,
+    report: z
+      .object({
+        runId: id,
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        scopes: z
+          .object({
+            resourceLimits: tartQualificationScope,
+            sshBootstrap: tartQualificationScope,
+            cleanupRecovery: tartQualificationScope,
+          })
+          .strict(),
+      })
+      .strict(),
+    networkProfileRevisionIds: z.array(id).default([]),
+    storageProfileRevisionIds: z.array(id).length(0).default([]),
+  })
+  .strict();
 export const NodeCapabilityAttestationSchema = z
   .union([
     PortainerCapabilityAttestationSchema,
     TartCapabilityAttestationSchema,
+    HyperVCapabilityAttestationSchema,
   ])
   .superRefine((value, ctx) => {
     if (
@@ -824,7 +866,7 @@ export const PortainerEvidenceSchema = z
 export const ProviderConnectionViewSchema = z
   .object({
     id,
-    backendKind: z.enum(["portainer", "tart"]),
+    backendKind: z.enum(["portainer", "tart", "hyperv"]),
     runtimeIdentityId: id,
     currentRevisionId: id.nullable(),
     enabled: z.boolean(),
@@ -834,7 +876,11 @@ export const ProviderConnectionViewSchema = z
     environmentId: z.string().nullable(),
     verifiedAtMs: z.number().int().nonnegative().nullable(),
     evidence: z
-      .union([PortainerEvidenceSchema, tartRuntimeFactsSchema])
+      .union([
+        PortainerEvidenceSchema,
+        tartRuntimeFactsSchema,
+        hyperVRuntimeFactsSchema,
+      ])
       .nullable(),
   })
   .strict();
@@ -1088,6 +1134,9 @@ export const AdminCacheOperationReceiptSchema = z
   .strict();
 
 export const AdminSchemas = {
+  HyperVConnectionInputSchema,
+  HyperVNodeRuntimeConfigSchema,
+  HyperVCapabilityAttestationSchema,
   ProfileRevisionViewSchema,
   ProfileGrantRevokeRequestSchema,
   RevocationImpactSchema,
@@ -1391,6 +1440,12 @@ export function managementRequestContract(
         response: NodeRuntimeConfigReceiptSchema,
         cas: true,
       };
+    if (route("/v1/nodes/:id/hyperv-runtime-config"))
+      return {
+        request: HyperVNodeRuntimeConfigSchema,
+        response: NodeRuntimeConfigReceiptSchema,
+        cas: true,
+      };
     if (route("/v1/nodes/:id/tart-runtime-config"))
       return {
         request: TartNodeRuntimeConfigSchema,
@@ -1432,3 +1487,8 @@ export type PreparedManagementRequest = z.infer<
   typeof PreparedManagementRequestSchema
 >;
 export * from "./power-execution.js";
+
+export type HyperVConnectionInput = z.input<typeof HyperVConnectionInputSchema>;
+export type HyperVNodeRuntimeConfigInput = z.input<
+  typeof HyperVNodeRuntimeConfigSchema
+>;
