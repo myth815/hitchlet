@@ -1,10 +1,11 @@
 // Resume the retained, isolated Studio acceptance installation; never initializes data.
-import { spawn, execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { readFileSync, accessSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import http from "node:http";
 import https from "node:https";
+import { studioChildren } from "./studio-acceptance-children.mjs";
 import { inspectRetainedStudio } from "./studio-acceptance-status.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -79,8 +80,30 @@ async function resume({ checkOnly = false } = {}) {
     run("docker", ["--context", context, "start", `hitchlet-studio-${name}`]);
   }
 
-  const children = [];
   let stopping = false;
+  let reloading = false;
+  let failed = false;
+  const children = studioChildren({
+    onFailure: (error) => {
+      failed = true;
+      console.error(
+        error.message + "; supervisor retained, fix release and send SIGHUP",
+      );
+    },
+  });
+  function releaseDirectory() {
+    const file = process.env.HITCHLET_STUDIO_RELEASE_FILE;
+    const dir = file
+      ? resolve(JSON.parse(readFileSync(file, "utf8")).releaseDirectory)
+      : repo;
+    // Resolve the release before stopping anything; a typo cannot take down a healthy child.
+    for (const entry of [
+      "apps/controller/dist/server.js",
+      "apps/runtime-agent/dist/host-main.js",
+    ])
+      accessSync(resolve(dir, entry));
+    return dir;
+  }
   const proxy = https.createServer(
     {
       key: readFileSync(resolve(root, "secrets/server.key")),
@@ -111,70 +134,97 @@ async function resume({ checkOnly = false } = {}) {
   function stop(code = 0) {
     if (stopping) return;
     stopping = true;
-    for (const child of children) child.kill("SIGTERM");
     proxy.close();
-    Promise.all(
-      children.map((child) =>
-        child.exitCode !== null || child.signalCode !== null
-          ? Promise.resolve()
-          : new Promise((resolve) => child.once("exit", resolve)),
-      ),
-    ).then(() => {
-      process.exitCode = code;
-    });
+    children
+      .stop()
+      .then(() => {
+        process.exitCode = code;
+      })
+      .catch((error) => {
+        console.error(error.message);
+        process.exitCode = 1;
+      });
   }
-  function start(file, env) {
-    const child = spawn(process.execPath, [file], {
-      cwd: repo,
+  function start(file, env, dir) {
+    return children.start(resolve(dir, file), {
+      cwd: dir,
       env: { ...process.env, ...env },
       stdio: "inherit",
     });
-    children.push(child);
-    child.once("error", () => stop(1));
-    child.once("exit", () => {
-      if (!stopping) stop(1);
-    });
+  }
+  async function reload() {
+    if (stopping || reloading) return;
+    reloading = true;
+    try {
+      const dir = releaseDirectory();
+      await children.stop();
+      if (stopping) return;
+      failed = false;
+      start(
+        "apps/controller/dist/server.js",
+        {
+          HOST: "127.0.0.1",
+          PORT: "33100",
+          DATA_DIR: resolve(root, "controller-data"),
+          HITCHLET_SECRET_KEY_FILE: resolve(root, "secrets/master.key"),
+          GUI_DIR: resolve(dir, "apps/gui/dist"),
+          EXECUTION_MODE: "portainer",
+          PORTAINER_ALLOW_LOOPBACK_HTTP: "true",
+          LOG_LEVEL: "warn",
+        },
+        dir,
+      );
+      let ready = false;
+      for (let attempt = 0; attempt < 50 && !stopping && !failed; attempt++) {
+        try {
+          const response = await fetch("http://127.0.0.1:33100/healthz", {
+            signal: AbortSignal.timeout(1000),
+          });
+          if (
+            response.ok &&
+            (await response.json()).recoveryState === "ready"
+          ) {
+            ready = true;
+            break;
+          }
+        } catch {}
+        await new Promise((resolve) => setTimeout(resolve, 200));
+      }
+      if (!ready || stopping || failed)
+        throw new Error(
+          "Studio controller is not ready; supervisor/network parent retained",
+        );
+      start(
+        "apps/runtime-agent/dist/host-main.js",
+        {
+          HITCHLET_HOST_AGENT_CONFIG: resolve(root, "secrets/host-config.json"),
+        },
+        dir,
+      );
+      console.log(
+        "Studio children ready from " +
+          dir +
+          "; supervisor PID " +
+          process.pid +
+          " retained",
+      );
+    } catch (error) {
+      console.error(error.message);
+    } finally {
+      reloading = false;
+    }
   }
   proxy.once("error", (error) => {
     console.error(error.message);
     stop(1);
   });
-  proxy.listen(33101, "127.0.0.1", async () => {
-    start("apps/controller/dist/server.js", {
-      HOST: "127.0.0.1",
-      PORT: "33100",
-      DATA_DIR: resolve(root, "controller-data"),
-      HITCHLET_SECRET_KEY_FILE: resolve(root, "secrets/master.key"),
-      GUI_DIR: resolve(repo, "apps/gui/dist"),
-      EXECUTION_MODE: "portainer",
-      PORTAINER_ALLOW_LOOPBACK_HTTP: "true",
-      LOG_LEVEL: "warn",
-    });
-    // The native observer initializes against the controller, so start it only
-    // after this process's controller has opened its HTTP listener.
-    let ready = false;
-    for (let attempt = 0; attempt < 50 && !stopping; attempt++) {
-      try {
-        const response = await fetch("http://127.0.0.1:33100/healthz", {
-          signal: AbortSignal.timeout(1000),
-        });
-        if (response.ok) {
-          ready = true;
-          break;
-        }
-      } catch {}
-      await new Promise((resolve) => setTimeout(resolve, 200));
-    }
-    if (!ready || stopping) {
-      stop(1);
-      return;
-    }
-    start("apps/runtime-agent/dist/host-main.js", {
-      HITCHLET_HOST_AGENT_CONFIG: resolve(root, "secrets/host-config.json"),
-    });
-    console.log(
-      "Studio acceptance services: loopback 33100/33101; Ctrl-C stops these native processes. Stop the dedicated Colima profile separately after cleanup.",
-    );
+  proxy.listen(33101, "127.0.0.1", () => {
+    void reload();
+  });
+  // Normal upgrades update the release pointer and signal only this parent.
+  // Do not bootout/kickstart the parent: Lima's usernet retains its responsibility.
+  process.on("SIGHUP", () => {
+    void reload();
   });
   process.once("SIGINT", () => stop());
   process.once("SIGTERM", () => stop());
