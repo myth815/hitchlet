@@ -38,6 +38,19 @@ export type HyperVRuntimePort = Readonly<{
   stop(identity: VmAllocationIdentity): Promise<HyperVInspection>;
   destroy(identity: VmAllocationIdentity): Promise<HyperVInspection>;
 }>;
+export type HyperVSshRelayProfile =
+  import("@hitchlet/contracts/admin").HyperVNodeRuntimeConfigInput["sshRelay"];
+export type HyperVSshEndpoint = Readonly<{ host: string; port: number }>;
+export type HyperVSshEndpointPort = Readonly<{
+  ensure(input: {
+    identity: VmAllocationIdentity;
+    vmId: string;
+    guestHost: string;
+    profile: NonNullable<HyperVSshRelayProfile>;
+    deadlineMs: number;
+  }): Promise<HyperVSshEndpoint>;
+  close(identity: VmAllocationIdentity): Promise<void>;
+}>;
 type Binding = {
   runtimeIdentityId: string;
   connectionRevisionId: string;
@@ -48,6 +61,7 @@ export type ResolvedHyperVRuntime = Binding &
     template: HyperVRequest["template"];
     switchName: string;
     runtime: HyperVRuntimePort;
+    sshRelay?: HyperVSshRelayProfile;
   }>;
 export type ResolvedHyperVCleanupRuntime = Binding &
   Readonly<{
@@ -77,7 +91,7 @@ export type HyperVExecutionProviderOptions = Readonly<{
     verify(
       input: Readonly<{
         host: string;
-        port: 22;
+        port: number;
         username: string;
         privateKey: string;
         hostPublicKey: string;
@@ -89,6 +103,7 @@ export type HyperVExecutionProviderOptions = Readonly<{
       }>,
     ): Promise<HyperVSshEvidence>;
   };
+  endpoints?: HyperVSshEndpointPort;
   now?: () => number;
 }>;
 /** Existing ExecutionPort adapter; native execution and guest initialization remain explicit ports. */
@@ -152,7 +167,9 @@ export class HyperVExecutionProvider implements ExecutionPort {
       const got = await inspect(resolved.runtime, plan);
       if (got.presence === "unknown")
         return { presence: "unknown", reason: "inventory_incomplete" };
-      if (got.presence === "absent")
+      if (got.presence === "absent") {
+        if (plan.executionPhase === "cleanup")
+          await this.options.endpoints?.close(plan.identity);
         return {
           presence: "absent",
           evidence: {
@@ -161,6 +178,7 @@ export class HyperVExecutionProvider implements ExecutionPort {
             runtime: binding(plan),
           },
         };
+      }
       if (plan.executionPhase === "observe" && got.vm?.state !== "running")
         return {
           presence: "present",
@@ -212,9 +230,9 @@ export class HyperVExecutionProvider implements ExecutionPort {
           this.now() >= plan.deadlineMs
         )
           throw Error("Hyper-V observed access facts changed");
+        const endpoint = await this.endpoint(plan, resolved, got.vm.id, host);
         const probe = await this.options.ssh.verify({
-          host,
-          port: 22,
+          ...endpoint,
           username: receipt.account,
           privateKey: material.privateKey,
           hostPublicKey: receipt.hostPublicKey,
@@ -252,7 +270,7 @@ export class HyperVExecutionProvider implements ExecutionPort {
             objects: [this.resource(plan, final)],
           },
           integrity: { state: "healthy" },
-          accessEndpointUpdate: { host },
+          accessEndpointUpdate: endpoint,
         };
       }
       return {
@@ -344,9 +362,9 @@ export class HyperVExecutionProvider implements ExecutionPort {
     const host = readback.vm.ipv4.find(isIPv4);
     if (!host || this.now() >= plan.deadlineMs)
       throw Error("Hyper-V SSH endpoint is unavailable");
+    const endpoint = await this.endpoint(plan, resolved, vmId, host);
     const ssh = await this.options.ssh.verify({
-      host,
-      port: 22,
+      ...endpoint,
       username: plan.access.account,
       privateKey: access.privateKey,
       hostPublicKey: receipt.hostPublicKey,
@@ -400,8 +418,7 @@ export class HyperVExecutionProvider implements ExecutionPort {
       bootstrapComplete: true,
       offlineLeaseEnforcement: "unsupported",
       access: {
-        host,
-        port: 22,
+        ...endpoint,
         username: plan.access.account,
         hostKeyFingerprint: receipt.hostKeyFingerprint,
         clientPublicKeyFingerprint: access.fingerprint,
@@ -410,6 +427,7 @@ export class HyperVExecutionProvider implements ExecutionPort {
   }
   async revokeStop(plan: ProvisionPlan): Promise<void> {
     const resolved = await this.cleanupRuntime(plan);
+    await this.options.endpoints?.close(plan.identity);
     const got = hyperVInspectionSchema.parse(
       await resolved.runtime.stop(plan.identity),
     );
@@ -442,6 +460,7 @@ export class HyperVExecutionProvider implements ExecutionPort {
     const before = await inspect(resolved.runtime, plan);
     if (before.presence === "present" && before.vm?.id !== resource.id)
       throw Error("Hyper-V cleanup native identity unknown");
+    await this.options.endpoints?.close(plan.identity);
     const got = hyperVInspectionSchema.parse(
       await resolved.runtime.destroy(plan.identity),
     );
@@ -458,6 +477,24 @@ export class HyperVExecutionProvider implements ExecutionPort {
       networkRules: "not_applicable",
       verifiedAtMs: this.now(),
     };
+  }
+  private async endpoint(
+    plan: ProvisionPlan,
+    resolved: ResolvedHyperVRuntime | ResolvedHyperVCleanupRuntime,
+    vmId: string,
+    host: string,
+  ): Promise<HyperVSshEndpoint> {
+    if (!("sshRelay" in resolved) || !resolved.sshRelay)
+      return { host, port: 22 };
+    if (!this.options.endpoints)
+      throw Error("Hyper-V SSH relay transport is not configured");
+    return this.options.endpoints.ensure({
+      identity: plan.identity,
+      vmId,
+      guestHost: host,
+      profile: resolved.sshRelay,
+      deadlineMs: plan.deadlineMs,
+    });
   }
   private async runtime(plan: ProvisionPlan) {
     assertPlan(plan);

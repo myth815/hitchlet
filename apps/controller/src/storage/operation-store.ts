@@ -99,20 +99,34 @@ export class SQLiteOperationStore {
     state: "healthy" | "unknown";
     reason?: string;
     endpointHost?: string;
+    endpointPort?: number;
   }): Promise<boolean> {
+    if (
+      input.endpointPort !== undefined &&
+      (input.endpointHost === undefined ||
+        !Number.isInteger(input.endpointPort) ||
+        input.endpointPort < 1 ||
+        input.endpointPort > 65535)
+    )
+      throw new Error("Invalid refreshed SSH endpoint port");
     if (input.endpointHost !== undefined && input.state !== "healthy")
       throw new Error(
         "An access endpoint can only refresh with healthy evidence",
       );
     try {
+      const refreshPort = input.endpointPort !== undefined;
       const operationResult =
         input.endpointHost === undefined
           ? "json_set(COALESCE(result_json,'{}'),'$.integrity',json(?))"
-          : "json_set(json_set(COALESCE(result_json,'{}'),'$.access.host',?),'$.integrity',json(?))";
+          : refreshPort
+            ? "json_set(COALESCE(result_json,'{}'),'$.access.host',?,'$.access.port',?,'$.integrity',json(?))"
+            : "json_set(json_set(COALESCE(result_json,'{}'),'$.access.host',?),'$.integrity',json(?))";
       const allocationReceipt =
         input.endpointHost === undefined
           ? "actual_resources_json"
-          : "json_set(actual_resources_json,'$.receipt.access.host',?)";
+          : refreshPort
+            ? "json_set(actual_resources_json,'$.receipt.access.host',?,'$.receipt.access.port',?)"
+            : "json_set(actual_resources_json,'$.receipt.access.host',?)";
       const operationParams =
         input.endpointHost === undefined
           ? [
@@ -125,6 +139,7 @@ export class SQLiteOperationStore {
             ]
           : [
               input.endpointHost,
+              ...(refreshPort ? [input.endpointPort!] : []),
               JSON.stringify({
                 state: input.state,
                 reason: input.reason ?? null,
@@ -153,7 +168,12 @@ export class SQLiteOperationStore {
           kind: "run",
           sql: `UPDATE allocations SET actual_resources_json=${allocationReceipt},observed_state=?,version=version+1,updated_at_ms=? WHERE id=? AND desired_state='present' AND control_version=? AND EXISTS(SELECT 1 FROM tickets t WHERE t.id=allocations.ticket_id AND t.phase='ready') AND EXISTS(SELECT 1 FROM operations o WHERE o.id=? AND o.state='succeeded' AND o.version=? AND o.controller_epoch=? AND o.owner_token IS NULL)`,
           params: [
-            ...(input.endpointHost === undefined ? [] : [input.endpointHost]),
+            ...(input.endpointHost === undefined
+              ? []
+              : [
+                  input.endpointHost,
+                  ...(refreshPort ? [input.endpointPort!] : []),
+                ]),
             input.state === "healthy" ? "running" : "unknown",
             input.now,
             input.allocationId,

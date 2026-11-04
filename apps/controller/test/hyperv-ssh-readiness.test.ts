@@ -173,3 +173,19 @@ it("bounds combined stdout/stderr and rejects nonzero command completion", async
   next.stream.emit("close", 1);
   await expect(failed).rejects.toThrow("guest facts");
 });
+
+it("accepts an ephemeral relay port while retaining exact guest host-key verification", async () => {
+  const f = setup();
+  const p = probeHyperVSsh({ ...f.input, port: 41234 });
+  expect(f.client.connect.mock.calls[0]![0].port).toBe(41234);
+  expect(f.client.connect.mock.calls[0]![0].hostVerifier(f.host.blob)).toBe(
+    true,
+  );
+  f.client.emit("ready");
+  f.stream.emit(
+    "data",
+    Buffer.from("workspace\nWindows\namd64\nhitchlet-scratch-writable\n"),
+  );
+  f.stream.emit("close", 0);
+  expect(await p).toMatchObject({ authenticated: true });
+});

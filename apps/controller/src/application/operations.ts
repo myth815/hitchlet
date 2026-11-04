@@ -189,7 +189,12 @@ export class OperationWorker {
                 now: this.now(),
                 state: "healthy",
                 ...(inspection.accessEndpointUpdate
-                  ? { endpointHost: inspection.accessEndpointUpdate.host }
+                  ? {
+                      endpointHost: inspection.accessEndpointUpdate.host,
+                      ...(inspection.accessEndpointUpdate.port !== undefined
+                        ? { endpointPort: inspection.accessEndpointUpdate.port }
+                        : {}),
+                    }
                   : {}),
               });
           }

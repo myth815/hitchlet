@@ -291,6 +291,7 @@ export async function resolveHyperVRuntimeFromAgent(
     template: facts.templates.find((proof) => proof.name === plan.artifact.ref)!
       .template,
     switchName: profile.switchName,
+    ...(profile.sshRelay ? { sshRelay: profile.sshRelay } : {}),
     runtime: await createHyperVRuntimeClient({
       profile,
       secrets: binding.secrets,

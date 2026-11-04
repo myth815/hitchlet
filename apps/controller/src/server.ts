@@ -41,6 +41,14 @@ import {
   reconcileLeaseAndExpiryIntents,
 } from "./application/portainer-background.js";
 
+const closeHyperVTransports: Array<() => Promise<void>> = [];
+function composeHyperV(
+  options: Parameters<typeof createHyperVExecutionComposition>[0],
+) {
+  const composition = createHyperVExecutionComposition(options);
+  closeHyperVTransports.push(composition.close);
+  return composition;
+}
 const config = loadConfig(process.env);
 const storage = await openStorage(config.DATA_DIR);
 const maintenance = new MaintenanceService(
@@ -156,7 +164,7 @@ try {
         controllerEpoch: Number(installation.controller_epoch),
         enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
       }).execution;
-      configuredExecutions.hyperv = createHyperVExecutionComposition({
+      configuredExecutions.hyperv = composeHyperV({
         storage,
         secrets,
         installationId: installation.installation_id,
@@ -284,7 +292,7 @@ try {
           controllerEpoch: epoch,
           enabledExecutionMode: configuredExecutionModes(config.EXECUTION_MODE),
         }).execution,
-        hyperv: createHyperVExecutionComposition({
+        hyperv: composeHyperV({
           storage,
           secrets,
           installationId: installation.installation_id,
@@ -504,7 +512,7 @@ try {
     const epoch = Number(installation.controller_epoch);
     const composition = (
       config.EXECUTION_MODE === "hyperv"
-        ? createHyperVExecutionComposition
+        ? composeHyperV
         : createTartExecutionComposition
     )({
       storage,
@@ -609,6 +617,7 @@ try {
     clearInterval(maintenanceTimer);
     await maintenanceRunning;
     await backgroundLoops?.close();
+    await Promise.all(closeHyperVTransports.map((close) => close()));
     logStream.end();
     await storage.close();
   });
@@ -616,6 +625,7 @@ try {
   maintenanceTick();
 } catch (error) {
   await backgroundLoops?.close();
+  await Promise.all(closeHyperVTransports.map((close) => close()));
   await storage.close().catch(() => undefined);
   throw error;
 }
@@ -718,6 +728,7 @@ try {
   await app!.listen({ host: config.HOST, port: config.PORT });
 } catch (error) {
   await backgroundLoops?.close();
+  await Promise.all(closeHyperVTransports.map((close) => close()));
   await storage.close().catch(() => undefined);
   throw error;
 }

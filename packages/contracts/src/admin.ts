@@ -431,7 +431,25 @@ export const TartConnectionInputSchema = z
   .strict();
 /** Hyper-V reuses the same authenticated Runtime credential model; switch choice is operator-owned. */
 export const HyperVNodeRuntimeConfigSchema = TartNodeRuntimeConfigSchema.extend(
-  { switchName: z.string().min(1).max(200) },
+  {
+    switchName: z.string().min(1).max(200),
+    /** Operator-only jump host. Tenants still receive an ordinary SSH endpoint. */
+    sshRelay: z
+      .object({
+        host: z.ipv4(),
+        port: z.number().int().min(1).max(65535).default(22),
+        username: z.string().min(1).max(200),
+        hostKeyFingerprint: z.string().regex(/^SHA256:[A-Za-z0-9+/]{43}$/),
+        privateKeySecretRef: secretRef.optional(),
+        passwordSecretRef: secretRef.optional(),
+      })
+      .strict()
+      .refine(
+        (v) => Boolean(v.privateKeySecretRef) !== Boolean(v.passwordSecretRef),
+        "Exactly one existing SSH authentication reference is required",
+      )
+      .optional(),
+  },
 ).strict();
 export const HyperVConnectionInputSchema = z
   .object({

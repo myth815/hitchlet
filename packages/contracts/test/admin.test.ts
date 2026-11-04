@@ -216,3 +216,38 @@ it("keeps native template OS/architecture independent in draft administration", 
     }).success,
   ).toBe(false);
 });
+
+it("keeps Hyper-V relay configuration operator-only and requires one existing authentication reference", () => {
+  const relay = {
+    host: "192.0.2.10",
+    username: "maint",
+    hostKeyFingerprint: "SHA256:" + "a".repeat(43),
+    passwordSecretRef: secretRef,
+  };
+  const profile = {
+    switchName: "Default Switch",
+    runtimeAgent: {
+      id: uuid,
+      baseUrl: "https://agent.test",
+      tokenSecretRef: secretRef,
+      caSecretRef: secretRef,
+      clientCertSecretRef: secretRef,
+      clientKeySecretRef: secretRef,
+    },
+    managementDenyRevisionId: uuid,
+    managementDenyRules: [],
+  };
+  const schema = AdminSchemas.HyperVNodeRuntimeConfigSchema;
+  expect(schema.parse(profile)).not.toHaveProperty("sshRelay");
+  expect(schema.parse({ ...profile, sshRelay: relay }).sshRelay?.port).toBe(22);
+  expect(
+    schema.safeParse({
+      ...profile,
+      sshRelay: { ...relay, privateKeySecretRef: secretRef },
+    }).success,
+  ).toBe(false);
+  const { passwordSecretRef: _, ...noAuth } = relay;
+  expect(schema.safeParse({ ...profile, sshRelay: noAuth }).success).toBe(
+    false,
+  );
+});

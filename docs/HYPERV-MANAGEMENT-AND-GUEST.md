@@ -63,7 +63,7 @@ SSH 原始 key/指纹、账号、VM/nonce/Allocation 身份与 receipt 对齐后
 
 本接线仅使用已有 Hyper-V switch 的可信 NAT：不创建 switch、不改宿主防火墙/路由、没有强网络隔离或 IPv6 关闭承诺，也没有 NAT 网络回收回执门槛。Docker 原有行为不变。VM 独立、身份、容量预留、租约与销毁查实保留；共享存储挂载、required scratch/RDP 不在本适配器首批支持范围。
 
-下一次真实验收需要：选定合法、自包含的 Windows/amd64 模板；准备账号/OpenSSH/上述 guest 身份；把本 Runtime 与已有控制面按正常认证配置部署；在原 switch 验证 Studio 到 guest SSH。模板下载/许可接受、新持久认证和具体 guest 网络准备尚未实施，不能只因 Hyper-V 已启用就自动执行。
+下一次真实验收需要：选定合法、自包含的 Windows/amd64 模板；准备账号/OpenSSH/上述 guest 身份；把本 Runtime 与已有控制面按正常认证配置部署；在原 switch 验证 Studio 到 guest SSH（远端 Default Switch 使用下述内部转接）。模板下载/许可接受、新持久认证和具体 guest 网络准备尚未实施，不能只因 Hyper-V 已启用就自动执行。
 
 只需先走一张专属票：正常资格/发布 → 按需求申请 → 取实际环境与 SSH → 一条固定消费者测试 → confirmed renew → 保存小结果 → release → GUID/目录缺席与 Claim 归零。Tart macOS/Linux ARM 和 Docker 的既有实机证据继续有效，不重复执行。控制面离线不保证租约严格到期强停，恢复后仍按同一资源身份协调回收。
 
@@ -74,3 +74,19 @@ Controller 受控管理测试从发现/namespace 去重、disabled 注册、正�
 相邻回归覆盖 Hyper-V native/runtime/SSH、真实本机 mTLS 传输、Tart 恢复和注册路由兼容。模板测试证明虚拟磁盘字节变化影响摘要、拒绝链接并不报告坏记录；不冒充 Windows 原生 seal 验证。新增 PowerShell 资产没有传到 Windows 执行或解析，没有重试历史被拒的源文件检查。
 
 最终本地检查：Controller 58 项（含共享租约后台）、Runtime 43 项、GUI 管理 10 项、既有状态入口 10 项全部通过；另选跑现有 Tart VM 两模式及环境选择 5 项，其他 62 项未重复运行。contracts/SDK 标准构建与来源记录、controller/runtime TypeScript、guest 资产复制、GUI TypeScript 均通过。有限复审同时订正了资格提交的连接修订 CAS 与 GUI facts 区分；没有新增真实系统动作。
+
+## 远端 Default Switch SSH 端点（2026-11-04 源码增量）
+
+Hyper-V guest 私网地址不等于 Studio 可达地址。operator 的 `runtimeProfile` 可选配置 `sshRelay`，复用 Windows 已有 SSH 通道：`host`、`port`（默认22）、`username`、`hostKeyFingerprint`，以及 `privateKeySecretRef` / `passwordSecretRef` 二选一的既有受保护引用。源码不读取 home-infrastructure 的私有配置，不创建身份或复制维护凭据；实际配置时须明确选择既有身份与有效认证引用。未设置时保留直接 guest IPv4:22 行为。
+
+控制器在本机 `127.0.0.1` 分配临时端口，通过经过宿主指纹验证的 SSH `direct-tcpip` 转发到**该精确 VM 当前 IPv4:22**。租客公共接口不变：拿普通 host/port/账号、guest 指纹及原短期 guest 材料；原始 SSH 字节透传，guest 指纹校验、账号/OS/架构/可写目录探测仍端到端进行，宿主维护凭据不会交付租客。没有远端监听端口、命令执行、Softnet、交换机、DHCP 或防火墙修改。
+
+这一首版端点供**控制器所在 Studio 本机的消费者**使用；127.0.0.1 不能冒充家庭其他机器可达的公共入口。若消费者移至别处，应另选可达部署方式，不把本机转接地址直接复用。
+
+每个 installation/runtime/allocation/generation 只保留一条在途转接。原 VM/IP/认证引用不变则复用；guest IP 或引用变化会关闭旧连接和监听，重新核 SSH 后刷新端点。控制器重启或 SSH 断连后，由既有完整性观测重建转接；临时端口可能变化，健康证据确认后在同一事务中更新 operation 与 allocation 两份回执。消费者重连须重新调用 getAccess 获取当前端点，不能永久缓存端口。短暂断线保持 unknown，不声称已恢复；不会新建 VM 或替换 guest 密钥。
+
+归还在精确 cleanup 授权解析后关闭本 allocation 转接及所有活动流；随后仍需实际 stop/destroy/absent 才能释放资源 Claim。控制器正常关闭及启动失败也清理内部转接。控制面离线严格到期强停依然 unsupported；本改动不是新增离线强停保证。
+
+本增量只进行了假 SSH/假监听器、provider、SQLite 回执 CAS 及相邻 SSH 测试，没有创建真实隧道、部署节点、创建 VM 或重跑既有 Tart/Docker 实机验收。真实前置仍为合法自包含模板、guest 初始化、Runtime/mTLS 部署和一次 native SSH/租约/回收验收。
+
+本增量有限复审核查了：正常/registered 组合的进程关闭路径、精确 owner 的归还、转发流同步销毁、断连时 forwardOut 竞态、身份/凭据引用轮换、端口更新的 release/controlVersion CAS，以及直接 guest:22 的旧路径兼容。最终 controller 50 项定向检查、contracts admin 6 项通过；contracts/controller 标准构建通过。没有重复全仓测试，也没有把该源码接线报告为真实 Windows 可租。

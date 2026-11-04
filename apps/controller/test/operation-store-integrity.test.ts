@@ -126,49 +126,53 @@ async function fixture(input: {
   return { db, store: new SQLiteOperationStore(storage) };
 }
 
-it("refreshes both ready receipt snapshots atomically after endpoint verification", async () => {
-  const { db, store } = await fixture({});
-  expect(
-    await store.recordIntegrityAudit({
-      operationId: "operation-1",
-      allocationId: "allocation-1",
-      ticketId: "ticket-1",
-      token: "audit-token",
-      operationVersion: 9,
-      controlVersion: 7,
-      epoch: 3,
-      now: 200,
-      state: "healthy",
-      endpointHost: "192.0.2.45",
-    }),
-  ).toBe(true);
+it.each([undefined, 41001])(
+  "refreshes both ready receipt snapshots atomically after endpoint verification (port %s)",
+  async (port) => {
+    const { db, store } = await fixture({});
+    expect(
+      await store.recordIntegrityAudit({
+        operationId: "operation-1",
+        allocationId: "allocation-1",
+        ticketId: "ticket-1",
+        token: "audit-token",
+        operationVersion: 9,
+        controlVersion: 7,
+        epoch: 3,
+        now: 200,
+        state: "healthy",
+        endpointHost: "192.0.2.45",
+        ...(port !== undefined ? { endpointPort: port } : {}),
+      }),
+    ).toBe(true);
 
-  const operation = db
-    .prepare("SELECT result_json FROM operations WHERE id='operation-1'")
-    .get() as { result_json: string };
-  const allocation = db
-    .prepare(
-      "SELECT actual_resources_json FROM allocations WHERE id='allocation-1'",
-    )
-    .get() as { actual_resources_json: string };
-  expect(JSON.parse(operation.result_json)).toMatchObject({
-    access: { host: "192.0.2.45" },
-    integrity: { state: "healthy" },
-  });
-  expect(JSON.parse(allocation.actual_resources_json)).toMatchObject({
-    receipt: {
-      access: {
-        host: "192.0.2.45",
-        port: 22,
-        username: "hitchlet",
-        hostKeyFingerprint: "SHA256:host",
-        clientPublicKeyFingerprint: "SHA256:client",
+    const operation = db
+      .prepare("SELECT result_json FROM operations WHERE id='operation-1'")
+      .get() as { result_json: string };
+    const allocation = db
+      .prepare(
+        "SELECT actual_resources_json FROM allocations WHERE id='allocation-1'",
+      )
+      .get() as { actual_resources_json: string };
+    expect(JSON.parse(operation.result_json)).toMatchObject({
+      access: { host: "192.0.2.45", port: port ?? 22 },
+      integrity: { state: "healthy" },
+    });
+    expect(JSON.parse(allocation.actual_resources_json)).toMatchObject({
+      receipt: {
+        access: {
+          host: "192.0.2.45",
+          port: port ?? 22,
+          username: "hitchlet",
+          hostKeyFingerprint: "SHA256:host",
+          clientPublicKeyFingerprint: "SHA256:client",
+        },
       },
-    },
-    manifestHash: "manifest-hash",
-    objects: [{ id: "vm-1" }],
-  });
-});
+      manifestHash: "manifest-hash",
+      objects: [{ id: "vm-1" }],
+    });
+  },
+);
 
 it("rejects endpoint refresh after control-version change or release begins", async () => {
   for (const fence of [
@@ -188,6 +192,7 @@ it("rejects endpoint refresh after control-version change or release begins", as
         now: 200,
         state: "healthy",
         endpointHost: "192.0.2.45",
+        endpointPort: 41002,
       }),
     ).toBe(false);
     const allocation = db

@@ -433,3 +433,71 @@ it("distinguishes an observed stopped VM from an uncertain SSH connection, and k
   ).rejects.toThrow();
   expect(f.runtime.reconcile.mock.calls.length).toBe(calls);
 });
+
+it("probes and delivers the relay endpoint, refreshes it after recovery, then closes it on exact cleanup", async () => {
+  const f = fixture();
+  const resolved = await f.options.resolveRuntime(f.plan);
+  vi.mocked(f.options.resolveRuntime).mockResolvedValue({
+    ...resolved,
+    sshRelay: {
+      host: "192.0.2.100",
+      username: "maint",
+      hostKeyFingerprint: "SHA256:" + "a".repeat(43),
+      passwordSecretRef: "secret:fixture",
+    },
+  });
+  const endpoints = {
+    ensure: vi.fn(async () => ({ host: "127.0.0.1", port: 41001 })),
+    close: vi.fn(async () => undefined),
+  };
+  const { execution } = registerHyperVExecutionProvider({
+    ...f.options,
+    endpoints,
+  });
+  const objects = await execution.create(f.plan, f.journal);
+  expect(
+    (await execution.ready(f.plan, f.inventory(objects))).access,
+  ).toMatchObject({ host: "127.0.0.1", port: 41001 });
+  expect(f.options.ssh.verify).toHaveBeenLastCalledWith(
+    expect.objectContaining({ host: "127.0.0.1", port: 41001 }),
+  );
+  expect(endpoints.ensure).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      vmId: objects[0]!.id,
+      guestHost: "192.0.2.10",
+      identity: f.plan.identity,
+    }),
+  );
+  endpoints.ensure.mockResolvedValue({ host: "127.0.0.1", port: 41002 });
+  expect(
+    await execution.inspect({ ...f.plan, executionPhase: "observe" }),
+  ).toMatchObject({
+    integrity: { state: "healthy" },
+    accessEndpointUpdate: { host: "127.0.0.1", port: 41002 },
+  });
+  await expect(execution.revokeStop(f.plan)).rejects.toThrow(
+    "durable operation",
+  );
+  expect(endpoints.close).not.toHaveBeenCalled();
+  await execution.revokeStop(f.cleanup);
+  await execution.destroy(f.cleanup, objects[0]!);
+  expect(endpoints.close).toHaveBeenCalledWith(f.cleanup.identity);
+});
+it("does not publish access when the configured remote relay is unavailable", async () => {
+  const f = fixture();
+  const resolved = await f.options.resolveRuntime(f.plan);
+  vi.mocked(f.options.resolveRuntime).mockResolvedValue({
+    ...resolved,
+    sshRelay: {
+      host: "192.0.2.100",
+      username: "maint",
+      hostKeyFingerprint: "SHA256:" + "a".repeat(43),
+      passwordSecretRef: "secret:fixture",
+    },
+  });
+  const objects = await f.execution.create(f.plan, f.journal);
+  await expect(f.execution.ready(f.plan, f.inventory(objects))).rejects.toThrow(
+    "relay transport is not configured",
+  );
+  expect(f.options.ssh.verify).not.toHaveBeenCalled();
+});

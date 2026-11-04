@@ -28,7 +28,9 @@ export async function runSshReadinessCommand(
   const clientFingerprint = fingerprint(clientKey);
   if (
     !isIPv4(input.host) ||
-    input.port !== 22 ||
+    !Number.isInteger(input.port) ||
+    input.port < 1 ||
+    input.port > 65535 ||
     !input.username ||
     !Number.isSafeInteger(input.deadlineMs) ||
     hostFingerprint !== input.hostKeyFingerprint ||

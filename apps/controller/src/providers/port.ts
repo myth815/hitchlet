@@ -150,7 +150,7 @@ export type Inspection =
         reason?: string;
       }>;
       /** Provider-verified endpoint refresh for the existing ready receipt. */
-      accessEndpointUpdate?: Readonly<{ host: string }>;
+      accessEndpointUpdate?: Readonly<{ host: string; port?: number }>;
     }
   | {
       presence: "absent";

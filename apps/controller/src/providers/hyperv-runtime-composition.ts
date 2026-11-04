@@ -1,3 +1,4 @@
+import { HyperVSshRelay } from "./hyperv-ssh-relay.js";
 import {
   AllocationCreateCalls,
   OperationWorker,
@@ -45,6 +46,7 @@ export function createHyperVExecutionComposition(
 ) {
   const now = options.now ?? Date.now;
   const readiness = createHyperVReadinessPorts();
+  const endpoints = new HyperVSshRelay(options.secrets, now);
   const execution = new HyperVExecutionProvider({
     resolveRuntime:
       options.resolveRuntime ??
@@ -73,6 +75,7 @@ export function createHyperVExecutionComposition(
       now,
     ),
     ssh: options.ssh ?? readiness.ssh,
+    endpoints,
     now,
   });
   const worker = new OperationWorker({
@@ -95,5 +98,11 @@ export function createHyperVExecutionComposition(
     now,
   });
   const leases = new LeaseService(options.storage, now);
-  return { execution, worker, tickets, leases } as const;
+  return {
+    execution,
+    worker,
+    tickets,
+    leases,
+    close: () => endpoints.closeAll(),
+  } as const;
 }
