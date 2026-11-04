@@ -112,15 +112,18 @@ export const StorageRequestSchema: z.ZodType<StorageRequest> = z
       .max(1024)
       .refine(
         (p) =>
-          !p.startsWith("/") &&
-          !/^[A-Za-z]:/.test(p) &&
-          !p.includes("\0") &&
-          !p.includes("\\") &&
-          !p.endsWith("/") &&
-          p
-            .split("/")
-            .every((part) => part !== ".." && part !== "." && part.length > 0),
-        "Must be a safe relative path",
+          p === "." ||
+          (!p.startsWith("/") &&
+            !/^[A-Za-z]:/.test(p) &&
+            !p.includes("\0") &&
+            !p.includes("\\") &&
+            !p.endsWith("/") &&
+            p
+              .split("/")
+              .every(
+                (part) => part !== ".." && part !== "." && part.length > 0,
+              )),
+        "Must be a safe relative path or explicitly authorized SMB root",
       ),
     mountPath: z
       .string()

@@ -403,3 +403,28 @@ describe("public runtime contracts", () => {
     ).toBe(false);
   });
 });
+
+it("accepts the explicit SMB-root marker syntax without accepting path traversal aliases", () => {
+  const base = {
+    storageProfileId: "00000000-0000-4000-8000-000000000001",
+    mountPath: "/workspace/library",
+    mode: "read_write",
+  };
+  expect(
+    StorageRequestSchema.safeParse({ ...base, authorizedSubpath: "." }).success,
+  ).toBe(true);
+  for (const path of [
+    "",
+    "./",
+    "./child",
+    "child/.",
+    "child/../outside",
+    "../",
+    "/",
+    "child//file",
+  ])
+    expect(
+      StorageRequestSchema.safeParse({ ...base, authorizedSubpath: path })
+        .success,
+    ).toBe(false);
+});

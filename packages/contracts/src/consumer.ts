@@ -107,7 +107,7 @@ export type { ProfileGrantRevokeRequest } from "./admin.js";
 export interface StorageRequest {
   /** 已授权存储逻辑配置标识。 */
   readonly storageProfileId: Id;
-  /** 经过授权与规范化的相对子路径。 */
+  /** 经过授权与规范化的相对子路径；仅明确授权的 SMB profile 可用 "." 选择根本身。 */
   readonly authorizedSubpath: string;
   /** 租客内绝对挂载路径；不是宿主源路径。 */
   readonly mountPath: string;

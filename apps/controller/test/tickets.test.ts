@@ -3724,3 +3724,46 @@ describe("environment request selection", () => {
     });
   });
 });
+
+it.each([
+  ["smb", ["."], true],
+  ["smb", ["project-a"], false],
+  ["local", ["."], false],
+  ["nfs", ["."], false],
+] as const)(
+  "SMB root selection requires an exact profile grant (%s %j)",
+  async (kind, paths, allowed) => {
+    const f = await fixture();
+    const consumerId = "10000000-0000-4000-8000-000000000001";
+    await f.storage.run(
+      "INSERT INTO storage_profile_revisions(id,profile_id,revision,kind,config_json,created_at_ms) VALUES('b0000000-0000-4000-8000-000000000003','b0000000-0000-4000-8000-000000000001',2,?,?,?)",
+      [
+        kind,
+        JSON.stringify({
+          sourceRef: "/exact-smb-library",
+          allowedModes: ["read_write"],
+          allowedSubpaths: paths,
+        }),
+        f.now,
+      ],
+    );
+    await f.storage.run(
+      "UPDATE storage_profiles SET current_revision_id='b0000000-0000-4000-8000-000000000003' WHERE id='b0000000-0000-4000-8000-000000000001'",
+    );
+    const attempt = f.service.acquire(consumerId, "explicit-root", {
+      ...request(),
+      storage: [
+        {
+          storageProfileId: "b0000000-0000-4000-8000-000000000001",
+          authorizedSubpath: ".",
+          mountPath: "/workspace/library",
+          mode: "read_write",
+        },
+      ],
+    });
+    if (allowed) {
+      expect(await attempt).toMatchObject({ ticketId: expect.any(String) });
+    } else
+      await expect(attempt).rejects.toThrow("frozen profile authorization");
+  },
+);

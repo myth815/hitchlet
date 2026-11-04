@@ -294,3 +294,43 @@ describe("fixed Runtime Agent storage facts", () => {
     });
   });
 });
+
+it("SMB root selection resolves the exact writable mount without relaxing ancestor protection", async () => {
+  const f = await fixture("smb");
+  await chmod(f.root, 0o777);
+  const request = f.request();
+  const rootRequest = {
+    ...request,
+    mounts: [
+      {
+        ...request.mounts[0]!,
+        authorizedSubpath: ".",
+        mode: "read_write" as const,
+      },
+    ],
+  };
+  expect(
+    (await f.worker.inspect(rootRequest)).mounts[0]?.resolvedSourceRef,
+  ).toBe(f.root);
+  // The writable leaf may be selected; a child under the same writable parent still rejects.
+  await expect(f.worker.inspect(request)).rejects.toThrow("Tenant-writable");
+  f.setHost(f.base);
+  await expect(f.worker.inspect(rootRequest)).rejects.toThrow("daemon host");
+  f.setSelf(f.base);
+  await expect(f.worker.inspect(rootRequest)).rejects.toThrow(
+    "absent or replaced",
+  );
+});
+it.each(["local", "nfs"] as const)(
+  "SMB root marker does not enable %s root selection",
+  async (protocol) => {
+    const f = await fixture(protocol);
+    const request = f.request();
+    await expect(
+      f.worker.inspect({
+        ...request,
+        mounts: [{ ...request.mounts[0]!, authorizedSubpath: "." }],
+      }),
+    ).rejects.toThrow("SMB root");
+  },
+);

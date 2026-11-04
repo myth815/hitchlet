@@ -136,6 +136,8 @@ export class ImageValidationService {
         modes = stringArray(config.allowedModes);
       if (
         !modes.includes(request.mode) ||
+        (request.authorizedSubpath === "." &&
+          (profile.kind !== "smb" || !subpaths.includes("."))) ||
         !subpaths.some(
           (p) =>
             request.authorizedSubpath === p ||

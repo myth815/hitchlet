@@ -25,10 +25,11 @@ export const runtimeStorageMountSchema = z
       .min(1)
       .refine(
         (v) =>
-          !v.startsWith("/") &&
-          !v.includes("\\") &&
-          !v.includes("\0") &&
-          v.split("/").every((p) => p !== ".." && p !== "." && p !== ""),
+          v === "." ||
+          (!v.startsWith("/") &&
+            !v.includes("\\") &&
+            !v.includes("\0") &&
+            v.split("/").every((p) => p !== ".." && p !== "." && p !== "")),
       ),
     protocol: z.enum(["local", "nfs", "smb"]),
     secretVersionRef: z.string().nullable(),
@@ -42,7 +43,11 @@ export const runtimeStorageMountSchema = z
     ),
     mode: z.enum(["read_only", "read_write"]),
   })
-  .strict();
+  .strict()
+  .refine((v) => v.authorizedSubpath !== "." || v.protocol === "smb", {
+    message: "Mount-root selection requires an explicitly authorized SMB root",
+    path: ["authorizedSubpath"],
+  });
 export const runtimeStorageRequestSchema = z
   .object({
     requestId: z.string().uuid(),
@@ -106,7 +111,7 @@ export type StorageRoot = z.infer<typeof storageRootSchema>;
 /** Bound internal mount facts; explicit Simulator sources are non-host references.
  * The real Runtime Agent request still requires absolute approved host paths. */
 export const resolvedStorageMountSchema = runtimeStorageMountSchema
-  .extend({
+  .safeExtend({
     grantRevision: z.literal(1),
     approvedSourceRef: z.string().min(1),
     resolvedSourceRef: z.string().min(1),

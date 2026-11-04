@@ -2385,3 +2385,45 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
     expect(await f.claim()).toEqual({ state: "released" });
   });
 });
+
+it.each([
+  ["smb", ["."], true],
+  ["smb", ["workspace"], false],
+  ["local", ["."], false],
+] as const)(
+  "SMB root validation enforces the same explicit grant (%s %j)",
+  async (protocol, paths, allowed) => {
+    const f = await fixture();
+    const storage = await f.admin.createProfile("storage", {
+      name: "Exact mounted subtree",
+      protocol,
+      config: {
+        sourceRef: "/exact-smb-library",
+        allowedSubpaths: [...paths],
+        allowedModes: ["read_write"],
+      },
+      authorizedConsumerIds: [f.request.requestedBy],
+    });
+    await f.db.run(
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.verifiedStorageProfileRevisionIds',json_array(?)) WHERE id=?",
+      [storage.revisionId, f.node.id],
+    );
+    const attempt = f.admin.scheduleValidation({
+      ...f.request,
+      storage: [
+        {
+          storageProfileId: storage.id,
+          authorizedSubpath: ".",
+          mountPath: "/workspace/library",
+          mode: "read_write",
+        },
+      ],
+    });
+    if (allowed)
+      expect(await attempt).toMatchObject({ operationId: expect.any(String) });
+    else
+      await expect(attempt).rejects.toThrow(
+        "Storage path or mode exceeds authorization",
+      );
+  },
+);

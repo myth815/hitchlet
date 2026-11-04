@@ -219,7 +219,9 @@ export class TicketService {
         throw new Error("Storage profile source configuration is unavailable");
       if (
         !allowedModes.includes(item.mode) ||
-        !safeSubpath(item.authorizedSubpath) ||
+        !(item.authorizedSubpath === "."
+          ? p.kind === "smb" && allowedSubpaths.includes(".")
+          : safeSubpath(item.authorizedSubpath)) ||
         !allowedSubpaths.some(
           (prefix) =>
             item.authorizedSubpath === prefix ||
