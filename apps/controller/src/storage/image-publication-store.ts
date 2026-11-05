@@ -69,6 +69,8 @@ export class SQLiteImagePublicationStore {
           | Record<string, unknown>
           | undefined;
         const caps = parseJson(String(row.current_capabilities));
+        // Reservations also advance Node.version. Reuse unchanged execution facts;
+        // the commit below still fences against the freshly read node version.
         if (
           !snapshot ||
           evidence?.source !== "provider_execution" ||
@@ -102,7 +104,6 @@ export class SQLiteImagePublicationStore {
             snapshot.providerEvidence,
             parseJson(String(row.current_provider)),
           ) ||
-          snapshot.nodeVersion !== Number(row.current_node_version) ||
           row.node_admission !== "enabled" ||
           contract.connectionRevisionId !== row.current_revision_id ||
           contract.networkRevisionId !== row.current_network ||

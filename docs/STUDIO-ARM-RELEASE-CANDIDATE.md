@@ -40,3 +40,11 @@ Proceed only after build authorization and a clean, reviewed source revision:
 6. If a create is deliberately slow or interrupted, exercise only the targeted cleanup/restart recovery path and wait for deletion to be confirmed before checking Claim release. At the end, restore only this owned acceptance stack to its declared stopped, retained state; leave unrelated services untouched.
 
 A release record is complete only after that newly built candidate and its exact paired artifacts pass this scoped acceptance. This guide does not authorize a build, deployment, external network use, or credential handling; reuse an existing authorized credential and journal path only under separate explicit deployment approval.
+
+## 2026-11-05：镜像发布与正常容量预留
+
+真实 `file0.3.6-mcp0.3.2` 验证通过后，JAV 的正常容量预留递增了同节点的 CAS version，导致旧服务把配置未变的报告拒绝为409；本次通过一个自然任务边界的短窗口完成正常验证/发布，旧成功报告和所有旧版保留，未改线上包或重启服务。
+
+源码现在以已验证的 capabilities、runtime config、provider evidence、制品/网络/存储修订及有效期决定报告能否复用，不再将历史 `snapshot.nodeVersion` 当作配置身份。提交事务仍使用**本次读取的** Node.version 做CAS，运行时探测期间发生的变更会拒绝提交，重新读取后可重试发布，无须为了普通预留重跑镜像验证。能力、配置、权限及制品变化仍不能复用旧报告。
+
+13项针对性回归与controller标准构建通过，覆盖纯version递增、真实配置/能力变化、探测时预留竞态、有效期/撤销及制品/live版本校验。这是源码修复；当前保留的0039兼容服务未切换，后续应在正常协调窗口升级，不能声称线上已消除此409。

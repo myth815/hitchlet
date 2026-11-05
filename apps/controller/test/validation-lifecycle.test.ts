@@ -1748,6 +1748,56 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
     ).toEqual(count);
   });
 
+  it("keeps a completed report usable after a later reservation only advances Node version", async () => {
+    const f = await fixture();
+    const run = await f.admin.scheduleValidation(f.request);
+    await f.worker().run(run.operationId);
+    await f.worker().run(await f.cleanupId());
+    // Tenant/validation reservation uses this same node CAS counter without changing execution facts.
+    await f.db.run("UPDATE nodes SET version=version+1 WHERE id=?", [
+      f.node.id,
+    ]);
+    await expect(
+      f.admin.publishVersion(f.draft.versionId, await f.version()),
+    ).resolves.toMatchObject({ status: "published" });
+  });
+  it.each([
+    [
+      "capabilities",
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.cpuHardLimit','unverified'),version=version+1 WHERE id=?",
+    ],
+    [
+      "runtime configuration",
+      "UPDATE nodes SET config_json=json_set(config_json,'$.runtimeProfile.accessHost','10.0.0.99'),version=version+1 WHERE id=?",
+    ],
+  ])("rejects changed node %s after a completed report", async (_name, sql) => {
+    const f = await fixture();
+    const run = await f.admin.scheduleValidation(f.request);
+    await f.worker().run(run.operationId);
+    await f.worker().run(await f.cleanupId());
+    await f.db.run(sql!, [f.node.id]);
+    await expect(
+      f.admin.publishVersion(f.draft.versionId, await f.version()),
+    ).rejects.toMatchObject({ code: "conflict" });
+  });
+  it("retains publication CAS when a reservation races the live runtime probe, then retries without revalidation", async () => {
+    const f = await fixture();
+    const run = await f.admin.scheduleValidation(f.request);
+    await f.worker().run(run.operationId);
+    await f.worker().run(await f.cleanupId());
+    const store = new SQLiteImagePublicationStore(f.db, f.now);
+    await expect(
+      store.publish(f.draft.versionId, await f.version(), async () => {
+        await f.db.run("UPDATE nodes SET version=version+1 WHERE id=?", [
+          f.node.id,
+        ]);
+        return true;
+      }),
+    ).rejects.toMatchObject({ code: "STORAGE_CAS_FAILED" });
+    await expect(
+      store.publish(f.draft.versionId, await f.version(), async () => true),
+    ).resolves.toMatchObject({ status: "published" });
+  });
   it.each([
     "create_receipt_lost",
     "create_response_lost",
