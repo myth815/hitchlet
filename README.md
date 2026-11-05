@@ -12,7 +12,7 @@ Hitchlet 将闲置计算资源变成可申请、可归还的临时环境。Agent
 
 **M2 Docker 正式交付已通过独立验收，承诺限于已验证的部署组合。** 已实现 Portainer 接入、镜像验证后发布、独立容器与 SSH 凭据、Ticket 全生命周期、恢复回收、授权持久存储、备份恢复、完整管理 API、TypeScript SDK 与中文 GUI。实现测试已通过；干净安装、正式 Dockerfile、实际浏览器及真实 Docker/NFS 闭环均已验证。实际 Mac Host 已通过可信观测进入正式准入，部分观测仅在显式批准的有人预算内接单，未知、压力和过期证据会阻止新增。逐节点证据与限制见[交付验收](docs/DOCKER-ACCEPTANCE.md)和[实施记录](docs/IMPLEMENTATION.md)。
 
-首个交付目标是 **Docker，通过 Portainer 接入**。Hyper-V 后置；Tart 已有受控源码闭环，家庭受信任任务默认 NAT，Softnet 强隔离可选。已按用户明确授权移除无条件 Tart server 启动拒绝；默认执行模式仍为 disabled，具体资源、身份、SSH 和回收检查保留。真实 VM 尚未验收，不宣称已可正式租用；见 [Tart 网络模式](docs/TART-NETWORK.md)。VM 不作为 Docker 发布前提。
+Docker / Portainer、Tart macOS / Ubuntu ARM、Hyper-V Windows x64 已分别有真实租用与回收证据；Ubuntu Docker 模板还完成了 Vesta / Prism 服务生命周期验收。Windows 默认开发模板已重建为 guest 管理员。各临时验收栈已关闭，这些事实不代表已经提供常驻统一服务。当前正式上线冲刺重点是新 Mac / Windows 的全自动接入、默认模板准备和跨机分配，现存缺口及验收边界见 [正式交付核查](docs/RELEASE-READINESS-2026-11-05.md)。家庭受信任 VM 默认 NAT，Softnet 为可选能力；Docker 既有隔离行为不变。
 
 D22b Windows 原生正常关机与 WOL 已通过软件主审，失联、执行者崩溃及登录撤销已实测；完整逐机关机/唤醒资格尚未通过。默认关闭自动电源；安装、守卫与启用条件见[原生电源说明](docs/POWER-NATIVE.md)。
 
@@ -21,7 +21,7 @@ StudioARM / Colima Docker 与 Runtime 镜像的发布候选准备和后续验收
 ## 能力
 
 - **凭票使用**：申请、排队、资源预留、准备、接用、续租和归还，异常状态可恢复。
-- **独立环境**：每次申请隔离的容器，未来扩展到虚拟机；回收完成才释放资源额度。
+- **独立环境**：每次申请独立的容器或已支持的虚拟机；回收完成才释放资源额度。
 - **镜像目录**：管理不可变镜像版本、兼容能力、验证与发布状态。
 - **人机共用**：尊重人的登录状态、保留资源和维护策略；只有经过验证的机器才启用自动节能与网络唤醒。
 - **看得见的调度**：GUI 展示机器、节点、Ticket、操作进度与等待原因。
@@ -34,7 +34,7 @@ StudioARM / Colima Docker 与 Runtime 镜像的发布候选准备和后续验收
 | 控制数据库 | 本地 SQLite，单控制实例 |
 | GUI | React / Vite，与 API 同源发布 |
 | 首个后端 | Portainer → Docker Engine |
-| 后续按需接入 | Windows Hyper-V、Apple Silicon 上的 Tart |
+| VM 后端 | Windows x64 Hyper-V、Apple Silicon 上的 Tart |
 
 ## 当前架构与权威索引
 
@@ -78,7 +78,7 @@ node docs/design/verify-schema.cjs
 
 ## 参与开发
 
-先阅读设计中的模块边界、开发任务及验收条件。优先推进 Docker 最小闭环，避免提前引入 VM、云计费、多控制端高可用等尚无实际需求的实现。
+先阅读设计中的模块边界、开发任务及验收条件。按当前实际交付范围推进，复用已验证的租约和后端能力；云计费、多控制端高可用及快照池不作为本次家庭节点接入的前置。
 
 欢迎通过 Issues 讨论问题和改进，通过 Pull Requests 提交变更。
 

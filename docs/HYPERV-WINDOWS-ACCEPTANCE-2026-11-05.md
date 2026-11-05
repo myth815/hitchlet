@@ -8,6 +8,14 @@ Hitchlet 已在家庭 Windows x64 Hyper-V 上通过真实资源租约闭环：�
 
 这是单模板、单业务票的隔离实测，未建立常驻 Windows 公共租用服务；Docker、Tart 和影音服务没有切换。
 
+## 2026-11-05 后续：默认管理员模板更新
+
+上述普通用户与三个固定旧版本失败记录保留为历史事实。后续 CLI 修复与 Prism 通过项见 [当前消费者现状](CONSUMER-READINESS.md)。用户随后明确 Windows 验收范围为 CLI，不要求 Vesta 原生全应用；Temporal 1.17.1 具有 Windows x64 目标，旧通用安装错误不足以判定上游不支持，底层加载原因未定。
+
+用户要求重建默认模板并删除旧普通用户版本，现已完成：同名 `windows11-pro-node24-amd64` 的新完整导出采用 guest 管理员 `workspace`，digest `sha256:99a7c43b59b8c3a669075bb5d85e8f360a5d2aaab4d41dcffaedd6372184ddd0`。真实克隆的生产 SSH 指纹/就绪、管理员 token、System32 专属文件写入和删除均通过；资格 VM 查实删除。新 version `42f35ac7-8fdd-467d-814f-bfec83f432cb` 正常验证为 passed / cleanup complete 并发布；该验证 VM 同样已回收。
+
+旧普通用户完整导出已删除，原准备 VM 已更新为管理员并关机，新导出保留。临时节点 disabled、容量 claim 0，Controller/Runtime/转接已停止，临时认证已清理。宿主维护账号权限未改变。没有重跑已通过的消费者套件，也没有把管理员模板更新解释为旧取消失败已修复。新主机全自动接入的实际缺口见 [正式交付核查](RELEASE-READINESS-2026-11-05.md)。
+
 ## 真实环境及制品
 
 - 宿主：DESKTOP-R9DS3H1，Hyper-V 2.0.0.0；沿用已有 Default Switch 与维护 SSH，无新增交换机、DHCP、宿主防火墙或权限设置。
