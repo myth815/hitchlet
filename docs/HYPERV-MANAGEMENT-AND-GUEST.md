@@ -90,3 +90,7 @@ Hyper-V guest 私网地址不等于 Studio 可达地址。operator 的 `runtimeP
 本增量只进行了假 SSH/假监听器、provider、SQLite 回执 CAS 及相邻 SSH 测试，没有创建真实隧道、部署节点、创建 VM 或重跑既有 Tart/Docker 实机验收。真实前置仍为合法自包含模板、guest 初始化、Runtime/mTLS 部署和一次 native SSH/租约/回收验收。
 
 本增量有限复审核查了：正常/registered 组合的进程关闭路径、精确 owner 的归还、转发流同步销毁、断连时 forwardOut 竞态、身份/凭据引用轮换、端口更新的 release/controlVersion CAS，以及直接 guest:22 的旧路径兼容。最终 controller 50 项定向检查、contracts admin 6 项通过；contracts/controller 标准构建通过。没有重复全仓测试，也没有把该源码接线报告为真实 Windows 可租。
+
+## 2026-11-05 实机状态更新
+
+Windows amd64真实资格、正常验证/发布、唯一Ticket SSH/confirmed续租/结果保存和查实回收已完成。固定Vesta CLI的3项用例实际失败，临时服务和认证已清理；这取代本文前述历史“尚未实机”的状态，不改变其他未验范围。具体修复、运行版本、模板限制及消费者失败证据见 [Windows实机验收](HYPERV-WINDOWS-ACCEPTANCE-2026-11-05.md)。

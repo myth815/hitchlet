@@ -30,6 +30,8 @@ $account = Get-LocalUser -Name $r.account -ErrorAction Stop
 function PrivateAcl([string]$path, [bool]$directory) {
     if ($directory) { $acl = New-Object Security.AccessControl.DirectorySecurity } else { $acl = New-Object Security.AccessControl.FileSecurity }
     $acl.SetAccessRuleProtection($true,$false)
+    # ssh-keygen creates the key as the bootstrap user; LocalSystem sshd requires a privileged owner.
+    $acl.SetOwner((New-Object Security.Principal.SecurityIdentifier('S-1-5-32-544')))
     foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
         $identity = New-Object Security.Principal.SecurityIdentifier($sid)
         if ($directory) {
@@ -47,7 +49,8 @@ function WriteState($state) {
     $temporary = Join-Path $root ('state-' + [Guid]::NewGuid().ToString() + '.tmp')
     $state | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $temporary -Encoding UTF8
     PrivateAcl $temporary $false
-    if (Test-Path -LiteralPath $stateFile) { [IO.File]::Replace($temporary,$stateFile,$null) }
+    # Windows PowerShell 5.1 binds $null to an empty string for this .NET string argument.
+    if (Test-Path -LiteralPath $stateFile) { [IO.File]::Replace($temporary,$stateFile,[NullString]::Value) }
     else { [IO.File]::Move($temporary,$stateFile) }
 }
 function ReadApplied($state) {

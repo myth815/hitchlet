@@ -166,8 +166,9 @@ export class TicketService {
     );
     const quota = object(parseJson(consumer.quota_json, "consumer quota"));
     const maxResources = object(quota.maxResources);
-    for (const key of ["cpuMillis", "memoryMiB", "scratchMiB"] as const)
+    for (const key of ["cpuMillis", "memoryMiB"] as const)
       positiveInteger(maxResources[key], `maxResources.${key}`);
+    nonNegativeInteger(maxResources.scratchMiB, "maxResources.scratchMiB");
     const image = request.image;
     let versionId: string;
     if ("versionId" in image) versionId = image.versionId;
@@ -534,7 +535,7 @@ export class TicketService {
             limits.memoryMiB,
             "maxResources.memoryMiB",
           ),
-          scratchMiB: positiveInteger(
+          scratchMiB: nonNegativeInteger(
             limits.scratchMiB,
             "maxResources.scratchMiB",
           ),

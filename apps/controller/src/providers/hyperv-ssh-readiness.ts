@@ -13,9 +13,8 @@ $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 $path=$null
 try {
-  $os=Get-CimInstance -ClassName Win32_OperatingSystem
-  $cpu=@(Get-CimInstance -ClassName Win32_Processor)
-  if ($os.OSType -ne 18 -or $cpu.Count -eq 0 -or @($cpu | Where-Object { $_.Architecture -ne 9 -or $_.AddressWidth -ne 64 }).Count -gt 0) { throw 'guest_environment_mismatch' }
+  # Read native OS facts without WMI access, which an ordinary SSH user need not have.
+  if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT -or [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -ne 'X64') { throw 'guest_environment_mismatch' }
   $name=[Security.Principal.WindowsIdentity]::GetCurrent().Name
   $name=$name.Substring($name.LastIndexOf('\')+1)
   $path=[IO.Path]::Combine([IO.Path]::GetTempPath(),('hitchlet-probe-'+[Guid]::NewGuid().ToString('N')))

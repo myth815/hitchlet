@@ -128,81 +128,85 @@ async function addPortainerAuditIntent(f: Awaited<ReturnType<typeof fixture>>) {
 }
 
 describe("independent D05 protocol and lease review", () => {
-  it("serves a claimed Tart private-access grant from encrypted test material", async () => {
-    const f = await fixture();
-    const keyFile = join(f.dir, "secret-master-key");
-    await writeFile(keyFile, randomBytes(32), { mode: 0o600 });
-    const secrets = await LocalSecretStore.open(f.dataDir, keyFile);
-    const privateKey = ssh2.utils.generateKeyPairSync("ed25519").private;
-    const secretRef = await secrets.put(privateKey);
-    const accessReceipt = JSON.stringify({
-      receipt: {
-        access: {
-          host: "127.0.0.1",
-          port: 22022,
-          username: "workspace",
-          hostKeyFingerprint: "SHA256:fixture-host-key-fingerprint",
+  it.each(["tart", "hyperv"] as const)(
+    "serves a claimed %s private-access grant from encrypted test material",
+    async (executionMode) => {
+      const f = await fixture();
+      const keyFile = join(f.dir, "secret-master-key");
+      await writeFile(keyFile, randomBytes(32), { mode: 0o600 });
+      const secrets = await LocalSecretStore.open(f.dataDir, keyFile);
+      const privateKey = ssh2.utils.generateKeyPairSync("ed25519").private;
+      const secretRef = await secrets.put(privateKey);
+      const accessReceipt = JSON.stringify({
+        receipt: {
+          access: {
+            host: "127.0.0.1",
+            port: 22022,
+            username: "workspace",
+            hostKeyFingerprint: "SHA256:fixture-host-key-fingerprint",
+          },
         },
-      },
-    });
-    const allocation = await f.storage.get<{ allocation_id: string }>(
-      "SELECT allocation_id FROM leases WHERE ticket_id=?",
-      [f.ready.id],
-    );
-    if (!allocation) throw new Error("Ready fixture has no allocation");
-    await f.storage.run(
-      `INSERT INTO operations(id,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms)
-       SELECT ?,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,'allocation.provision','tart-access-fixture',?,'succeeded',request_hash,json_set(intent_json,'$.executionMode','tart'),?,?,?,?
+      });
+      const allocation = await f.storage.get<{ allocation_id: string }>(
+        "SELECT allocation_id FROM leases WHERE ticket_id=?",
+        [f.ready.id],
+      );
+      if (!allocation) throw new Error("Ready fixture has no allocation");
+      await f.storage.run(
+        `INSERT INTO operations(id,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms)
+       SELECT ?,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,'allocation.provision','tart-access-fixture',?,'succeeded',request_hash,json_set(intent_json,'$.executionMode',?),?,?,?,?
        FROM operations WHERE allocation_id=? AND kind='allocation.provision' ORDER BY created_at_ms DESC LIMIT 1`,
-      [
-        randomUUID(),
-        `${allocation.allocation_id}:tart-access-fixture`,
-        f.now() + 5_000,
-        f.now() + 30_000,
-        f.now() + 5_000,
-        f.now() + 5_000,
-        allocation.allocation_id,
-      ],
-    );
-    await f.storage.run(
-      "UPDATE allocations SET access_secret_ref=?,actual_resources_json=? WHERE id=?",
-      [secretRef, accessReceipt, allocation.allocation_id],
-    );
-    const claim = await f.leases.renew(
-      f.consumerId,
-      f.ready.id,
-      "tart-access-fixture-claim",
-      f.request,
-    );
-    expect(claim.outcome).toBe("pending");
-    await f.leases.reconcilePending();
-    const app = await buildApp(
-      loadConfig({
-        DATA_DIR: f.dataDir,
-        GUI_DIR: join(f.dir, "no-gui"),
-        LOG_LEVEL: "silent",
-        EXECUTION_MODE: "tart",
-        HITCHLET_SECRET_KEY_FILE: keyFile,
-      }),
-      { storage: f.storage, secrets },
-    );
-    cleanup.push(() => app.close());
-    const response = await app.inject({
-      method: "POST",
-      url: `/v1/tickets/${f.ready.id}/access`,
-      headers: {
-        authorization: `Bearer ${f.token}`,
-        "idempotency-key": "tart-private-access-grant",
-      },
-      payload: { generation: f.request.generation },
-    });
-    expect(response.statusCode).toBe(200);
-    expect(response.headers["cache-control"]).toBe("no-store");
-    expect(response.json().authentication).toEqual({
-      kind: "ephemeral_private_key",
-      privateKey,
-    });
-  });
+        [
+          randomUUID(),
+          `${allocation.allocation_id}:tart-access-fixture`,
+          executionMode,
+          f.now() + 5_000,
+          f.now() + 30_000,
+          f.now() + 5_000,
+          f.now() + 5_000,
+          allocation.allocation_id,
+        ],
+      );
+      await f.storage.run(
+        "UPDATE allocations SET access_secret_ref=?,actual_resources_json=? WHERE id=?",
+        [secretRef, accessReceipt, allocation.allocation_id],
+      );
+      const claim = await f.leases.renew(
+        f.consumerId,
+        f.ready.id,
+        "tart-access-fixture-claim",
+        f.request,
+      );
+      expect(claim.outcome).toBe("pending");
+      await f.leases.reconcilePending();
+      const app = await buildApp(
+        loadConfig({
+          DATA_DIR: f.dataDir,
+          GUI_DIR: join(f.dir, "no-gui"),
+          LOG_LEVEL: "silent",
+          EXECUTION_MODE: executionMode,
+          HITCHLET_SECRET_KEY_FILE: keyFile,
+        }),
+        { storage: f.storage, secrets },
+      );
+      cleanup.push(() => app.close());
+      const response = await app.inject({
+        method: "POST",
+        url: `/v1/tickets/${f.ready.id}/access`,
+        headers: {
+          authorization: `Bearer ${f.token}`,
+          "idempotency-key": "tart-private-access-grant",
+        },
+        payload: { generation: f.request.generation },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json().authentication).toEqual({
+        kind: "ephemeral_private_key",
+        privateKey,
+      });
+    },
+  );
 
   it("audits ready Portainer allocations without recreating them and retains claims on unknown inspection", async () => {
     const f = await fixture();

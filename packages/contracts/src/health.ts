@@ -10,6 +10,7 @@ export const HealthResponseSchema = z
       "simulator",
       "portainer",
       "tart",
+      "hyperv",
       "registered",
     ]),
     recoveryState: z.enum(["ready", "recovering", "unavailable"]),

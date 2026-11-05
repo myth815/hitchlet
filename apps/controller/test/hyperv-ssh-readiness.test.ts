@@ -88,8 +88,12 @@ it.each(["windows", "linux"] as const)(
       const source = Buffer.from(command.split(" ").at(-1)!, "base64").toString(
         "utf16le",
       );
-      expect(source).toContain("Win32_OperatingSystem");
-      expect(source).toContain("Win32_Processor");
+      expect(source).toContain("[Environment]::OSVersion.Platform");
+      expect(source).toContain("[PlatformID]::Win32NT");
+      expect(source).toContain(
+        "[Runtime.InteropServices.RuntimeInformation]::OSArchitecture",
+      );
+      expect(source).not.toMatch(/Get-CimInstance|Get-WmiObject/);
       expect(source).toContain("[IO.File]::Delete($path)");
       expect(source).not.toContain(f.input.username);
       expect(source).not.toContain(f.input.privateKey);

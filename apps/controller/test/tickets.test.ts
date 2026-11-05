@@ -390,6 +390,30 @@ const heavierRequest = (cpuMillis: number) => ({
 
 describe("independent admission review", () => {
   const consumerId = "10000000-0000-4000-8000-000000000001";
+  it("accepts a zero scratch quota without admitting a positive scratch request", async () => {
+    const { service, storage } = await fixture();
+    await storage.run(
+      "UPDATE consumers SET quota_json=json_set(quota_json,'$.maxResources.scratchMiB',0) WHERE id=?",
+      [consumerId],
+    );
+    expect(await service.preview(consumerId, request())).toMatchObject({
+      availability: "available",
+    });
+    const accepted = await service.acquire(consumerId, "no-scratch", request());
+    expect(accepted.phase).toBe("queued");
+    expect(await service.reserveNext()).toMatchObject({
+      ticketId: accepted.ticketId,
+    });
+    await expect(
+      service.acquire(consumerId, "positive-scratch", {
+        ...request(),
+        resources: { ...request().resources, scratchMiB: 1 },
+      }),
+    ).rejects.toThrow("scratchMiB exceeds the authorized maximum");
+    expect(await storage.get("SELECT count(*) n FROM tickets")).toMatchObject({
+      n: 1n,
+    });
+  });
   it("keeps authorized requests queued while a machine temporarily drains", async () => {
     const { service, storage } = await fixture();
     await storage.run(

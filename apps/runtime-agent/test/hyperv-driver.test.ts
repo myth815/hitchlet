@@ -479,6 +479,31 @@ it("does not repeat guest mutations when initialization observation is unknown",
   });
   expect(f.applies).toBe(0);
 });
+it("reports the failed bootstrap phase without exposing channel diagnostics and recovers the original intent", async () => {
+  const f = await bootstrapFixture();
+  const failing = new HyperVLocalDriver({
+    ...f.options,
+    guestBootstrap: {
+      ...f.guest,
+      inspect: async () => {
+        throw Error("private credential diagnostic");
+      },
+    },
+  });
+  const result = await failing.bootstrapApply(f.input);
+  expect(result).toMatchObject({
+    presence: "present",
+    bootstrapStatus: "unknown",
+    reason: "guest_bootstrap_inspect_unclassified",
+  });
+  expect(JSON.stringify(result)).not.toContain("private credential diagnostic");
+  expect(f.applies).toBe(0);
+  const recovered = await f.driver.bootstrapApply(f.input);
+  expect(recovered.bootstrapStatus).toBe("applied");
+  expect(recovered.reason).toBeUndefined();
+  expect(f.applies).toBe(1);
+  expect(count(f.native, "import")).toBe(1);
+});
 it.each([
   "vmId",
   "nonce",

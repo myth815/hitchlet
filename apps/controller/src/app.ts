@@ -1651,6 +1651,7 @@ export async function buildApp(
           config.EXECUTION_MODE !== "simulator" &&
           config.EXECUTION_MODE !== "portainer" &&
           config.EXECUTION_MODE !== "tart" &&
+          config.EXECUTION_MODE !== "hyperv" &&
           config.EXECUTION_MODE !== "registered"
         )
           return reply

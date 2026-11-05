@@ -182,21 +182,26 @@ export class HyperVLocalDriver {
       m.bootstrapRequest = request;
       m.bootstrapState = "pending";
       await this.store(m);
+      let stage = "inspect";
+      let failureReason: string | undefined;
       try {
         let receipt = hyperVGuestBootstrapObservationSchema.parse(
           await this.options.guestBootstrap.inspect(request, deadlineMs),
         );
         if (Date.now() >= deadlineMs) throw Error("bootstrap_deadline_expired");
-        if (receipt.status === "not_applied")
+        if (receipt.status === "not_applied") {
+          stage = "apply";
           receipt = hyperVGuestBootstrapObservationSchema.parse(
             await this.options.guestBootstrap.apply(request, deadlineMs),
           );
+        }
         if (
           receipt.status !== "applied" ||
           Date.now() >= deadlineMs ||
           !bootstrapMatches(receipt, request)
         )
           throw Error("bootstrap_receipt_unknown_or_mismatched");
+        stage = "confirm";
         const confirmed = await this.observe(identity, m);
         if (
           confirmed.presence !== "present" ||
@@ -208,11 +213,32 @@ export class HyperVLocalDriver {
           throw Error("bootstrap_native_readback_changed");
         m.bootstrapReceipt = receipt;
         m.bootstrapState = "applied";
-      } catch {
+      } catch (error) {
         m.bootstrapState = "unknown";
+        // Only closed, non-secret categories leave the channel; never copy native diagnostics.
+        const codes = new Map([
+          ["Guest bootstrap channel failed", "channel_failed"],
+          ["Guest bootstrap channel unavailable", "channel_unavailable"],
+          ["Guest bootstrap outcome unknown: timeout", "timed_out"],
+          ["Guest bootstrap response invalid", "invalid_response"],
+          ["Guest bootstrap receipt identity mismatch", "receipt_mismatch"],
+          ["Guest bootstrap host key mismatch", "key_mismatch"],
+          ["Guest bootstrap deadline expired", "deadline_expired"],
+          ["bootstrap_deadline_expired", "deadline_expired"],
+          ["bootstrap_receipt_unknown_or_mismatched", "receipt_unconfirmed"],
+          ["bootstrap_native_readback_changed", "native_changed"],
+        ]);
+        failureReason = `guest_bootstrap_${stage}_${codes.get(error instanceof Error ? error.message : "") ?? "unclassified"}`;
       }
       await this.store(m);
-      return this.inspection(identity, await this.observe(identity, m), m);
+      const view = this.inspection(
+        identity,
+        await this.observe(identity, m),
+        m,
+      );
+      return failureReason && !view.reason
+        ? { ...view, reason: failureReason }
+        : view;
     });
   }
 
