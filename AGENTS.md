@@ -17,6 +17,8 @@
 
 2026-11-05 增量：Windows11 Pro23H2 amd64 的真实 Hyper-V 资格、正常验证发布与单业务Ticket的SSH/confirmed续租/输出保存/归还查实已完成；临时栈及认证已清理，模板关机保留。固定Vesta CLI三个governance text用例均失败，不能称消费者跨平台通过；见 `docs/HYPERV-WINDOWS-ACCEPTANCE-2026-11-05.md`。此实机结论取代上文历史“尚无guest模板/未部署/未实机”状态，但不扩展到Hyper-V Linux、激活、常驻服务或完整跨平台矩阵。
 
+2026-11-05 Docker 服务增量：新 Ubuntu ARM 8 vCPU / 16 GiB / 100 GB 模板内 Docker 29.9.3 / Compose 5.7.0 已真实资格、验证发布；单票 Vesta/Prism 服务启停、就绪及重启数据保留通过，见 `docs/TART-DOCKER-SERVICES-ACCEPTANCE-2026-11-05.md`。这是 Tart VM 内消费者 Docker 能力；未扩大 Docker backend 隔离结论。临时票、服务和认证已回收，模板关机保留。
+
 ## 实际使用与安全边界
 
 2026-11-03 用户明确：家庭受信任 Tart 任务默认 NAT，按需访问网络，不承诺强网络隔离或强制关闭 IPv6；Softnet 为显式可选能力，Docker 既有行为不放宽。独立环境、身份、额度、租约和查实回收保留。不要把可选机制或假设风险叠加成所有任务的默认门槛；保留的检查需对应具体问题。此前全局 Tart 启动 guard 移除被拒且未执行；用户随后明确批准仅移除该无条件拒绝，本次单次重试已执行，不增加替代总闸。真实工具/VM/认证/宿主设置不由源码授权自动启用。当前源码及边界见 docs/TART-NETWORK.md 和 docs/PRACTICAL-BOUNDARIES-2026-11-03.md。

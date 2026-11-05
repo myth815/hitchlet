@@ -8,6 +8,8 @@ Studio 已完成 Tart 2.41.1 / Tahoe macOS 26.6.2 / arm64、4 vCPU / 8 GiB 的�
 
 下一次运行由运维在具体允许的范围内开启专属服务和认证，返回当前 origin、授权 catalog 和配套 SDK/contracts。消费者不负责注册主机、重建账本或修改网络。现有 Docker 影音服务仍为 `0039abe` 合同：它不接受新 `guestOs` 请求字段。新服务兼容旧 Docker 请求，不等于旧服务能接受新字段；不自动升级现有服务。
 
+2026-11-05 已另行完成 8 vCPU / 16 GiB / 100 GB Ubuntu ARM Docker 模板的真实资格、正常验证发布，以及同票 Vesta/Prism 两次服务启停与重启数据保留，见 [Docker 服务实机回归](TART-DOCKER-SERVICES-ACCEPTANCE-2026-11-05.md)。模板内为 Docker 29.9.3、Compose 5.7.0；它是消费者在 Tart VM 内使用 Docker 的已验证选择。临时栈已关闭，不能把历史 image version 或 Ticket 直接当作当前接入信息。
+
 ## 1. 只声明需求
 
 沿既有保护渠道向进程提供 `HITCHLET_TOKEN`；不要写入任务 spec、源码、日志或 shell 历史。每次逻辑租用使用独立的私有 `HITCHLET_DEMO_STATE_DIR`，恢复时继续相同目录、origin 和消费者身份。
