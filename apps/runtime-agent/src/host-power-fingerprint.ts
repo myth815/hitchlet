@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
+import { wslBindingSchema, wslWorkloadSchema } from "./host-wsl.js";
 import {
   HostPowerEventSchema,
   HostPowerDirectiveSchema,
@@ -21,6 +22,18 @@ export async function powerExecutorHash() {
     "host-probes.js",
     "host-windows.ps1",
     "host-client.js",
+    "host-wsl.js",
+    "host-wsl-client.js",
+    "host-wsl-linux.js",
+    "host-wsl-platform.js",
+    "host-wsl-management.js",
+    "host-wsl-keeper.js",
+    "host-wsl-receipt.js",
+    "host-wsl-publisher.js",
+    "workloads.js",
+    "engine.js",
+    "command-exec.js",
+    "journal.js",
   ]) {
     hash
       .update(name)
@@ -31,6 +44,8 @@ export async function powerExecutorHash() {
     HostPowerEventSchema,
     HostPowerDirectiveSchema,
     hostSnapshotSchema,
+    wslBindingSchema,
+    wslWorkloadSchema,
   ])
     hash.update(JSON.stringify(z.toJSONSchema(schema)));
   return hash.digest("hex");

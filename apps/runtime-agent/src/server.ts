@@ -1,4 +1,5 @@
 import type { RuntimeStorageFacts } from "./storage.js";
+import type { RuntimeWorkloadFacts } from "./workloads.js";
 import https from "node:https";
 import type { AddressInfo } from "node:net";
 import { readFile } from "node:fs/promises";
@@ -6,6 +7,7 @@ import {
   runtimeStorageRequestSchema,
   runtimeNetworkCommandSchema,
   runtimeNetworkResultSchema,
+  runtimeWorkloadRequestSchema,
 } from "@hitchlet/contracts/internal";
 import { equalSecret } from "./canonical.js";
 import type { NetworkWorker } from "./worker.js";
@@ -23,6 +25,7 @@ export async function createRuntimeServer(
   config: ServerConfig,
   worker: NetworkWorker,
   storage?: RuntimeStorageFacts,
+  workloads?: RuntimeWorkloadFacts,
 ): Promise<https.Server> {
   const [tokenText, ca, cert, key] = await Promise.all([
     readFile(config.tokenFile, "utf8"),
@@ -40,7 +43,8 @@ export async function createRuntimeServer(
         if (
           request.method !== "POST" ||
           (request.url !== "/v1/network-actions" &&
-            request.url !== "/v1/storage-facts")
+            request.url !== "/v1/storage-facts" &&
+            request.url !== "/v1/workload-facts")
         ) {
           response.writeHead(404).end();
           return;
@@ -66,6 +70,25 @@ export async function createRuntimeServer(
           json = JSON.parse(raw);
         } catch {
           response.writeHead(400).end();
+          return;
+        }
+        if (request.url === "/v1/workload-facts") {
+          const input = runtimeWorkloadRequestSchema.safeParse(json);
+          if (!workloads || !input.success) {
+            response.writeHead(400).end();
+            return;
+          }
+          try {
+            const result = await workloads.inspect(input.data);
+            response
+              .writeHead(200, {
+                "content-type": "application/json",
+                "cache-control": "no-store",
+              })
+              .end(JSON.stringify(result));
+          } catch {
+            response.writeHead(409, { "cache-control": "no-store" }).end();
+          }
           return;
         }
         if (request.url === "/v1/storage-facts") {

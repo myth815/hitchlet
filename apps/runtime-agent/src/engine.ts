@@ -2,7 +2,11 @@ import { isFixedCommandTimeout, runFixedCommand } from "./command-exec.js";
 import { isIPv4 } from "node:net";
 import { access, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { RuntimeNetworkPlan } from "@hitchlet/contracts/internal";
+import {
+  runtimeContainerWorkloadSchema,
+  type RuntimeContainerWorkload,
+  type RuntimeNetworkPlan,
+} from "@hitchlet/contracts/internal";
 
 const LABEL = "io.hitchlet";
 type Json = Record<string, any>;
@@ -49,8 +53,15 @@ export class LocalEngine {
     return stdout.trim();
   }
 
-  async assertEngine(): Promise<string> {
+  private async assertEngineIdentity(): Promise<Json> {
     const info = await this.engineInfo();
+    if (info.ID !== this.config.nativeEngineId)
+      throw new Error("Native Engine identity mismatch");
+    return info;
+  }
+
+  async assertEngine(): Promise<string> {
+    const info = await this.assertEngineIdentity();
     const id = typeof info.ID === "string" ? info.ID : "";
     if (!id || id !== this.config.nativeEngineId)
       throw new Error("Native Engine identity mismatch");
@@ -124,6 +135,134 @@ export class LocalEngine {
     if (!root.startsWith("/") || root.includes("\0"))
       throw new Error("Invalid Docker image store root");
     return root;
+  }
+
+  /** All containers, including foreign work. Fixed projection never reads container Env/argv. */
+  async backgroundContainerIdentity(id: string) {
+    if (!/^[a-f0-9]{64}$/.test(id))
+      throw Error("Invalid background container ID");
+    await this.assertEngineIdentity();
+    const raw = await this.docker([
+      "container",
+      "inspect",
+      "--format",
+      '{"id":{{json .Id}},"imageId":{{json .Image}},"pid":{{json .State.Pid}}}',
+      id,
+    ]);
+    const value = JSON.parse(raw);
+    if (
+      value.id !== id ||
+      !/^sha256:[a-f0-9]{64}$/.test(value.imageId) ||
+      !Number.isSafeInteger(value.pid) ||
+      value.pid <= 0
+    )
+      throw Error("Background container identity changed");
+    await this.assertEngineIdentity();
+    return { id, imageId: value.imageId as string, pid: value.pid as number };
+  }
+
+  /** Read only the approved management container's port/exec identities; never its env or secrets. */
+  async backgroundContainerManagement(id: string) {
+    if (!/^[a-f0-9]{64}$/.test(id))
+      throw Error("Invalid management container ID");
+    await this.assertEngineIdentity();
+    const raw = await this.docker([
+      "container",
+      "inspect",
+      "--format",
+      '{"id":{{json .Id}},"imageId":{{json .Image}},"pid":{{json .State.Pid}},"execIds":{{json .ExecIDs}},"ports":{{json .NetworkSettings.Ports}},"networks":{{json .NetworkSettings.Networks}}}',
+      id,
+    ]);
+    const value = JSON.parse(raw);
+    if (
+      value.id !== id ||
+      !/^sha256:[a-f0-9]{64}$/.test(value.imageId) ||
+      !Number.isSafeInteger(value.pid) ||
+      value.pid <= 0 ||
+      (value.execIds !== null &&
+        (!Array.isArray(value.execIds) ||
+          value.execIds.length > 128 ||
+          value.execIds.some(
+            (x: unknown) => typeof x !== "string" || !/^[a-f0-9]{64}$/.test(x),
+          )))
+    )
+      throw Error("Management container details changed");
+    await this.assertEngineIdentity();
+    return value as {
+      id: string;
+      imageId: string;
+      pid: number;
+      execIds: string[] | null;
+      ports: Record<string, { HostIp: string; HostPort: string }[] | null>;
+      networks: Record<
+        string,
+        { IPAddress?: string; GlobalIPv6Address?: string }
+      >;
+    };
+  }
+
+  async workloadInventory(): Promise<{
+    complete: boolean;
+    containers: RuntimeContainerWorkload[];
+  }> {
+    await this.assertEngineIdentity();
+    const list = () =>
+      this.docker([
+        "container",
+        "ls",
+        "--all",
+        "--no-trunc",
+        "--format",
+        "{{.ID}} {{.State}}",
+      ]);
+    const before = await list();
+    const ids = before
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => line.split(" ")[0]!);
+    if (ids.length > 1024 || ids.some((id) => !/^[a-f0-9]{64}$/.test(id)))
+      throw Error("Container workload inventory invalid");
+    const format =
+      '{"id":{{json .Id}},"running":{{json .State.Running}},"paused":{{json .State.Paused}},"installationId":{{json (index .Config.Labels "io.hitchlet.installation")}},"runtimeIdentityId":{{json (index .Config.Labels "io.hitchlet.runtime")}},"allocationId":{{json (index .Config.Labels "io.hitchlet.allocation")}},"generation":{{json (index .Config.Labels "io.hitchlet.generation")}}}';
+    const rows: RuntimeContainerWorkload[] = [];
+    if (ids.length) {
+      const raw = await this.docker([
+        "container",
+        "inspect",
+        "--format",
+        format,
+        ...ids,
+      ]);
+      for (const line of raw.split("\n").filter(Boolean)) {
+        const value = JSON.parse(line);
+        for (const key of [
+          "installationId",
+          "runtimeIdentityId",
+          "allocationId",
+        ])
+          if (value[key] === "") value[key] = null;
+        value.generation =
+          typeof value.generation === "string" &&
+          /^[1-9]\d*$/.test(value.generation)
+            ? Number(value.generation)
+            : null;
+        rows.push(runtimeContainerWorkloadSchema.parse(value));
+      }
+    }
+    if (
+      rows.length !== ids.length ||
+      new Set(rows.map((c) => c.id)).size !== ids.length ||
+      rows.some((c) => !ids.includes(c.id))
+    )
+      throw Error("Container workload identity changed");
+    const after = await list();
+    await this.assertEngineIdentity();
+    return {
+      complete:
+        before.split("\n").sort().join("\n") ===
+        after.split("\n").sort().join("\n"),
+      containers: rows,
+    };
   }
 
   private async firewallBackend(): Promise<{

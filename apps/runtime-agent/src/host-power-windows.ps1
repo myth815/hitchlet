@@ -1,4 +1,4 @@
-param([ValidateSet('inventory','boot','permissions','watch','shutdown','abort')][string]$Action='inventory', [string]$CacheFile='', [string]$ProtectedPath='', [string]$LeaseFile='', [int]$ExecutorPid=0, [long]$ExecutorStartedTicks=0, [long]$NotAfterUptimeMs=0, [long]$ControllerNotAfterMs=0, [string]$CycleId='', [int]$WatchLauncherPid=0, [long]$WatchLauncherStartedTicks=0, [int]$WatchHelperPid=0, [long]$WatchHelperStartedTicks=0)
+param([ValidateSet('inventory','boot','permissions','watch','shutdown','abort')][string]$Action='inventory', [string]$CacheFile='', [string]$OwnedRuntimeExecutable='', [string]$ProtectedPath='', [string]$LeaseFile='', [int]$ExecutorPid=0, [long]$ExecutorStartedTicks=0, [long]$NotAfterUptimeMs=0, [long]$ControllerNotAfterMs=0, [string]$CycleId='', [int]$WatchLauncherPid=0, [long]$WatchLauncherStartedTicks=0, [int]$WatchHelperPid=0, [long]$WatchHelperStartedTicks=0)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 function Assert-PrivatePath([string]$Path) {
@@ -25,6 +25,25 @@ function Read-BootInstance {
   $start=[DateTimeOffset]::MinValue
   if ($text -cnotmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?Z$' -or ![DateTimeOffset]::TryParse($text,[Globalization.CultureInfo]::InvariantCulture,[Globalization.DateTimeStyles]::AssumeUniversal,[ref]$start) -or $start -eq [DateTimeOffset]::MinValue) {throw 'boot_event_start_invalid'}
   return @{bootRecordId=([long]$event.RecordId).ToString([Globalization.CultureInfo]::InvariantCulture);bootTime=$start.ToUniversalTime().ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ',[Globalization.CultureInfo]::InvariantCulture)}
+}
+# Reconcile one bounded sample, not an exemption for short-lived process names.
+# Failed reads are harmless only after the exact instance is confirmed absent.
+function Reconcile-NativeProcessSnapshot($Initial, $Final, $Facts, $Failed, $Ignored) {
+  $state=@{complete=$true};$diagnostics=[Collections.Generic.List[object]]::new();$before=@{};$after=@{}
+  foreach($p in $Initial){$before[[string]$p.ProcessId]=$p}
+  foreach($p in $Final){$after[[string]$p.ProcessId]=$p}
+  $kept=@($Facts|Where-Object{
+    $key=[string]$_.pid;$live=$after[$key];$old=$before[$key]
+    if(!$live){return $false}
+    if(!$old -or $old.CreationDate -isnot [DateTime] -or $live.CreationDate -isnot [DateTime] -or $old.CreationDate.ToUniversalTime().Ticks -ne $live.CreationDate.ToUniversalTime().Ticks){$state.complete=$false;$diagnostics.Add(@{kind='process_identity_changed';pid=[int]$_.pid;name=[string]$live.Name;parentPid=[int]$live.ParentProcessId})}
+    if($Failed.ContainsKey($key)){$state.complete=$false;$diagnostics.Add(@{kind='live_read_failed';pid=[int]$_.pid;name=[string]$live.Name;parentPid=[int]$live.ParentProcessId;stage=[string]$Failed[$key].stage;code=[string]$Failed[$key].code})}
+    return $true
+  })
+  foreach($p in $Final){
+    if($p.ProcessId -in $Ignored -or ($p.ParentProcessId -eq 4 -and $p.Name -in @('Registry','Memory Compression','Secure System'))){continue}
+    if(!$before.ContainsKey([string]$p.ProcessId)){$state.complete=$false;$diagnostics.Add(@{kind='new_instance';pid=[int]$p.ProcessId;name=[string]$p.Name;parentPid=[int]$p.ParentProcessId})}
+  }
+  return @{complete=[bool]$state.complete;processes=$kept;diagnostics=@($diagnostics.ToArray()|Select-Object -First 256)}
 }
 if ($Action -eq 'permissions') {Assert-PrivatePath $ProtectedPath; '{"private":true}'; exit}
 if ($CacheFile) { Assert-PrivatePath (Split-Path -Parent $CacheFile); if(Test-Path -LiteralPath $CacheFile) {Assert-PrivatePath $CacheFile} }
@@ -90,13 +109,21 @@ public static class HitchletProcessImage {
     if ($_.CategoryInfo.Category -in @('PermissionDenied','SecurityError') -or $_.Exception -is [UnauthorizedAccessException] -or $_.Exception -is [System.Security.SecurityException] -or $_.Exception.HResult -in @(-2147217405,-2147024891)) {exit 71}
     exit 70
   }
-  $complete=$true
-  $processes=@($liveProcesses | Where-Object {$_.ProcessId -notin @(0,4)} | ForEach-Object {
-    $p=$_; $path=[string]$p.ExecutablePath; $hash=''; $signed=$false; $thumbprint=''; $creationTicks=''
+  $complete=$true;$failedProcessIds=@{}
+  function Read-NativeProcessFact($p) {
+    if($p.ProcessId -in @(0,4)){return}
+    $path=[string]$p.ExecutablePath; $hash=''; $signed=$false; $thumbprint=''; $creationTicks=''
     if($p.CreationDate -is [DateTime]) {$creationTicks=$p.CreationDate.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)}
     # Kernel pseudo-processes have no userspace executable and cannot carry an arbitrary task.
     if ($p.ParentProcessId -eq 4 -and $p.Name -in @('Registry','Memory Compression','Secure System')) { return }
     if ($p.ProcessId -eq $PID -or $p.ProcessId -eq $ExecutorPid) { return }
+    # Hyper-V/WSL memory processes have no executable image. Keep them as workload
+    # blockers below without treating their documented pseudo-process shape as a failed inventory.
+    if ($p.Name -match '^vmmem(?:WSL)?$') {
+      $owner='';try{$o=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid;if($o.ReturnValue -ne 0){throw 'owner_unknown'};$owner=$o.Sid}catch{$failedProcessIds[[string]$p.ProcessId]=@{stage='owner';code='owner_sid_unavailable'}}
+      [pscustomobject]@{pid=[int]$p.ProcessId;parentPid=[int]$p.ParentProcessId;ownerSid=$owner;name=[string]$p.Name;path='';sha256='';microsoftSigned=$false;signerThumbprint='';creationTicks=$creationTicks}
+      return
+    }
     try {
       if (($WatchLauncherPid -gt 0 -and $p.ProcessId -eq $WatchLauncherPid) -or ($WatchHelperPid -gt 0 -and $p.ProcessId -eq $WatchHelperPid)) {
         $isLauncher=($p.ProcessId -eq $WatchLauncherPid)
@@ -121,7 +148,9 @@ public static class HitchletProcessImage {
         # Unknown workload images on other volumes/shares are blockers, not permission to open them.
         # The executor is identified separately above and its fixed artifacts are checked by Node.
         $path=[HitchletProcessImage]::NormalizeLocalDosPath($path)
-        if (!$env:SystemDrive -or !$path.StartsWith($env:SystemDrive+'\',[StringComparison]::OrdinalIgnoreCase)) {throw 'image_outside_system_volume'}
+        $isOwnedRuntime=$OwnedRuntimeExecutable -and [string]::Equals($path,$OwnedRuntimeExecutable,[StringComparison]::OrdinalIgnoreCase)
+        if (!$isOwnedRuntime -and (!$env:SystemDrive -or !$path.StartsWith($env:SystemDrive+'\',[StringComparison]::OrdinalIgnoreCase))) {throw 'image_outside_system_volume'}
+        if ($isOwnedRuntime) {Assert-PrivatePath $OwnedRuntimeExecutable}
         $identity=[HitchletFileIdentity]::Read($path)
         $entry=$cache[$path]
         if (!$entry -or $entry.identity -ne $identity) {
@@ -134,13 +163,76 @@ public static class HitchletProcessImage {
         }
         $hash=[string]$entry.sha256;$signed=[bool]$entry.microsoftSigned;$thumbprint=[string]$entry.signerThumbprint
       }
-    } catch {$complete=$false}
-    [pscustomobject]@{pid=[int]$p.ProcessId;parentPid=[int]$p.ParentProcessId;name=[string]$p.Name;path=$path;sha256=$hash;microsoftSigned=[bool]$signed;signerThumbprint=$thumbprint;creationTicks=$creationTicks}
-  })
+    } catch {$failedProcessIds[[string]$p.ProcessId]=@{stage='image';code='native_process_image_unverifiable'}}
+    $library=$null
+    # Only a single quoted DLL and a fixed entry point are eligible for review.
+    # General rundll32/script arguments remain unsupported workload processes.
+    if ($p.Name -ieq 'rundll32.exe' -and $signed -and $p.CommandLine -match '^(?:"[^\"]*rundll32\.exe"|[^\s"]*rundll32\.exe)\s+"([^\"]+\.dll)"\s+([A-Za-z_][A-Za-z0-9_@]*)$') {
+      $dll=$Matches[1];$entryPoint=$Matches[2]
+      try {
+        $dll=[HitchletProcessImage]::NormalizeLocalDosPath($dll)
+        if (!$dll.StartsWith($env:SystemDrive+'\',[StringComparison]::OrdinalIgnoreCase)) {throw 'library_outside_system_volume'}
+        $identity=[HitchletFileIdentity]::Read($dll)
+        $dllHash=(Get-FileHash -LiteralPath $dll -Algorithm SHA256).Hash.ToLowerInvariant()
+        $dllSig=Get-AuthenticodeSignature -LiteralPath $dll
+        if ($dllSig.Status -eq 'Valid' -and [HitchletFileIdentity]::Read($dll) -eq $identity) {
+          $library=@{path=$dll;sha256=$dllHash;signerThumbprint=$dllSig.SignerCertificate.Thumbprint;entryPoint=$entryPoint}
+        }
+      } catch {$library=$null}
+    }
+    $owner='';if(($OwnedRuntimeExecutable -and [string]::Equals($path,$OwnedRuntimeExecutable,[StringComparison]::OrdinalIgnoreCase)) -or $p.Name -match '^(wsl|wslhost|wslrelay)(\.exe)?$'){try{$o=Invoke-CimMethod -InputObject $p -MethodName GetOwnerSid;if($o.ReturnValue -ne 0){throw 'owner_unknown'};$owner=$o.Sid}catch{$failedProcessIds[[string]$p.ProcessId]=@{stage='owner';code='owner_sid_unavailable'}}}
+    [pscustomobject]@{pid=[int]$p.ProcessId;parentPid=[int]$p.ParentProcessId;ownerSid=$owner;name=[string]$p.Name;path=$path;sha256=$hash;microsoftSigned=[bool]$signed;signerThumbprint=$thumbprint;creationTicks=$creationTicks;hostedLibrary=$library}
+  }
+  $processes=@(foreach($p in $liveProcesses){Read-NativeProcessFact $p})
   $services=@($liveServices | Where-Object {$_.State -eq 'Running'} | ForEach-Object { [pscustomobject]@{name=[string]$_.Name;pid=[int]$_.ProcessId} })
   # wslservice is a daemon, not a running distribution; vmmemWSL may have no .exe suffix.
   $wslRunning=[bool](@($processes | Where-Object {$_.name -match '^(vmmem.*|wslhost|wslrelay)(\.exe)?$'}).Count -gt 0)
-  $tasks=@($liveTasks | Where-Object {$_.State -eq 'Running'} | ForEach-Object { $task=$_; foreach($a in $task.Actions) {[pscustomobject]@{path=([string]$task.TaskPath+[string]$task.TaskName);executable=[string]$a.Execute;arguments=[string]$a.Arguments}} })
+  $distributions=@();$wslLocalComplete=$true
+  if($wslRunning){
+    try {
+      $names=@(& "$env:SystemRoot\System32\wsl.exe" --list --running --quiet|ForEach-Object{($_ -replace "`0",'').Trim()}|Where-Object{$_})
+      if($LASTEXITCODE -ne 0){throw 'running_distributions_unavailable'}
+      if($names.Count){$registrations=@(Get-ChildItem 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Lxss'|ForEach-Object{Get-ItemProperty $_.PSPath})
+      foreach($name in $names){$match=@($registrations|Where-Object{$_.DistributionName -ceq $name});if($match.Count -ne 1){throw 'distribution_registration_unavailable'};$distributions+=@{name=$name;registrationId=([guid]$match[0].PSChildName).ToString()}}}
+    } catch {$wslLocalComplete=$false}
+  }
+
+  # Only fixed task definitions with a live Scheduler engine and the exact action image can be reviewed.
+  # No task XML, action data or additional command lines leave the native probe.
+  $runningEngines=@{}
+  try {$scheduler=New-Object -ComObject 'Schedule.Service';$scheduler.Connect();foreach($t in $scheduler.GetRunningTasks(1)){$runningEngines[[string]$t.Path]=@{pid=[int]$t.EnginePID;instance=[string]$t.InstanceGuid}}} catch {}
+  function Task-DefinitionHash($task) {
+    $xml=Export-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath
+    $sha=[Security.Cryptography.SHA256]::Create();try{return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes([string]$xml)))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}
+  }
+  $tasks=@($liveTasks | Where-Object {$_.State -eq 'Running'} | ForEach-Object {
+    $task=$_;$path=[string]$task.TaskPath+[string]$task.TaskName
+    $definition='';$principal='';$kind='unsupported';$image='';$hash='';$thumb='';$loaded=$false;$engine=0
+    try {
+      $definition=Task-DefinitionHash $task
+      $principal=if($task.Principal.UserId){[string]$task.Principal.UserId}else{[string]$task.Principal.GroupId}
+      if($principal -and $principal -notmatch '^S-1-'){$principal=([Security.Principal.NTAccount]$principal).Translate([Security.Principal.SecurityIdentifier]).Value}
+      if($runningEngines.ContainsKey($path)){$engine=$runningEngines[$path].pid}
+      $actions=@($task.Actions);if($actions.Count -ne 1){throw 'multiple_task_actions_not_reviewed'};$a=$actions[0]
+      if($a.CimClass.CimClassName -eq 'MSFT_TaskExecAction'){$kind='exec';$image=[Environment]::ExpandEnvironmentVariables([string]$a.Execute)}
+      elseif($a.CimClass.CimClassName -eq 'MSFT_TaskComHandlerAction') {
+        $kind='com';$cls=[string]$a.ClassId;if($cls -notmatch '^\{[0-9A-Fa-f-]{36}\}$'){throw 'task_com_identity_invalid'}
+        $key=Get-ItemProperty -LiteralPath ('Registry::HKEY_CLASSES_ROOT\CLSID\'+$cls+'\InprocServer32')
+        $image=[Environment]::ExpandEnvironmentVariables([string]$key.'(default)')
+      }
+      if(!$image -or !$image.StartsWith($env:SystemDrive+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'task_image_outside_system_volume'}
+      $identity=[HitchletFileIdentity]::Read($image);$entry=$cache['task:'+ $image]
+      if(!$entry -or $entry.identity -ne $identity){$hash=(Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash.ToLowerInvariant();$sig=Get-AuthenticodeSignature -LiteralPath $image;if($sig.Status -ne 'Valid' -or [HitchletFileIdentity]::Read($image) -ne $identity){throw 'task_image_unverified'};$entry=@{identity=$identity;sha256=$hash;signerThumbprint=$sig.SignerCertificate.Thumbprint};$cache['task:'+ $image]=$entry}
+      $hash=[string]$entry.sha256;$thumb=[string]$entry.signerThumbprint
+      $original=@($liveProcesses|Where-Object{$_.ProcessId -eq $engine});if($engine -le 4 -or $original.Count -ne 1 -or $original[0].CreationDate -isnot [DateTime]){throw 'task_engine_identity_unknown'}
+      $null=[HitchletProcessImage]::Read($engine,$original[0].CreationDate.ToUniversalTime().Ticks)
+      if($kind -eq 'com' -and $engine -gt 4){$loaded=[bool](@((Get-Process -Id $engine -ErrorAction Stop).Modules|Where-Object{[string]::Equals($_.FileName,$image,[StringComparison]::OrdinalIgnoreCase)}).Count -eq 1)}
+      elseif($kind -eq 'exec' -and $engine -gt 4){$loaded=$true}
+      $current=@($scheduler.GetRunningTasks(1)|Where-Object{$_.Path -ceq $path -and $_.EnginePID -eq $engine -and $_.InstanceGuid -ceq $runningEngines[$path].instance})
+      if($current.Count -ne 1 -or (Task-DefinitionHash $task) -cne $definition){throw 'task_definition_or_instance_changed'}
+    } catch {$loaded=$false}
+    foreach($a in $task.Actions){[pscustomobject]@{path=$path;executable=[string]$a.Execute;arguments=[string]$a.Arguments;definitionSha256=$definition;principalId=$principal;actionKind=$kind;actionPath=$image;actionSha256=$hash;actionSignerThumbprint=$thumb;enginePid=$engine;loadedActionVerified=[bool]$loaded}}
+  })
   if ($CacheFile) {
     try { $temp=$CacheFile+'.tmp'; $cache | ConvertTo-Json -Depth 5 -Compress | Set-Content -LiteralPath $temp -Encoding UTF8; Move-Item -LiteralPath $temp -Destination $CacheFile -Force }
     catch {
@@ -150,7 +242,22 @@ public static class HitchletProcessImage {
       exit 72
     }
   }
-  [pscustomobject]@{complete=[bool]$complete;wslRunning=$wslRunning;runningTasks=$tasks;bootRecordId=$boot.bootRecordId;bootTime=$boot.bootTime;processes=$processes;services=$services} | ConvertTo-Json -Depth 6 -Compress
+  try {
+    # Bounded catch-up reads identities of new instances; it never exempts them.
+    # Concurrent observer helpers and genuine jobs both enter the normal guard.
+    $endProcesses=@(Get-CimInstance Win32_Process)
+    for($round=0;$round -lt 2;$round++){
+      $seen=@{};foreach($p in $liveProcesses){$seen[[string]$p.ProcessId]=$true}
+      $new=@($endProcesses|Where-Object{!$seen.ContainsKey([string]$_.ProcessId) -and $_.ProcessId -notin @(0,4,$PID,$ExecutorPid)})
+      if(!$new.Count){break}
+      if($new.Count -gt 256){break}
+      foreach($p in $new){$liveProcesses+=@($p);$processes+=@(Read-NativeProcessFact $p)}
+      $endProcesses=@(Get-CimInstance Win32_Process)
+    }
+    $reconciled=Reconcile-NativeProcessSnapshot $liveProcesses $endProcesses $processes $failedProcessIds @(0,4,$PID,$ExecutorPid)
+    $complete=$complete -and $reconciled.complete;$processes=$reconciled.processes
+  } catch {$complete=$false;$reconciled=@{diagnostics=@(@{kind='enumeration_failed';pid=0;name='';parentPid=0})}}
+  [pscustomobject]@{complete=[bool]$complete;wslRunning=$wslRunning;runningDistributions=$distributions;localWslEnumerationComplete=$wslLocalComplete;runningTasks=$tasks;bootRecordId=$boot.bootRecordId;bootTime=$boot.bootTime;processes=$processes;services=$services;diagnostics=$reconciled.diagnostics} | ConvertTo-Json -Depth 6 -Compress
   exit
 }
 # Native local API only. Never use shutdown.exe /t (which implies force for nonzero timeouts).

@@ -552,6 +552,82 @@ const inventory = () => ({
   ],
 });
 describe("bounded local workload guard", () => {
+  it("allows signed Windows service helpers only with installation opt-in and never allows interpreters", () => {
+    const i = inventory();
+    i.processes.push({
+      pid: 70,
+      parentPid: i.services[1]!.pid,
+      name: "TiWorker.exe",
+      path: "C:\\Windows\\servicing\\TiWorker.exe",
+      sha256: "b".repeat(64),
+      microsoftSigned: true,
+      signerThumbprint: thumb,
+    });
+    expect(workloadReasons(guard, i, 100, 101)).toContain(
+      "unapproved_native_process",
+    );
+    const updated = WorkloadGuardSchema.parse({
+      ...guard,
+      signedWindowsServiceHelpers: true,
+    });
+    expect(workloadReasons(updated, i, 100, 101)).toEqual([]);
+    i.processes.at(-1)!.name = "powershell.exe";
+    expect(workloadReasons(updated, i, 100, 101)).toContain(
+      "unapproved_native_process",
+    );
+    i.processes.at(-1)!.name = "TiWorker.exe";
+    i.processes.at(-1)!.microsoftSigned = false;
+    expect(workloadReasons(updated, i, 100, 101)).toContain(
+      "unapproved_native_process",
+    );
+  });
+  it("pins a signed service DLL host to its library, entry point and service tree", () => {
+    const library = {
+      path: "C:\\Program Files\\Driver\\helper.dll",
+      sha256: "c".repeat(64),
+      signerThumbprint: thumb,
+      entryPoint: "RunHelper",
+    };
+    const reviewed = WorkloadGuardSchema.parse({
+      ...guard,
+      reviewedServices: [
+        ...guard.reviewedServices,
+        {
+          serviceName: guard.reviewedServices[0]!.serviceName,
+          path: "C:\\Windows\\System32\\rundll32.exe",
+          sha256: sha,
+          signerThumbprint: thumb,
+          hostedLibrary: library,
+        },
+      ],
+    });
+    const i = inventory();
+    i.processes.push({
+      pid: 70,
+      parentPid: i.services[0]!.pid,
+      name: "rundll32.exe",
+      path: "C:\\Windows\\System32\\rundll32.exe",
+      sha256: sha,
+      microsoftSigned: true,
+      signerThumbprint: thumb,
+      hostedLibrary: library,
+    });
+    expect(workloadReasons(reviewed, i, 100, 101)).toEqual([]);
+    for (const field of ["sha256", "entryPoint", "signerThumbprint"] as const) {
+      const changed = structuredClone(i);
+      changed.processes.at(-1)!.hostedLibrary![field] =
+        field === "entryPoint"
+          ? "Different"
+          : "d".repeat(field === "sha256" ? 64 : 40);
+      expect(workloadReasons(reviewed, changed, 100, 101)).toContain(
+        "unapproved_native_process",
+      );
+    }
+    i.processes.at(-1)!.parentPid = 4;
+    expect(workloadReasons(reviewed, i, 100, 101)).toContain(
+      "unapproved_native_process",
+    );
+  });
   it("exempts exactly the two owned live watch identities, including a launcher outside the system volume", () => {
     const owned: NativeOwnedWatchProcess[] = [
       {

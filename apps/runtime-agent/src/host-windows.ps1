@@ -7,7 +7,18 @@ using System.Collections.Generic;
 public static class HitchletSessions {
  [StructLayout(LayoutKind.Sequential)] public struct Session { public int Id; public IntPtr Station; public int State; }
  [StructLayout(LayoutKind.Sequential)] public class MemoryStatus { public uint Length = (uint)Marshal.SizeOf(typeof(MemoryStatus)); public uint Load; public ulong TotalPhysical; public ulong AvailablePhysical; public ulong TotalPageFile; public ulong AvailablePageFile; public ulong TotalVirtual; public ulong AvailableVirtual; public ulong AvailableExtendedVirtual; }
- public class Item { public int id; public string user; public string domain; public int state; public int protocol; }
+ public class Item { public int id; public string user; public string domain; public int state; public int protocol; public int sessionFlags=-1; public long? inputIdleMilliseconds=null; }
+ // WTSInfoEx level 1, Unicode ABI. The API is session-specific; never use this
+ // service's GetLastInputInfo as evidence for a different logged-in desktop.
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] public struct ExtendedLevel1 {
+   public uint SessionId; public int SessionState; public int SessionFlags;
+   [MarshalAs(UnmanagedType.ByValTStr,SizeConst=33)] public string Station;
+   [MarshalAs(UnmanagedType.ByValTStr,SizeConst=21)] public string User;
+   [MarshalAs(UnmanagedType.ByValTStr,SizeConst=18)] public string Domain;
+   public long LogonTime,ConnectTime,DisconnectTime,LastInputTime,CurrentTime;
+   public uint IncomingBytes,OutgoingBytes,IncomingFrames,OutgoingFrames,IncomingCompressedBytes,OutgoingCompressedBytes;
+ }
+ [StructLayout(LayoutKind.Sequential)] public struct Extended { public uint Level; public ExtendedLevel1 Data; }
  [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool WTSEnumerateSessions(IntPtr server,int reserved,int version,out IntPtr sessions,out int count);
  [DllImport("wtsapi32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool WTSQuerySessionInformation(IntPtr server,int session,int info,out IntPtr buffer,out int bytes);
  [DllImport("wtsapi32.dll")] static extern void WTSFreeMemory(IntPtr memory);
@@ -15,7 +26,19 @@ public static class HitchletSessions {
  public static MemoryStatus Memory() { var status=new MemoryStatus(); if(!GlobalMemoryStatusEx(status)) throw new InvalidOperationException("global_memory_status_failed"); return status; }
  static string Query(int id,int info) { IntPtr p; int bytes; if(!WTSQuerySessionInformation(IntPtr.Zero,id,info,out p,out bytes)) throw new InvalidOperationException("wts_query_failed"); try { return Marshal.PtrToStringUni(p) ?? ""; } finally { WTSFreeMemory(p); } }
  static int Protocol(int id) { IntPtr p; int bytes; if(!WTSQuerySessionInformation(IntPtr.Zero,id,16,out p,out bytes)) throw new InvalidOperationException("wts_protocol_failed"); try { if(bytes<2)throw new InvalidOperationException("wts_protocol_incomplete"); return (int)(ushort)Marshal.ReadInt16(p); } finally {WTSFreeMemory(p);} }
- public static Item[] Read() { IntPtr p; int count; if(!WTSEnumerateSessions(IntPtr.Zero,0,1,out p,out count)) throw new InvalidOperationException("wts_enumeration_failed"); var result=new List<Item>(); try { for(int i=0;i<count;i++){var s=(Session)Marshal.PtrToStructure(IntPtr.Add(p,i*Marshal.SizeOf(typeof(Session))),typeof(Session)); string user=Query(s.Id,5); if(user.Length>0)result.Add(new Item{id=s.Id,user=user,domain=Query(s.Id,7),state=s.State,protocol=Protocol(s.Id)});} } finally {WTSFreeMemory(p);} return result.ToArray(); }
+ public static long? InputAge(long last,long current) {return last>0 && current>=last ? (long?)((current-last)/10000) : null;}
+ static void ReadExtended(Item item,bool supported) {
+   if(!supported)return;IntPtr p;int bytes;
+   if(!WTSQuerySessionInformation(IntPtr.Zero,item.id,25,out p,out bytes))return;
+   try {
+     if(bytes<Marshal.SizeOf(typeof(Extended)))return;
+     var e=(Extended)Marshal.PtrToStructure(p,typeof(Extended));
+     if(e.Level!=1 || e.Data.SessionId!=(uint)item.id || e.Data.SessionState!=item.state || !String.Equals(e.Data.User,item.user,StringComparison.OrdinalIgnoreCase) || !String.Equals(e.Data.Domain,item.domain,StringComparison.OrdinalIgnoreCase))return;
+     if(e.Data.SessionFlags==0 || e.Data.SessionFlags==1)item.sessionFlags=e.Data.SessionFlags;
+     item.inputIdleMilliseconds=InputAge(e.Data.LastInputTime,e.Data.CurrentTime);
+   } finally {WTSFreeMemory(p);}
+ }
+ public static Item[] Read(bool supported) { IntPtr p; int count; if(!WTSEnumerateSessions(IntPtr.Zero,0,1,out p,out count)) throw new InvalidOperationException("wts_enumeration_failed"); var result=new List<Item>(); try { for(int i=0;i<count;i++){var s=(Session)Marshal.PtrToStructure(IntPtr.Add(p,i*Marshal.SizeOf(typeof(Session))),typeof(Session)); string user=Query(s.Id,5); if(user.Length>0){var item=new Item{id=s.Id,user=user,domain=Query(s.Id,7),state=s.State,protocol=Protocol(s.Id)};ReadExtended(item,supported);result.Add(item);}} } finally {WTSFreeMemory(p);} return result.ToArray(); }
 }
 '@
 $system = Get-CimInstance -ClassName Win32_ComputerSystem
@@ -30,4 +53,7 @@ $nativeIdentityAvailable = $validUuid -and -not [string]::IsNullOrWhiteSpace([st
 $virtualModel = ($vendor + ' ' + $model) -match 'Virtual|VMware|KVM|QEMU|Xen|Parallels|Hyper-V|Amazon|Google'
 if (Test-Path 'HKLM:\SYSTEM\CurrentControlSet\Control\ContainerType') { $virtualModel = $true }
 $memory = [HitchletSessions]::Memory()
-[pscustomobject]@{ physical = [bool]($nativeIdentityAvailable -and -not $virtualModel); complete = $true; sessions = @([HitchletSessions]::Read()); memoryAvailableTotalBytes = $memory.TotalPhysical; memoryAvailableBytes = $memory.AvailablePhysical } | ConvertTo-Json -Depth 5 -Compress
+# Windows 7/2008 R2 reversed SessionFlags. They are outside this Windows 10+ path;
+# leave extended facts unknown instead of interpreting that legacy ABI as modern.
+$osVersion=[version](Get-CimInstance Win32_OperatingSystem).Version
+[pscustomobject]@{ physical = [bool]($nativeIdentityAvailable -and -not $virtualModel); complete = $true; sessions = @([HitchletSessions]::Read($osVersion.Major -ge 10)); memoryAvailableTotalBytes = $memory.TotalPhysical; memoryAvailableBytes = $memory.AvailablePhysical } | ConvertTo-Json -Depth 5 -Compress

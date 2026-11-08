@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { powerExecutorHash } from "./host-power-fingerprint.js";
 import { NativeShutdownWatchdog } from "./host-power-watchdog.js";
+import { collectHostWsl } from "./host-wsl-client.js";
 import { readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { execFile } from "node:child_process";
@@ -31,6 +32,7 @@ import {
   WorkloadInventorySchema,
   guardHash,
   workloadReasons,
+  workloadObservationComplete,
   NativePowerExecutor,
   powerEvidence,
   type PowerJournal,
@@ -63,6 +65,7 @@ async function privateJson(path: string) {
   return JSON.parse(await readFile(path, "utf8")) as unknown;
 }
 let nativeCacheFile = "";
+let ownedRuntimeExecutable = "";
 let executorStartedTicks = "";
 let failurePhase: NativePowerPhase = "startup";
 let failureJournalFile: string | undefined;
@@ -107,6 +110,9 @@ function native(
             ]
           : []),
         ...(nativeCacheFile ? ["-CacheFile", nativeCacheFile] : []),
+        ...(ownedRuntimeExecutable
+          ? ["-OwnedRuntimeExecutable", ownedRuntimeExecutable]
+          : []),
         ...(ownedWatch.length === 2
           ? [
               "-WatchLauncherPid",
@@ -156,6 +162,7 @@ async function main() {
     throw new Error("native_windows_power_only");
   if (process.argv[2] === "inventory") {
     nativeCacheFile = process.argv[3] ?? "";
+    ownedRuntimeExecutable = process.argv[4] ?? "";
     process.stdout.write((await native("inventory")).text);
     return;
   }
@@ -166,6 +173,7 @@ async function main() {
   failurePhase = "config";
   const config = configSchema.parse(await privateJson(configPath)),
     guard = WorkloadGuardSchema.parse(await privateJson(config.guardFile));
+  ownedRuntimeExecutable = guard.ownedRuntime?.executable ?? "";
   failurePhase = "permissions";
   for (const file of [
     configPath,
@@ -216,16 +224,46 @@ async function main() {
     const inventory = WorkloadInventorySchema.parse(JSON.parse(i.text));
     if (nativeBootId(inventory.bootRecordId, inventory.bootTime) !== bootId)
       throw new Error("native_boot_evidence_changed");
+    // Every prepare/commit reads a fresh exact-user receipt or samples the local owner.
+    let wsl: unknown;
+    if (inventory.wslRunning && guard.wslObservation) {
+      try {
+        await native("permissions", guard.wslObservation.file);
+        wsl = await privateJson(guard.wslObservation.file);
+      } catch {
+        wsl = undefined;
+      }
+    } else if (inventory.wslRunning) {
+      wsl = await Promise.all(
+        inventory.runningDistributions.map(async (live) => {
+          const binding = guard.wslDistributions.find(
+            (b) =>
+              b.name === live.name && b.registrationId === live.registrationId,
+          );
+          if (!binding) return null;
+          try {
+            return await collectHostWsl(binding);
+          } catch {
+            return null;
+          }
+        }),
+      );
+    }
     const reasons = workloadReasons(
       guard,
       inventory,
       process.pid,
       i.pid,
       ownedWatch,
+      wsl,
     );
     if ((await powerExecutorHash()) !== executorHash)
       reasons.push("executor_artifact_changed");
-    const evidence = powerEvidence(e, reasons.length === 0);
+    const evidence = powerEvidence(
+      e,
+      reasons.length === 0,
+      workloadObservationComplete(reasons),
+    );
     latestSafetySample = {
       safe: nativePowerEvidenceIsSafe(evidence),
       startedAtMonotonicMs,

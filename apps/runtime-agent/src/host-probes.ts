@@ -295,6 +295,14 @@ const windowsOutput = z
         domain: z.string(),
         state: z.number().int().nonnegative(),
         protocol: z.number().int().nonnegative(),
+        sessionFlags: z.number().int().optional(),
+        inputIdleMilliseconds: z
+          .number()
+          .int()
+          .nonnegative()
+          .safe()
+          .nullable()
+          .optional(),
       }),
     ),
   })
@@ -311,6 +319,25 @@ export function parseWindowsSessions(
     d.memoryAvailableTotalBytes,
     "windows_global_memory_status_ex",
   );
+  const lockKnown = d.sessions.every(
+    (s) => s.sessionFlags === 0 || s.sessionFlags === 1,
+  );
+  const statesKnown = d.sessions.every((s) => s.state === 0 || s.state === 4);
+  // A recent-input measurement is not an idle/shutdown policy. Any logged-in
+  // session still protects the Machine, even when locked, disconnected or quiet.
+  const interactions = d.sessions.map((s) =>
+    s.sessionFlags === 0 || s.state === 4
+      ? false
+      : s.inputIdleMilliseconds !== null &&
+          s.inputIdleMilliseconds !== undefined
+        ? s.inputIdleMilliseconds <= 5000
+        : ("unknown" as const),
+  );
+  const interaction: boolean | "unknown" = interactions.some((x) => x === true)
+    ? true
+    : interactions.some((x) => x === "unknown")
+      ? "unknown"
+      : false;
   return {
     physical: d.physical,
     sessions: d.sessions.map((s) => ({
@@ -328,19 +355,17 @@ export function parseWindowsSessions(
           : s.state === 4
             ? "disconnected"
             : "unknown",
-      locked: "unknown",
+      locked:
+        s.sessionFlags === 0 ? true : s.sessionFlags === 1 ? false : "unknown",
     })),
-    complete: d.complete && d.sessions.length === 0,
-    activeInteraction:
-      d.sessions.length === 0 && d.complete ? false : "unknown",
+    complete:
+      d.complete && lockKnown && statesKnown && interaction !== "unknown",
+    activeInteraction: d.complete ? interaction : "unknown",
     errors: [
-      ...(d.complete && d.sessions.length === 0
-        ? []
-        : [
-            d.complete
-              ? "windows_lock_state_unknown"
-              : "windows_session_enumeration_incomplete",
-          ]),
+      ...(!d.complete ? ["windows_session_enumeration_incomplete"] : []),
+      ...(!lockKnown ? ["windows_lock_state_unknown"] : []),
+      ...(!statesKnown ? ["windows_session_state_unknown"] : []),
+      ...(interaction === "unknown" ? ["windows_input_state_unknown"] : []),
       ...(!memory ? ["windows_memory_availability_unknown"] : []),
     ],
     ...(memory ? { memory } : {}),

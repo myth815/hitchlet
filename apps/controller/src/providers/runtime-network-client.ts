@@ -14,6 +14,9 @@ import {
   type RuntimeNetworkCommand,
   type RuntimeNetworkPlan,
   type RuntimeNetworkResult,
+  runtimeWorkloadRequestSchema,
+  runtimeWorkloadResultSchema,
+  type RuntimeWorkloadRequest,
 } from "@hitchlet/contracts/internal";
 import type { RuntimeNetworkPort } from "./runtime-network-port.js";
 
@@ -23,6 +26,7 @@ type CommandInput = Omit<RuntimeNetworkCommand, "contentHash">;
 /** Only fixed Runtime Agent POST routes may use the authenticated exchange. */
 export type RuntimeAgentJsonPath =
   | "/v1/network-actions"
+  | "/v1/workload-facts"
   | "/v1/storage-facts"
   | "/v1/tart/actions"
   | "/v1/tart/facts"
@@ -36,6 +40,36 @@ export type RuntimeAgentJsonTransport = Readonly<{
     timeoutMs?: number,
   ): Promise<unknown>;
 }>;
+
+/** Uses the ordinary authenticated Runtime transport; incomplete facts never become idle. */
+export async function readRuntimeWorkloadFacts(
+  transport: RuntimeAgentJsonTransport,
+  input: RuntimeWorkloadRequest,
+  now = Date.now,
+) {
+  const request = runtimeWorkloadRequestSchema.parse(input);
+  const started = now();
+  const result = runtimeWorkloadResultSchema.parse(
+    await transport.exchangeJson("/v1/workload-facts", request, 5000),
+  );
+  if (
+    Object.entries(request).some(
+      ([key, value]) => result[key as keyof RuntimeWorkloadRequest] !== value,
+    )
+  )
+    throw Error("Runtime workload response identity mismatch");
+  const observed = Date.parse(result.observedAt);
+  if (observed > now() || now() - observed >= 5000 || now() - started >= 5000)
+    throw Error("Runtime workload response is stale");
+  if (
+    (!result.complete ||
+      result.pendingCommandCount ||
+      !result.native.complete) &&
+    result.workloadState === "idle"
+  )
+    throw Error("Incomplete Runtime workload cannot be idle");
+  return result;
+}
 
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(canonicalRuntimeNetworkValue(value)).digest("hex")}`;
@@ -134,6 +168,7 @@ export class RuntimeAgentHttpTransport implements RuntimeAgentJsonTransport {
       ![
         "/v1/network-actions",
         "/v1/storage-facts",
+        "/v1/workload-facts",
         "/v1/tart/actions",
         "/v1/tart/facts",
         "/v1/hyperv/actions",

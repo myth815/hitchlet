@@ -1,8 +1,18 @@
+import {
+  wslReceiptPolicySchema,
+  validateWslReceipt,
+  type wslReceiptSchema,
+} from "./host-wsl-receipt.js";
 import { HostRequestError, isTransientHostFailure } from "./host-client.js";
 import { createHash, randomUUID } from "node:crypto";
 import { uptime } from "node:os";
 import { z } from "zod";
 import { NativeBootRecordSchema } from "./host-power-storage.js";
+import {
+  wslBindingSchema,
+  runningWslSchema,
+  wslWorkloadReasons,
+} from "./host-wsl.js";
 import type {
   HostPowerDirective,
   HostPowerEvent,
@@ -210,7 +220,29 @@ const serviceNameSchema = z
   .regex(/^[^/\\\u0000-\u001f\u007f-\u009f]+$/)
   .refine((name) => name.trim().length > 0, "Service name must not be blank");
 
-/** Local operator approves a finite OS-only baseline; arbitrary workload executables are unsupported. */
+const hostedLibrarySchema = z
+  .object({
+    path: z.string().regex(/^[a-zA-Z]:\\/),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    signerThumbprint: z.string().regex(/^[A-Fa-f0-9]{40}$/),
+    entryPoint: z.string().regex(/^[A-Za-z_][A-Za-z0-9_@]*$/),
+  })
+  .strict();
+
+/** Exact task definition and action identity, never a publisher-wide exemption. */
+const reviewedTaskSchema = z
+  .object({
+    path: z.string().startsWith("\\").max(1024),
+    definitionSha256: z.string().regex(/^[a-f0-9]{64}$/),
+    principalId: z.string().min(1).max(256),
+    actionKind: z.enum(["exec", "com"]),
+    executable: z.string().regex(/^[a-zA-Z]:\\/),
+    sha256: z.string().regex(/^[a-f0-9]{64}$/),
+    signerThumbprint: z.string().regex(/^[A-Fa-f0-9]{40}$/),
+  })
+  .strict();
+
+/** Local operator approves a finite service baseline; arbitrary workload executables are unsupported. */
 export const WorkloadGuardSchema = z
   .object({
     version: z.literal(1),
@@ -229,6 +261,7 @@ export const WorkloadGuardSchema = z
       .min(1)
       .max(256),
     systemServices: z.array(serviceNameSchema).max(256),
+    signedWindowsServiceHelpers: z.boolean().default(false),
     reviewedServices: z
       .array(
         z
@@ -237,11 +270,15 @@ export const WorkloadGuardSchema = z
             path: z.string().regex(/^[a-zA-Z]:\\/),
             sha256: z.string().regex(/^[a-f0-9]{64}$/),
             signerThumbprint: z.string().regex(/^[A-Fa-f0-9]{40}$/),
+            hostedLibrary: hostedLibrarySchema.optional(),
           })
           .strict(),
       )
       .max(64)
       .default([]),
+    reviewedTasks: z.array(reviewedTaskSchema).max(64).default([]),
+    wslDistributions: z.array(wslBindingSchema).max(16).default([]),
+    wslObservation: wslReceiptPolicySchema.optional(),
     agentTask: z
       .object({
         path: z.string().startsWith("\\"),
@@ -250,20 +287,70 @@ export const WorkloadGuardSchema = z
       })
       .strict()
       .optional(),
+    /** The installed, ACL-protected Hitchlet Node binary also runs the supervisor and Runtime. */
+    ownedRuntime: z
+      .object({
+        executable: z.string(),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type WorkloadGuard = z.infer<typeof WorkloadGuardSchema>;
-export const guardHash = (g: WorkloadGuard) =>
-  createHash("sha256").update(JSON.stringify(g)).digest("hex");
+export const guardHash = (g: WorkloadGuard) => {
+  const { reviewedTasks, wslDistributions, wslObservation, ...legacy } = g;
+  return createHash("sha256")
+    .update(
+      JSON.stringify(
+        reviewedTasks.length || wslDistributions.length || wslObservation
+          ? g
+          : legacy,
+      ),
+    )
+    .digest("hex");
+};
 export const WorkloadInventorySchema = NativeBootRecordSchema.extend({
   complete: z.boolean(),
+  diagnostics: z
+    .array(
+      z
+        .object({
+          kind: z.enum([
+            "process_identity_changed",
+            "live_read_failed",
+            "new_instance",
+            "enumeration_failed",
+          ]),
+          pid: z.number().int().nonnegative(),
+          name: z.string().max(260),
+          parentPid: z.number().int().nonnegative(),
+          stage: z.string().max(64).optional(),
+          code: z.string().max(256).optional(),
+        })
+        .strict(),
+    )
+    .max(256)
+    .optional(),
   wslRunning: z.boolean(),
+  runningDistributions: z.array(runningWslSchema).max(16).default([]),
+  localWslEnumerationComplete: z.boolean().default(true),
   runningTasks: z.array(
     z
       .object({
         path: z.string(),
         executable: z.string(),
         arguments: z.string(),
+        definitionSha256: z.string().default(""),
+        principalId: z.string().default(""),
+        actionKind: z
+          .enum(["exec", "com", "unsupported"])
+          .default("unsupported"),
+        actionPath: z.string().default(""),
+        actionSha256: z.string().default(""),
+        actionSignerThumbprint: z.string().default(""),
+        enginePid: z.number().int().nonnegative().default(0),
+        loadedActionVerified: z.boolean().default(false),
       })
       .strict(),
   ),
@@ -272,11 +359,13 @@ export const WorkloadInventorySchema = NativeBootRecordSchema.extend({
       .object({
         pid: z.number().int(),
         parentPid: z.number().int(),
+        ownerSid: z.string().default(""),
         name: z.string(),
         path: z.string(),
         sha256: z.string(),
         microsoftSigned: z.boolean(),
         signerThumbprint: z.string(),
+        hostedLibrary: hostedLibrarySchema.nullable().optional(),
         creationTicks: z
           .string()
           .regex(/^[0-9]*$/)
@@ -300,6 +389,8 @@ export function workloadReasons(
   selfPid: number,
   probePid: number,
   ownedWatch: readonly NativeOwnedWatchProcess[] = [],
+  wslEvidence?: unknown,
+  now = Date.now(),
 ) {
   const parsed = WorkloadInventorySchema.safeParse(raw);
   if (!parsed.success) return ["workload_inventory_invalid"];
@@ -328,14 +419,70 @@ export function workloadReasons(
       !ownedWatch.every((h) => i.processes.some((p) => matchesWatch(p, h))))
   )
     reasons.push("owned_watch_identity_unproven");
-  if (i.wslRunning) reasons.push("running_wsl_workload");
+  let receipt: z.infer<typeof wslReceiptSchema> | undefined;
+  if (i.wslRunning && g.wslObservation) {
+    try {
+      receipt = validateWslReceipt(
+        wslEvidence,
+        g.wslObservation,
+        i,
+        g.ownedRuntime,
+        now,
+      );
+      i.runningDistributions = receipt.runningDistributions;
+      wslEvidence = receipt.workloads;
+    } catch {
+      reasons.push("wsl_receipt_invalid");
+      wslEvidence = undefined;
+    }
+  }
+  const wslReasons = i.wslRunning
+    ? wslWorkloadReasons(
+        g.wslDistributions,
+        i.runningDistributions,
+        wslEvidence,
+        now,
+      )
+    : [];
+  if (i.wslRunning && wslReasons.length)
+    reasons.push("running_wsl_workload", ...wslReasons);
+  const reviewedTask = (t: (typeof i.runningTasks)[number]) =>
+    (receipt !== undefined &&
+      t.path === g.wslObservation?.producerTask &&
+      t.enginePid === receipt.producerPid) ||
+    g.reviewedTasks.some(
+      (r) =>
+        r.path === t.path &&
+        r.definitionSha256 === t.definitionSha256 &&
+        r.principalId === t.principalId &&
+        r.actionKind === t.actionKind &&
+        r.executable.toLowerCase() === t.actionPath.toLowerCase() &&
+        r.sha256 === t.actionSha256 &&
+        r.signerThumbprint.toLowerCase() ===
+          t.actionSignerThumbprint.toLowerCase() &&
+        t.enginePid > 4 &&
+        t.loadedActionVerified &&
+        i.processes.some(
+          (p) =>
+            p.pid === t.enginePid &&
+            (t.actionKind === "com"
+              ? p.name.toLowerCase() === "taskhostw.exe" &&
+                p.microsoftSigned &&
+                /^[a-z]:\\windows\\/i.test(p.path)
+              : p.path.toLowerCase() === r.executable.toLowerCase() &&
+                p.sha256 === r.sha256 &&
+                p.signerThumbprint.toLowerCase() ===
+                  r.signerThumbprint.toLowerCase()),
+        ),
+    );
   if (
     i.runningTasks.some(
       (t) =>
-        !g.agentTask ||
-        t.path !== g.agentTask.path ||
-        t.executable.toLowerCase() !== g.agentTask.executable.toLowerCase() ||
-        t.arguments !== g.agentTask.arguments,
+        !reviewedTask(t) &&
+        (!g.agentTask ||
+          t.path !== g.agentTask.path ||
+          t.executable.toLowerCase() !== g.agentTask.executable.toLowerCase() ||
+          t.arguments !== g.agentTask.arguments),
     )
   )
     reasons.push("running_scheduled_task");
@@ -351,12 +498,79 @@ export function workloadReasons(
   for (const p of i.processes) {
     const owned = watchChain && ownedWatch.some((h) => matchesWatch(p, h));
     if (p.pid === selfPid || p.pid === probePid || owned) continue;
+    // Only this task's actual engine process; children remain ordinary workloads.
+    if (
+      i.runningTasks.some((t) => t.enginePid === p.pid && reviewedTask(t)) &&
+      !/^(?:wsl|bash|pwsh|powershell|cmd|node|python.*|java.*|dotnet|cscript|wscript|mshta|rundll32|wmic|ssh|docker.*)(?:\.exe)?$/i.test(
+        p.name,
+      )
+    )
+      continue;
+    if (
+      g.ownedRuntime &&
+      g.agentTask &&
+      p.path.toLowerCase() === g.ownedRuntime.executable.toLowerCase() &&
+      p.sha256 === g.ownedRuntime.sha256 &&
+      g.agentTask.executable.toLowerCase() === p.path.toLowerCase()
+    )
+      continue;
+    if (receipt && i.wslRunning && !wslReasons.length) {
+      const sameCreation = (a: string, b: string) =>
+        a.length === b.length &&
+        a.endsWith("0") &&
+        a.slice(0, -1) === b.slice(0, -1);
+      const isKeeper = (candidate: (typeof i.processes)[number]) =>
+        candidate.pid === receipt.keeper.pid &&
+        candidate.parentPid === receipt.producerPid &&
+        sameCreation(candidate.creationTicks, receipt.keeper.startedTicks) &&
+        candidate.ownerSid === receipt.ownerSid &&
+        /^[a-z]:\\windows\\system32\\wsl\.exe$/i.test(candidate.path) &&
+        candidate.microsoftSigned;
+      const keeper = isKeeper(p);
+      // Store WSL redirects the owned System32 launcher to this exact child.
+      // Other wsl.exe callers and descendants remain ordinary workloads.
+      const keeperRedirector =
+        p.parentPid === receipt.keeper.pid &&
+        p.ownerSid === receipt.ownerSid &&
+        /^[a-z]:\\program files\\wsl\\wsl\.exe$/i.test(p.path) &&
+        p.microsoftSigned &&
+        g.systemExecutables.some(
+          (e) => e.name.toLowerCase() === "wsl.exe" && e.sha256 === p.sha256,
+        ) &&
+        i.processes.some(isKeeper);
+      const nativeWsl =
+        p.ownerSid === receipt.ownerSid &&
+        /^(wslhost|wslrelay)\.exe$/i.test(p.name) &&
+        /^[a-z]:\\program files\\wsl\\/i.test(p.path) &&
+        p.microsoftSigned &&
+        g.systemExecutables.some(
+          (e) =>
+            e.name.toLowerCase() === p.name.toLowerCase() &&
+            e.sha256 === p.sha256,
+        );
+      const wslMemory =
+        p.name.toLowerCase() === "vmmemwsl" &&
+        /^S-1-5-83-1-/.test(p.ownerSid) &&
+        i.services.some(
+          (s) => s.name === "vmcompute" && serviceOwns(p.pid, s.pid),
+        );
+      if (keeper || keeperRedirector || nativeWsl || wslMemory) continue;
+    }
     // A finite reviewed service executable is allowed only in that running service's process tree.
     const reviewed = g.reviewedServices.some(
       (e) =>
         e.path.toLowerCase() === p.path.toLowerCase() &&
         e.sha256 === p.sha256 &&
         e.signerThumbprint.toLowerCase() === p.signerThumbprint.toLowerCase() &&
+        (e.hostedLibrary
+          ? !!p.hostedLibrary &&
+            e.hostedLibrary.path.toLowerCase() ===
+              p.hostedLibrary.path.toLowerCase() &&
+            e.hostedLibrary.sha256 === p.hostedLibrary.sha256 &&
+            e.hostedLibrary.signerThumbprint.toLowerCase() ===
+              p.hostedLibrary.signerThumbprint.toLowerCase() &&
+            e.hostedLibrary.entryPoint === p.hostedLibrary.entryPoint
+          : !p.hostedLibrary) &&
         i.services.some(
           (s) => s.name === e.serviceName && serviceOwns(p.pid, s.pid),
         ),
@@ -368,17 +582,25 @@ export function workloadReasons(
     const os =
       /^[a-z]:\\windows\\/i.test(p.path) &&
       p.microsoftSigned &&
-      g.systemExecutables.some(
+      (g.systemExecutables.some(
         (e) =>
           e.name.toLowerCase() === p.name.toLowerCase() &&
           e.sha256 === p.sha256,
-      );
+      ) ||
+        (g.signedWindowsServiceHelpers &&
+          i.services.some((s) => serviceOwns(p.pid, s.pid))));
     // OpenSSH's listening service may be reviewed; per-connection children remain interactive blockers.
     const sshListener =
       p.name.toLowerCase() === "sshd.exe" &&
       i.services.some((s) => s.pid === p.pid && s.name === "sshd");
     if (
-      interpreter ||
+      (interpreter &&
+        !(
+          p.name.toLowerCase() === "rundll32.exe" &&
+          p.microsoftSigned &&
+          p.hostedLibrary &&
+          reviewed
+        )) ||
       (!os && !reviewed) ||
       (p.name.toLowerCase() === "sshd.exe" && !sshListener)
     )
@@ -388,6 +610,16 @@ export function workloadReasons(
     if (
       s.pid !== selfPid &&
       !g.systemServices.includes(s.name) &&
+      !(
+        g.signedWindowsServiceHelpers &&
+        i.processes.some(
+          (p) =>
+            p.pid === s.pid &&
+            /^[a-z]:\\windows\\/i.test(p.path) &&
+            p.microsoftSigned &&
+            p.sha256,
+        )
+      ) &&
       !g.reviewedServices.some((e) => e.serviceName === s.name)
     )
       reasons.push("unapproved_running_service");
@@ -646,7 +878,20 @@ export class NativePowerExecutor {
     }
   }
 }
-/** Upgrading partial/null requires this explicit opt-in guard, complete native sessions and resources. */
+/** Known busy work is a complete observation, while missing/changed facts remain unknown. */
+export function workloadObservationComplete(reasons: readonly string[]) {
+  return reasons.every((reason) =>
+    [
+      "running_wsl_workload",
+      "wsl_unmanaged_native_work",
+      "wsl_container_work",
+      "running_scheduled_task",
+      "unapproved_native_process",
+      "unapproved_running_service",
+    ].includes(reason),
+  );
+}
+/** Upgrading partial/null requires complete native measurements, independently of idle/busy. */
 export function powerEvidence(
   e: Pick<
     HostSnapshot,
@@ -659,6 +904,7 @@ export function powerEvidence(
     | "errorCodes"
   >,
   clear: boolean,
+  workloadComplete = clear,
 ) {
   const sessionsComplete =
     e.sessionsComplete ||
@@ -671,8 +917,9 @@ export function powerEvidence(
           ].includes(c),
       ));
   const complete =
-    clear &&
+    workloadComplete &&
     sessionsComplete &&
+    e.activeInteraction !== "unknown" &&
     e.resources !== null &&
     !e.errorCodes.some(
       (c) =>
@@ -684,7 +931,11 @@ export function powerEvidence(
     ...e,
     sessionsComplete,
     unmanagedActivityHold: clear ? false : true,
-    probeStatus: complete ? ("complete" as const) : e.probeStatus,
+    probeStatus: complete
+      ? ("complete" as const)
+      : e.probeStatus === "complete"
+        ? ("partial" as const)
+        : e.probeStatus,
     errorCodes: complete
       ? []
       : [
