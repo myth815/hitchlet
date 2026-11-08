@@ -35,8 +35,13 @@ async function fixture(input: {
       id TEXT PRIMARY KEY, ticket_id TEXT, desired_state TEXT, control_version INTEGER,
       actual_resources_json TEXT, observed_state TEXT, version INTEGER, updated_at_ms INTEGER
     );
-    CREATE TABLE tickets (id TEXT PRIMARY KEY, phase TEXT);
+    CREATE TABLE tickets (id TEXT PRIMARY KEY, phase TEXT, consumer_id TEXT, version INTEGER DEFAULT 1);
     CREATE TABLE installations (singleton INTEGER PRIMARY KEY, controller_epoch INTEGER);
+    CREATE TABLE events (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, aggregate_type TEXT, aggregate_id TEXT,
+      aggregate_version INTEGER, event_type TEXT, consumer_id TEXT,
+      occurred_at_ms INTEGER, payload_json TEXT
+    );
   `);
   const receipt = {
     identity: { allocationId: "allocation-1", controlVersion: 7 },
@@ -54,9 +59,10 @@ async function fixture(input: {
     objects: [{ id: "vm-1" }],
   };
   db.prepare("INSERT INTO installations VALUES(1, 3)").run();
-  db.prepare("INSERT INTO tickets VALUES(?, ?)").run(
+  db.prepare("INSERT INTO tickets(id,phase,consumer_id) VALUES(?, ?, ?)").run(
     "ticket-1",
     input.phase ?? "ready",
+    "consumer-1",
   );
   db.prepare("INSERT INTO allocations VALUES(?, ?, ?, ?, ?, ?, ?, ?)").run(
     "allocation-1",
@@ -204,5 +210,124 @@ it("rejects endpoint refresh after control-version change or release begins", as
       JSON.parse(allocation.actual_resources_json).receipt.access.host,
     ).toBe("192.0.2.44");
     expect(allocation.observed_state).toBe("running");
+    expect(db.prepare("SELECT * FROM events").all()).toHaveLength(0);
   }
+});
+
+it("journals unknown and recovery transitions once, retaining the unknown cause", async () => {
+  const { db, store } = await fixture({});
+  expect(
+    await store.recordIntegrityAudit({
+      operationId: "operation-1",
+      allocationId: "allocation-1",
+      ticketId: "ticket-1",
+      token: "audit-token",
+      operationVersion: 9,
+      controlVersion: 7,
+      epoch: 3,
+      now: 200,
+      state: "unknown",
+      reason: "ssh_verification_failed",
+    }),
+  ).toBe(true);
+  db.prepare(
+    "UPDATE operations SET owner_token='audit-token-2' WHERE id=?",
+  ).run("operation-1");
+  expect(
+    await store.recordIntegrityAudit({
+      operationId: "operation-1",
+      allocationId: "allocation-1",
+      ticketId: "ticket-1",
+      token: "audit-token-2",
+      operationVersion: 10,
+      controlVersion: 7,
+      epoch: 3,
+      now: 300,
+      state: "unknown",
+      reason: "ssh_verification_failed",
+    }),
+  ).toBe(true);
+  db.prepare(
+    "UPDATE operations SET owner_token='audit-token-3' WHERE id=?",
+  ).run("operation-1");
+  expect(
+    await store.recordIntegrityAudit({
+      operationId: "operation-1",
+      allocationId: "allocation-1",
+      ticketId: "ticket-1",
+      token: "audit-token-3",
+      operationVersion: 11,
+      controlVersion: 7,
+      epoch: 3,
+      now: 400,
+      state: "healthy",
+    }),
+  ).toBe(true);
+  const events = db
+    .prepare(
+      "SELECT aggregate_type,aggregate_id,event_type,consumer_id,payload_json FROM events ORDER BY id",
+    )
+    .all() as Array<Record<string, string>>;
+  expect(events).toHaveLength(2);
+  expect(events[0]).toMatchObject({
+    aggregate_type: "ticket",
+    aggregate_id: "ticket-1",
+    event_type: "allocation.observation_unknown",
+    consumer_id: "consumer-1",
+  });
+  expect(JSON.parse(events[0]!.payload_json!)).toMatchObject({
+    allocationId: "allocation-1",
+    operationId: "operation-1",
+    reason: "ssh_verification_failed",
+  });
+  expect(events[1]!.event_type).toBe("allocation.observation_recovered");
+  expect(JSON.parse(events[1]!.payload_json!)).toMatchObject({
+    allocationId: "allocation-1",
+    operationId: "operation-1",
+  });
+  expect(JSON.parse(events[0]!.payload_json!).reason).toBe(
+    "ssh_verification_failed",
+  );
+});
+
+it("does not expose unsafe reasons in events or emit an event after a CAS miss", async () => {
+  const { db, store } = await fixture({});
+  expect(
+    await store.recordIntegrityAudit({
+      operationId: "operation-1",
+      allocationId: "allocation-1",
+      ticketId: "ticket-1",
+      token: "audit-token",
+      operationVersion: 9,
+      controlVersion: 7,
+      epoch: 3,
+      now: 200,
+      state: "unknown",
+      reason: "raw-secret-value E:/private/path",
+    }),
+  ).toBe(true);
+  const safeEvent = db.prepare("SELECT payload_json FROM events").get() as {
+    payload_json: string;
+  };
+  expect(safeEvent.payload_json).not.toContain("raw-secret-value");
+  expect(JSON.parse(safeEvent.payload_json).reason).toBe(
+    "integrity_observation_failed",
+  );
+
+  const cas = await fixture({});
+  expect(
+    await cas.store.recordIntegrityAudit({
+      operationId: "operation-1",
+      allocationId: "allocation-1",
+      ticketId: "ticket-1",
+      token: "wrong-token",
+      operationVersion: 9,
+      controlVersion: 7,
+      epoch: 3,
+      now: 200,
+      state: "unknown",
+      reason: "raw-secret-value",
+    }),
+  ).toBe(false);
+  expect(cas.db.prepare("SELECT * FROM events").all()).toHaveLength(0);
 });

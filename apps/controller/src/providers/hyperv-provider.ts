@@ -159,17 +159,22 @@ export class HyperVExecutionProvider implements ExecutionPort {
     return [resource];
   }
   async inspect(plan: ProvisionPlan): Promise<Inspection> {
+    let failureReason: Extract<Inspection, { presence: "unknown" }>["reason"] =
+      "runtime_resolution_failed";
     try {
       const resolved =
         plan.executionPhase === "cleanup"
           ? await this.cleanupRuntime(plan)
           : await this.runtime(plan);
+      failureReason = "native_inventory_failed";
       const got = await inspect(resolved.runtime, plan);
       if (got.presence === "unknown")
-        return { presence: "unknown", reason: "inventory_incomplete" };
+        return unknown("native_inventory_incomplete");
       if (got.presence === "absent") {
-        if (plan.executionPhase === "cleanup")
+        if (plan.executionPhase === "cleanup") {
+          failureReason = "ssh_endpoint_failed";
           await this.options.endpoints?.close(plan.identity);
+        }
         return {
           presence: "absent",
           evidence: {
@@ -190,9 +195,13 @@ export class HyperVExecutionProvider implements ExecutionPort {
           },
           integrity: { state: "lost", reason: "native_vm_not_running" },
         };
-      if (plan.executionPhase !== "cleanup") assertVm(got, plan);
+      if (plan.executionPhase !== "cleanup") {
+        failureReason = "native_facts_unverified";
+        assertVm(got, plan);
+      }
       if (plan.executionPhase === "observe") {
         const receipt = got.bootstrapReceipt;
+        failureReason = "access_facts_changed";
         const material = await this.options.accessMaterials.readExisting(
           plan.identity.allocationId,
         );
@@ -230,7 +239,9 @@ export class HyperVExecutionProvider implements ExecutionPort {
           this.now() >= plan.deadlineMs
         )
           throw Error("Hyper-V observed access facts changed");
+        failureReason = "ssh_endpoint_failed";
         const endpoint = await this.endpoint(plan, resolved, got.vm.id, host);
+        failureReason = "ssh_verification_failed";
         const probe = await this.options.ssh.verify({
           ...endpoint,
           username: receipt.account,
@@ -253,6 +264,7 @@ export class HyperVExecutionProvider implements ExecutionPort {
           this.now() >= plan.deadlineMs
         )
           throw Error("Hyper-V observed SSH evidence mismatch");
+        failureReason = "final_native_recheck_failed";
         const final = await inspect(resolved.runtime, plan);
         assertVm(final, plan);
         if (
@@ -282,8 +294,12 @@ export class HyperVExecutionProvider implements ExecutionPort {
           objects: [this.resource(plan, got)],
         },
       };
-    } catch {
-      return { presence: "unknown", reason: "inventory_incomplete" };
+    } catch (error) {
+      return unknown(
+        error instanceof RuntimeIdentityMismatch
+          ? "runtime_identity_mismatch"
+          : failureReason,
+      );
     }
   }
   async ready(
@@ -650,7 +666,17 @@ function sameOwner(a: VmAllocationIdentity, b: VmAllocationIdentity) {
   return equal(owner(a), owner(b));
 }
 function assertIdentity(a: VmAllocationIdentity, b: VmAllocationIdentity) {
-  if (!equal(a, b)) throw Error("Hyper-V action identity mismatch");
+  if (!equal(a, b)) throw new RuntimeIdentityMismatch();
+}
+class RuntimeIdentityMismatch extends Error {
+  constructor() {
+    super("Hyper-V action identity mismatch");
+  }
+}
+function unknown(
+  reason: Extract<Inspection, { presence: "unknown" }>["reason"],
+): Inspection {
+  return { presence: "unknown", reason };
 }
 function binding(p: ProvisionPlan) {
   return {

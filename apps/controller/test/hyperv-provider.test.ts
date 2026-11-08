@@ -312,6 +312,18 @@ it("retains unknown cleanup and does not confuse release intent with absence", a
   );
   expect((await f.execution.inspect(f.cleanup)).presence).toBe("unknown");
 });
+it("keeps endpoint close failures distinct when cleanup inventory confirms absence", async () => {
+  const f = fixture();
+  f.options.endpoints = {
+    ensure: vi.fn(async () => ({ host: "127.0.0.1", port: 22 })),
+    close: vi.fn().mockRejectedValue(Error("private relay detail")),
+  };
+  const { execution } = registerHyperVExecutionProvider(f.options);
+  expect(await execution.inspect(f.cleanup)).toEqual({
+    presence: "unknown",
+    reason: "ssh_endpoint_failed",
+  });
+});
 it("rejects foreign owner and missing cleanup authorization before native delete", async () => {
   const f = fixture();
   const objects = await f.execution.create(f.plan, f.journal);
@@ -377,6 +389,128 @@ it("does not claim strong network isolation or platform mounts it cannot deliver
     ),
   ).rejects.toThrow("existing trusted network");
   expect(f.runtime.reconcile).not.toHaveBeenCalled();
+});
+
+it("keeps safe reasons for runtime resolution and native inventory failures", async () => {
+  const f = fixture();
+  const observe = { ...f.plan, executionPhase: "observe" as const };
+  (f.options.resolveRuntime as any).mockRejectedValue(
+    Error("secret path E:\\private\\runtime and token=secret"),
+  );
+  expect(await f.execution.inspect(observe)).toEqual({
+    presence: "unknown",
+    reason: "runtime_resolution_failed",
+  });
+
+  const g = fixture();
+  (g.runtime.inspect as any).mockRejectedValue(
+    Error("secret credential and E:\\private\\runtime"),
+  );
+  expect(await g.execution.inspect(observe)).toEqual({
+    presence: "unknown",
+    reason: "native_inventory_failed",
+  });
+});
+
+it("preserves runtime identity mismatch and native incomplete outcomes", async () => {
+  const f = fixture();
+  f.setObservation({
+    ...f.observation,
+    identity: { ...f.plan.identity, allocationId: "other" },
+  });
+  expect(
+    await f.execution.inspect({ ...f.plan, executionPhase: "observe" }),
+  ).toEqual({ presence: "unknown", reason: "runtime_identity_mismatch" });
+
+  const g = fixture();
+  g.setObservation({
+    ...g.observation,
+    presence: "unknown",
+    inventoryComplete: false,
+  });
+  expect(
+    await g.execution.inspect({ ...g.plan, executionPhase: "observe" }),
+  ).toEqual({ presence: "unknown", reason: "native_inventory_incomplete" });
+});
+
+it("identifies access, endpoint, SSH, and final native recheck failures", async () => {
+  const observe = (plan: ProvisionPlan) => ({
+    ...plan,
+    executionPhase: "observe" as const,
+  });
+  const readyFixture = async () => {
+    const f = fixture();
+    const resources = await f.execution.create(f.plan, f.journal);
+    await f.execution.ready(f.plan, f.inventory(resources));
+    return f;
+  };
+
+  const native = await readyFixture();
+  native.setObservation({
+    ...native.observation,
+    vm: { ...native.observation.vm!, cpus: 3 },
+  });
+  expect(await native.execution.inspect(observe(native.plan))).toMatchObject({
+    presence: "unknown",
+    reason: "native_facts_unverified",
+  });
+
+  const access = await readyFixture();
+  access.setObservation({
+    ...access.observation,
+    bootstrapReceipt: {
+      ...access.observation.bootstrapReceipt!,
+      account: "changed-account",
+    },
+  });
+  expect(await access.execution.inspect(observe(access.plan))).toMatchObject({
+    presence: "unknown",
+    reason: "access_facts_changed",
+  });
+
+  const endpoint = await readyFixture();
+  const relayRuntime = await endpoint.options.resolveRuntime(endpoint.plan);
+  (endpoint.options.resolveRuntime as any).mockResolvedValue({
+    ...relayRuntime,
+    sshRelay: {},
+  });
+  expect(
+    await endpoint.execution.inspect(observe(endpoint.plan)),
+  ).toMatchObject({
+    presence: "unknown",
+    reason: "ssh_endpoint_failed",
+  });
+
+  const ssh = await readyFixture();
+  (ssh.options.ssh.verify as any).mockRejectedValue(
+    Error("private key contents must not escape"),
+  );
+  expect(await ssh.execution.inspect(observe(ssh.plan))).toMatchObject({
+    presence: "unknown",
+    reason: "ssh_verification_failed",
+  });
+
+  const final = await readyFixture();
+  (final.runtime.inspect as any)
+    .mockResolvedValueOnce(final.observation)
+    .mockRejectedValueOnce(Error("private native path"));
+  expect(await final.execution.inspect(observe(final.plan))).toMatchObject({
+    presence: "unknown",
+    reason: "final_native_recheck_failed",
+  });
+});
+
+it("returns healthy after all read-only native, access, SSH, and final checks pass", async () => {
+  const f = fixture();
+  const resources = await f.execution.create(f.plan, f.journal);
+  await f.execution.ready(f.plan, f.inventory(resources));
+  expect(
+    await f.execution.inspect({ ...f.plan, executionPhase: "observe" }),
+  ).toMatchObject({
+    presence: "present",
+    integrity: { state: "healthy" },
+    accessEndpointUpdate: { host: "192.0.2.10", port: 22 },
+  });
 });
 
 it("continues exact owned-file cleanup after native inventory is unknown, without claiming absence early", async () => {

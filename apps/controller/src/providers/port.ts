@@ -162,7 +162,17 @@ export type Inspection =
     }
   | {
       presence: "unknown";
-      reason: "runtime_identity_mismatch" | "inventory_incomplete";
+      reason:
+        | "runtime_identity_mismatch"
+        | "inventory_incomplete"
+        | "runtime_resolution_failed"
+        | "native_inventory_failed"
+        | "native_inventory_incomplete"
+        | "native_facts_unverified"
+        | "access_facts_changed"
+        | "ssh_endpoint_failed"
+        | "ssh_verification_failed"
+        | "final_native_recheck_failed";
     };
 export type ReadyReceipt = Readonly<{
   identity: ProvisionIdentity;

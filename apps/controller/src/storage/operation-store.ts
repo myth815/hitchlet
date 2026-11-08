@@ -76,7 +76,7 @@ export class SQLiteOperationStore {
     );
     if (result.changes !== 1n) return undefined;
     // Reserve the next check time before the network call, so a transient
-    // failure cannot cause a hot loop. The final report replaces the state.
+    // failure cannot cause a hot loop.
     await this.db.run(
       "UPDATE operations SET result_json=json_set(COALESCE(result_json,'{}'),'$.integrity',json_object('state','checking','nextCheckAtMs',?)) WHERE id=? AND owner_token=?",
       [now + intervalMs, operationId, token],
@@ -163,6 +163,26 @@ export class SQLiteOperationStore {
             input.controlVersion,
           ],
           expectChanges: 1,
+        },
+        {
+          kind: "run",
+          sql: "INSERT INTO events(aggregate_type,aggregate_id,aggregate_version,event_type,consumer_id,occurred_at_ms,payload_json) SELECT 'ticket',t.id,t.version,?,t.consumer_id,?,json(?) FROM tickets t JOIN allocations a ON a.ticket_id=t.id WHERE t.id=? AND a.id=? AND a.observed_state=?",
+          params: [
+            input.state === "healthy"
+              ? "allocation.observation_recovered"
+              : "allocation.observation_unknown",
+            input.now,
+            JSON.stringify({
+              allocationId: input.allocationId,
+              operationId: input.operationId,
+              ...(input.state === "unknown"
+                ? { reason: safeObservationReason(input.reason) }
+                : {}),
+            }),
+            input.ticketId,
+            input.allocationId,
+            input.state === "healthy" ? "unknown" : "running",
+          ],
         },
         {
           kind: "run",
@@ -937,4 +957,10 @@ export class SQLiteOperationStore {
       },
     ]);
   }
+}
+
+function safeObservationReason(reason: string | null | undefined): string {
+  return reason && /^[a-z][a-z0-9_]{0,63}$/.test(reason)
+    ? reason
+    : "integrity_observation_failed";
 }
