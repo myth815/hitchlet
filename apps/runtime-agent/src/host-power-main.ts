@@ -2,6 +2,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import { powerExecutorHash } from "./host-power-fingerprint.js";
 import { NativeShutdownWatchdog } from "./host-power-watchdog.js";
 import { collectHostWsl } from "./host-wsl-client.js";
+import { validateWslReceipt, wslReceiptSchema } from "./host-wsl-receipt.js";
 import { readFile, stat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { execFile } from "node:child_process";
@@ -15,6 +16,9 @@ import {
   NativeBootRecordSchema,
   saveNativeShutdownAttemptFailure,
   type NativeShutdownCheckpoint,
+  saveNativeWorkloadObservation,
+  nativeReceiptFailureCode,
+  type NativeWorkloadObservation,
 } from "./host-power-storage.js";
 import {
   HostPowerDirectiveSchema,
@@ -214,13 +218,17 @@ async function main() {
     `${config.journalFile}.watchdog-lease.json`,
   );
   let latestSafetySample: NativeSafetySample | null = null;
+  let lastIncompleteObservation: NativeWorkloadObservation | null = null;
   async function collect() {
     // An interrupted/failed sample cannot leave an older safety result reusable.
     latestSafetySample = null;
     const startedAtMonotonicMs = nativeUptimeMs();
     const ownedWatch = watchdog.ownedProcesses;
-    const i = await native("inventory", undefined, undefined, ownedWatch),
-      e = await collectHostEvidence("win32");
+    const inventoryStartedAtMs = Date.now();
+    const i = await native("inventory", undefined, undefined, ownedWatch);
+    const inventoryEndedAtMs = Date.now();
+    const e = await collectHostEvidence("win32");
+    const hostProbeEndedAtMs = Date.now();
     const inventory = WorkloadInventorySchema.parse(JSON.parse(i.text));
     if (nativeBootId(inventory.bootRecordId, inventory.bootTime) !== bootId)
       throw new Error("native_boot_evidence_changed");
@@ -249,6 +257,7 @@ async function main() {
         }),
       );
     }
+    const workloadCheckedAtMs = Date.now();
     const reasons = workloadReasons(
       guard,
       inventory,
@@ -256,6 +265,7 @@ async function main() {
       i.pid,
       ownedWatch,
       wsl,
+      workloadCheckedAtMs,
     );
     if ((await powerExecutorHash()) !== executorHash)
       reasons.push("executor_artifact_changed");
@@ -264,6 +274,69 @@ async function main() {
       reasons.length === 0,
       workloadObservationComplete(reasons),
     );
+    const parsedReceipt = wslReceiptSchema.safeParse(wsl);
+    let receiptStage: NativeWorkloadObservation["receipt"]["stage"] =
+      !inventory.wslRunning
+        ? "not_running"
+        : !guard.wslObservation
+          ? "not_configured"
+          : "invalid";
+    let receiptCode: string | null = null;
+    if (inventory.wslRunning && guard.wslObservation) {
+      try {
+        validateWslReceipt(
+          wsl,
+          guard.wslObservation,
+          inventory,
+          guard.ownedRuntime,
+          workloadCheckedAtMs,
+        );
+        receiptStage = "valid";
+      } catch (error) {
+        receiptCode = nativeReceiptFailureCode(error);
+      }
+    }
+    const observation: NativeWorkloadObservation = {
+      observedAt: new Date(workloadCheckedAtMs).toISOString(),
+      executorPid: process.pid,
+      guardHash: hash,
+      executorHash,
+      inventoryStartedAtMs,
+      inventoryEndedAtMs,
+      hostProbeEndedAtMs,
+      workloadCheckedAtMs,
+      inventoryComplete: inventory.complete,
+      baseProbeStatus: e.probeStatus,
+      baseErrorCodes: e.errorCodes,
+      diagnostics: inventory.diagnostics ?? [],
+      receipt: {
+        stage: receiptStage,
+        code: receiptCode,
+        observedAt: parsedReceipt.success
+          ? parsedReceipt.data.observedAt
+          : null,
+        ageMs: parsedReceipt.success
+          ? workloadCheckedAtMs - Date.parse(parsedReceipt.data.observedAt)
+          : null,
+        producerPid: parsedReceipt.success
+          ? parsedReceipt.data.producerPid
+          : null,
+      },
+      reasons,
+      workloadComplete: workloadObservationComplete(reasons),
+      sessionsComplete: evidence.sessionsComplete,
+      sessionCount: evidence.sessions.length,
+      activeInteraction: evidence.activeInteraction,
+      probeStatus: evidence.probeStatus,
+    };
+    if (evidence.probeStatus !== "complete")
+      lastIncompleteObservation = observation;
+    // Diagnostics never change safety/admission or add a probe. A failed write is not reusable safety evidence.
+    await saveNativeWorkloadObservation(
+      config.journalFile,
+      observation,
+      lastIncompleteObservation,
+    ).catch(() => {});
     latestSafetySample = {
       safe: nativePowerEvidenceIsSafe(evidence),
       startedAtMonotonicMs,

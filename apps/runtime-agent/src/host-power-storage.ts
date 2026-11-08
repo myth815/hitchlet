@@ -75,6 +75,183 @@ export async function saveNativePowerFailure(
     await unlink(temp).catch(() => {});
   }
 }
+
+const workloadReasonCodes = new Set([
+  "workload_inventory_invalid",
+  "workload_inventory_incomplete",
+  "owned_watch_identity_unproven",
+  "wsl_receipt_invalid",
+  "running_wsl_workload",
+  "running_scheduled_task",
+  "unapproved_native_process",
+  "unapproved_running_service",
+  "executor_artifact_changed",
+  "wsl_workload_evidence_missing",
+  "wsl_distribution_coverage_incomplete",
+  "wsl_distribution_unbound",
+  "wsl_background_policy_changed",
+  "wsl_workload_evidence_stale",
+  "wsl_distribution_identity_changed",
+  "wsl_native_inventory_incomplete",
+  "wsl_engine_coverage_incomplete",
+  "wsl_container_inventory_incomplete",
+  "wsl_management_identity_unproven",
+  "wsl_container_work",
+  "wsl_unmanaged_native_work",
+]);
+const receiptFailureCodes = new Set([
+  "wsl_receipt_stale_or_unbound",
+  "wsl_receipt_producer_changed",
+  "wsl_receipt_task_changed",
+  "wsl_owner_coverage_incomplete",
+]);
+/** Never retain a raw exception from a file/schema/identity check. */
+export function nativeReceiptFailureCode(error: unknown) {
+  return error instanceof Error && receiptFailureCodes.has(error.message)
+    ? error.message
+    : "wsl_receipt_schema_or_read_failed";
+}
+export type NativeWorkloadObservation = {
+  observedAt: string;
+  executorPid: number;
+  guardHash: string;
+  executorHash: string;
+  inventoryStartedAtMs: number;
+  inventoryEndedAtMs: number;
+  hostProbeEndedAtMs: number;
+  workloadCheckedAtMs: number;
+  inventoryComplete: boolean;
+  baseProbeStatus: "complete" | "partial" | "failed";
+  baseErrorCodes: readonly string[];
+  diagnostics: readonly {
+    kind: string;
+    pid: number;
+    parentPid: number;
+    stage?: string | undefined;
+    code?: string | undefined;
+  }[];
+  receipt: {
+    stage: "not_running" | "not_configured" | "valid" | "invalid";
+    code: string | null;
+    observedAt: string | null;
+    ageMs: number | null;
+    producerPid: number | null;
+  };
+  reasons: readonly string[];
+  workloadComplete: boolean;
+  sessionsComplete: boolean;
+  sessionCount: number;
+  activeInteraction: boolean | "unknown";
+  probeStatus: "complete" | "partial" | "failed";
+};
+/** Fixed fields only: no native process argv, names, paths, environment or raw errors. */
+function workloadObservationRecord(o: NativeWorkloadObservation) {
+  return {
+    observedAt: o.observedAt,
+    executorPid: o.executorPid,
+    guardHash: o.guardHash,
+    executorHash: o.executorHash,
+    inventoryStartedAtMs: o.inventoryStartedAtMs,
+    inventoryEndedAtMs: o.inventoryEndedAtMs,
+    hostProbeEndedAtMs: o.hostProbeEndedAtMs,
+    workloadCheckedAtMs: o.workloadCheckedAtMs,
+    inventoryComplete: o.inventoryComplete,
+    baseProbeStatus: o.baseProbeStatus,
+    baseErrorCodes: [
+      ...new Set(
+        o.baseErrorCodes
+          .slice(0, 16)
+          .map((code) =>
+            [
+              "windows_input_state_unknown",
+              "windows_lock_state_unknown",
+              "windows_memory_availability_unknown",
+              "windows_session_enumeration_incomplete",
+              "windows_session_state_unknown",
+              "windows_wts_shape_unknown",
+              "unmanaged_activity_unproven",
+            ].includes(code)
+              ? code
+              : "unknown_host_probe_code",
+          ),
+      ),
+    ],
+    diagnostics: o.diagnostics.slice(0, 32).map((d) => ({
+      kind: [
+        "process_identity_changed",
+        "live_read_failed",
+        "new_instance",
+        "enumeration_failed",
+      ].includes(d.kind)
+        ? d.kind
+        : "unknown",
+      pid: d.pid,
+      parentPid: d.parentPid,
+      stage: ["image", "owner", "creation"].includes(d.stage ?? "")
+        ? d.stage
+        : null,
+      code: [
+        "native_process_image_unverifiable",
+        "owner_sid_unavailable",
+      ].includes(d.code ?? "")
+        ? d.code
+        : null,
+    })),
+    diagnosticCount: o.diagnostics.length,
+    receipt: {
+      stage: o.receipt.stage,
+      code:
+        o.receipt.code === null
+          ? null
+          : nativeReceiptFailureCode(new Error(o.receipt.code)),
+      observedAt: o.receipt.observedAt,
+      ageMs: o.receipt.ageMs,
+      producerPid: o.receipt.producerPid,
+    },
+    reasons: [
+      ...new Set(
+        o.reasons
+          .slice(0, 32)
+          .map((r) =>
+            workloadReasonCodes.has(r) ? r : "unknown_workload_reason",
+          ),
+      ),
+    ],
+    workloadComplete: o.workloadComplete,
+    sessionsComplete: o.sessionsComplete,
+    sessionCount: o.sessionCount,
+    activeInteraction: o.activeInteraction,
+    probeStatus: o.probeStatus,
+  };
+}
+/** One bounded latest record plus the last incomplete sample, in the existing trusted journal directory. */
+export async function saveNativeWorkloadObservation(
+  journalFile: string,
+  latest: NativeWorkloadObservation,
+  lastIncomplete: NativeWorkloadObservation | null,
+) {
+  const path = `${journalFile}.workload-observation.json`,
+    temp = `${path}.${randomUUID()}.tmp`;
+  try {
+    const f = await open(temp, "wx", 0o600);
+    try {
+      await f.writeFile(
+        JSON.stringify({
+          latest: workloadObservationRecord(latest),
+          lastIncomplete: lastIncomplete
+            ? workloadObservationRecord(lastIncomplete)
+            : null,
+        }),
+      );
+      await f.sync();
+    } finally {
+      await f.close();
+    }
+    await rename(temp, path);
+  } finally {
+    await unlink(temp).catch(() => {});
+  }
+}
 export type NativeShutdownCheckpoint = {
   phase: "watch_arm" | "preflight" | "native_shutdown";
   elapsedMs: number;
