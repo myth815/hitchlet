@@ -2,7 +2,11 @@ import { open, mkdir, rename, unlink } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { PowerJournal, NativePowerDiagnostic } from "./host-power.js";
+import type {
+  PowerJournal,
+  NativePowerDiagnostic,
+  NativeObserverDiagnostic,
+} from "./host-power.js";
 /** Immutable System/Kernel-General event 12 evidence, not a clock-derived uptime estimate. */
 export const NativeBootRecordSchema = z
   .object({
@@ -129,6 +133,7 @@ export type NativeWorkloadObservation = {
     parentPid: number;
     stage?: string | undefined;
     code?: string | undefined;
+    observer?: NativeObserverDiagnostic | undefined;
   }[];
   receipt: {
     stage: "not_running" | "not_configured" | "valid" | "invalid";
@@ -195,6 +200,23 @@ function workloadObservationRecord(o: NativeWorkloadObservation) {
         "owner_sid_unavailable",
       ].includes(d.code ?? "")
         ? d.code
+        : null,
+      observer: d.observer
+        ? {
+            producerPid: d.observer.producerPid,
+            producerCreationTicks: d.observer.producerCreationTicks,
+            chain: d.observer.chain.slice(0, 4).map((p) => ({
+              pid: p.pid,
+              parentPid: p.parentPid,
+              creationTicks: p.creationTicks,
+              role: p.role,
+              status: p.status,
+              ownerSid: p.ownerSid,
+              imageSha256: p.imageSha256,
+              argvSha256: p.argvSha256,
+              argc: p.argc,
+            })),
+          }
         : null,
     })),
     diagnosticCount: o.diagnostics.length,

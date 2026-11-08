@@ -7,6 +7,10 @@ import {
   saveNativeWorkloadObservation,
   type NativeWorkloadObservation,
 } from "../src/host-power-storage.js";
+import {
+  NativeObserverDiagnosticSchema,
+  WorkloadInventorySchema,
+} from "../src/host-power.js";
 
 function observation(): NativeWorkloadObservation {
   return {
@@ -121,4 +125,88 @@ it("preserves only known receipt validation codes without leaking exception mess
   expect(
     nativeReceiptFailureCode({ message: "wsl_receipt_task_changed" }),
   ).toBe("wsl_receipt_schema_or_read_failed");
+});
+it("keeps candidate observer identity evidence bounded without allowing raw arguments or unrelated roles", async () => {
+  const observer = {
+    producerPid: 10,
+    producerCreationTicks: "1000",
+    chain: [
+      {
+        pid: 11,
+        parentPid: 10,
+        creationTicks: "1100",
+        role: "powershell",
+        status: "stable",
+        ownerSid: "S-1-5-21-1000",
+        imageSha256: "a".repeat(64),
+        argvSha256: "b".repeat(64),
+        argc: 5,
+      },
+    ],
+  };
+  expect(NativeObserverDiagnosticSchema.safeParse(observer).success).toBe(true);
+  for (const change of [
+    {
+      ...observer,
+      chain: [
+        ...observer.chain,
+        ...observer.chain,
+        ...observer.chain,
+        ...observer.chain,
+        ...observer.chain,
+      ],
+    },
+    { ...observer, chain: [{ ...observer.chain[0], argv: ["secret-value"] }] },
+    {
+      ...observer,
+      chain: [{ ...observer.chain[0], role: "ordinary_user_node" }],
+    },
+    {
+      ...observer,
+      chain: [{ ...observer.chain[0], imageSha256: "private-path" }],
+    },
+  ])
+    expect(NativeObserverDiagnosticSchema.safeParse(change).success).toBe(
+      false,
+    );
+  const parsed = NativeObserverDiagnosticSchema.parse(observer),
+    sample = observation();
+  sample.diagnostics = [
+    { kind: "new_instance", pid: 11, parentPid: 10, observer: parsed },
+  ];
+  const dir = await mkdtemp(join(tmpdir(), "power-observer-metadata-"));
+  try {
+    await saveNativeWorkloadObservation(join(dir, "journal"), sample, null);
+    const saved = JSON.parse(
+      await readFile(join(dir, "journal.workload-observation.json"), "utf8"),
+    );
+    expect(saved.latest.diagnostics[0].observer).toEqual(parsed);
+    expect(saved.latest.inventoryComplete).toBe(true);
+    expect(saved.latest.reasons).toEqual(["wsl_unmanaged_native_work"]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+it("drops malformed optional observer telemetry without changing a genuine incomplete inventory", () => {
+  const parsed = WorkloadInventorySchema.parse({
+    bootRecordId: "1",
+    bootTime: "2026-11-08T09:00:00.0000000Z",
+    complete: false,
+    wslRunning: false,
+    runningTasks: [],
+    processes: [],
+    services: [],
+    diagnostics: [
+      {
+        kind: "new_instance",
+        pid: 11,
+        name: "powershell.exe",
+        parentPid: 10,
+        observer: { argv: "private-value" },
+      },
+    ],
+  });
+  expect(parsed.complete).toBe(false);
+  expect(parsed.diagnostics?.[0]?.kind).toBe("new_instance");
+  expect(parsed.diagnostics?.[0]?.observer).toBeUndefined();
 });

@@ -71,6 +71,14 @@ async function privateJson(path: string) {
 let nativeCacheFile = "";
 let ownedRuntimeExecutable = "";
 let executorStartedTicks = "";
+let observerPolicy:
+  | {
+      task: string;
+      definitionSha256: string;
+      ownerSid: string;
+      runtimeSha256: string;
+    }
+  | undefined;
 let failurePhase: NativePowerPhase = "startup";
 let failureJournalFile: string | undefined;
 function native(
@@ -116,6 +124,18 @@ function native(
         ...(nativeCacheFile ? ["-CacheFile", nativeCacheFile] : []),
         ...(ownedRuntimeExecutable
           ? ["-OwnedRuntimeExecutable", ownedRuntimeExecutable]
+          : []),
+        ...(action === "inventory" && observerPolicy
+          ? [
+              "-ObserverTask",
+              observerPolicy.task,
+              "-ObserverDefinitionSha256",
+              observerPolicy.definitionSha256,
+              "-ObserverOwnerSid",
+              observerPolicy.ownerSid,
+              "-ObserverRuntimeSha256",
+              observerPolicy.runtimeSha256,
+            ]
           : []),
         ...(ownedWatch.length === 2
           ? [
@@ -178,6 +198,13 @@ async function main() {
   const config = configSchema.parse(await privateJson(configPath)),
     guard = WorkloadGuardSchema.parse(await privateJson(config.guardFile));
   ownedRuntimeExecutable = guard.ownedRuntime?.executable ?? "";
+  if (guard.wslObservation && guard.ownedRuntime)
+    observerPolicy = {
+      task: guard.wslObservation.producerTask,
+      definitionSha256: guard.wslObservation.definitionSha256,
+      ownerSid: guard.wslObservation.ownerSid,
+      runtimeSha256: guard.ownedRuntime.sha256,
+    };
   failurePhase = "permissions";
   for (const file of [
     configPath,

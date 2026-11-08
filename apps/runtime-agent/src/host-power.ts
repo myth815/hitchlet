@@ -310,6 +310,48 @@ export const guardHash = (g: WorkloadGuard) => {
     )
     .digest("hex");
 };
+export const NativeObserverDiagnosticSchema = z
+  .object({
+    producerPid: z.number().int().positive(),
+    producerCreationTicks: z.string().regex(/^[0-9]+$/),
+    chain: z
+      .array(
+        z
+          .object({
+            pid: z.number().int().positive(),
+            parentPid: z.number().int().nonnegative(),
+            creationTicks: z.string().regex(/^[0-9]+$/),
+            role: z.enum([
+              "powershell",
+              "wsl_system",
+              "wsl_store",
+              "wsl_host",
+              "conhost",
+            ]),
+            status: z.enum(["stable", "exited", "changed", "unavailable"]),
+            ownerSid: z
+              .string()
+              .regex(/^S-1-5-[0-9-]+$/)
+              .nullable(),
+            imageSha256: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .nullable(),
+            argvSha256: z
+              .string()
+              .regex(/^[a-f0-9]{64}$/)
+              .nullable(),
+            argc: z.number().int().nonnegative().max(64),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(4),
+  })
+  .strict();
+export type NativeObserverDiagnostic = z.infer<
+  typeof NativeObserverDiagnosticSchema
+>;
 export const WorkloadInventorySchema = NativeBootRecordSchema.extend({
   complete: z.boolean(),
   diagnostics: z
@@ -327,6 +369,8 @@ export const WorkloadInventorySchema = NativeBootRecordSchema.extend({
           parentPid: z.number().int().nonnegative(),
           stage: z.string().max(64).optional(),
           code: z.string().max(256).optional(),
+          // Optional telemetry cannot invalidate the original safety inventory.
+          observer: NativeObserverDiagnosticSchema.optional().catch(undefined),
         })
         .strict(),
     )

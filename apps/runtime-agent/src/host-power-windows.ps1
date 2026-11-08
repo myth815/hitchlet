@@ -1,4 +1,4 @@
-param([ValidateSet('inventory','boot','permissions','watch','shutdown','abort')][string]$Action='inventory', [string]$CacheFile='', [string]$OwnedRuntimeExecutable='', [string]$ProtectedPath='', [string]$LeaseFile='', [int]$ExecutorPid=0, [long]$ExecutorStartedTicks=0, [long]$NotAfterUptimeMs=0, [long]$ControllerNotAfterMs=0, [string]$CycleId='', [int]$WatchLauncherPid=0, [long]$WatchLauncherStartedTicks=0, [int]$WatchHelperPid=0, [long]$WatchHelperStartedTicks=0)
+param([ValidateSet('inventory','boot','permissions','watch','shutdown','abort')][string]$Action='inventory', [string]$CacheFile='', [string]$OwnedRuntimeExecutable='', [string]$ProtectedPath='', [string]$LeaseFile='', [int]$ExecutorPid=0, [long]$ExecutorStartedTicks=0, [long]$NotAfterUptimeMs=0, [long]$ControllerNotAfterMs=0, [string]$CycleId='', [int]$WatchLauncherPid=0, [long]$WatchLauncherStartedTicks=0, [int]$WatchHelperPid=0, [long]$WatchHelperStartedTicks=0, [string]$ObserverTask='', [string]$ObserverDefinitionSha256='', [string]$ObserverOwnerSid='', [string]$ObserverRuntimeSha256='')
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 function Assert-PrivatePath([string]$Path) {
@@ -64,6 +64,11 @@ public static class HitchletFileIdentity {
  [DllImport("kernel32.dll",CharSet=CharSet.Unicode,ExactSpelling=true,SetLastError=true)] static extern SafeFileHandle CreateFileW(string path,uint access,uint share,IntPtr security,uint creation,uint flags,IntPtr template);
  [DllImport("kernel32.dll",SetLastError=true)] static extern bool GetFileInformationByHandle(SafeFileHandle handle,out Info info);
  public static string Read(string path) {using(var h=CreateFileW(path,0,7,IntPtr.Zero,3,0,IntPtr.Zero)){Info i;if(h.IsInvalid||!GetFileInformationByHandle(h,out i))throw new InvalidOperationException("file_identity_unknown");return i.Volume+":"+i.IndexHigh+":"+i.IndexLow+":"+i.SizeHigh+":"+i.SizeLow+":"+i.Write.dwHighDateTime+":"+i.Write.dwLowDateTime;}}
+}
+public static class HitchletObserverArgv {
+ [DllImport("shell32.dll",SetLastError=true)] static extern IntPtr CommandLineToArgvW([MarshalAs(UnmanagedType.LPWStr)]string command,out int count);
+ [DllImport("kernel32.dll")] static extern IntPtr LocalFree(IntPtr p);
+ public static string[] Read(string command) {int n;var p=CommandLineToArgvW(command,out n);if(p==IntPtr.Zero)throw new InvalidOperationException("observer_argv_unavailable");try{if(n<1||n>64)throw new InvalidOperationException("observer_argv_limit");var a=new string[n];for(int i=0;i<n;i++)a[i]=Marshal.PtrToStringUni(Marshal.ReadIntPtr(p,i*IntPtr.Size));return a;}finally{LocalFree(p);}}
 }
 public static class HitchletProcessImage {
  // Strip only the exact extended DOS drive prefix. UNC/device/relative forms remain unchanged.
@@ -257,6 +262,62 @@ public static class HitchletProcessImage {
     $reconciled=Reconcile-NativeProcessSnapshot $liveProcesses $endProcesses $processes $failedProcessIds @(0,4,$PID,$ExecutorPid)
     $complete=$complete -and $reconciled.complete;$processes=$reconciled.processes
   } catch {$complete=$false;$reconciled=@{diagnostics=@(@{kind='enumeration_failed';pid=0;name='';parentPid=0})}}
+  try {
+  # Diagnostic only: candidate fixed observer plumbing must still remain incomplete/held.
+  # Never infer an exemption from a producer parent or merely from a signed image.
+  function Observer-ImageRole([string]$image) {
+    if([string]::Equals($image,$env:SystemRoot+'\System32\WindowsPowerShell\v1.0\powershell.exe',[StringComparison]::OrdinalIgnoreCase)){return 'powershell'}
+    if([string]::Equals($image,$env:SystemRoot+'\System32\wsl.exe',[StringComparison]::OrdinalIgnoreCase)){return 'wsl_system'}
+    if([string]::Equals($image,$env:ProgramFiles+'\WSL\wsl.exe',[StringComparison]::OrdinalIgnoreCase)){return 'wsl_store'}
+    if([string]::Equals($image,$env:ProgramFiles+'\WSL\wslhost.exe',[StringComparison]::OrdinalIgnoreCase)){return 'wsl_host'}
+    if([string]::Equals($image,$env:SystemRoot+'\System32\conhost.exe',[StringComparison]::OrdinalIgnoreCase)){return 'conhost'}
+    return ''
+  }
+  function Observer-TextHash([string]$text) {$sha=[Security.Cryptography.SHA256]::Create();try{return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text)))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}}
+  $observerProducer=$null;$producerFact=$null
+  if($ObserverTask -and $ObserverDefinitionSha256 -match '^[a-f0-9]{64}$' -and $ObserverOwnerSid -match '^S-1-5-[0-9-]+$' -and $ObserverRuntimeSha256 -match '^[a-f0-9]{64}$'){
+    $bound=@($tasks|Where-Object{$_.path -ceq $ObserverTask -and $_.definitionSha256 -ceq $ObserverDefinitionSha256 -and $_.principalId -ceq $ObserverOwnerSid -and $_.enginePid -gt 4})
+    if($bound.Count -eq 1){
+      $pf=@($processes|Where-Object{$_.pid -eq $bound[0].enginePid -and $_.ownerSid -ceq $ObserverOwnerSid -and $_.sha256 -ceq $ObserverRuntimeSha256 -and [string]::Equals($_.path,$OwnedRuntimeExecutable,[StringComparison]::OrdinalIgnoreCase)})
+      if($pf.Count -eq 1){$producerFact=$pf[0];$observerProducer=@($endProcesses|Where-Object{$_.ProcessId -eq $producerFact.pid -and $_.CreationDate -is [DateTime] -and $_.CreationDate.ToUniversalTime().Ticks.ToString() -ceq $producerFact.creationTicks})|Select-Object -First 1}
+    }
+  }
+  if($observerProducer){
+    $byPid=@{};foreach($x in $endProcesses){$byPid[[string]$x.ProcessId]=$x};$metadataCache=@{};$recorded=0
+    foreach($d in $reconciled.diagnostics){
+      if($d.kind -cne 'new_instance' -or $recorded -ge 16){continue}
+      $at=$byPid[[string]$d.pid];$nodes=@();$valid=$true
+      for($depth=0;$depth -lt 4 -and $at -and $at.ProcessId -ne $observerProducer.ProcessId;$depth++){
+        $role=Observer-ImageRole ([HitchletProcessImage]::NormalizeLocalDosPath([string]$at.ExecutablePath))
+        if(!$role -or $at.CreationDate -isnot [DateTime] -or $at.CreationDate.ToUniversalTime().Ticks -lt $observerProducer.CreationDate.ToUniversalTime().Ticks){$valid=$false;break}
+        $nodes+=@($at);$at=$byPid[[string]$at.ParentProcessId]
+      }
+      if(!$valid -or !$at -or $at.ProcessId -ne $observerProducer.ProcessId -or !$nodes.Count){continue}
+      $chain=@()
+      foreach($x in $nodes){
+        $key=([string]$x.ProcessId)+':'+$x.CreationDate.ToUniversalTime().Ticks.ToString()
+        if(!$metadataCache.ContainsKey($key)){
+          $m=@{pid=[int]$x.ProcessId;parentPid=[int]$x.ParentProcessId;creationTicks=$x.CreationDate.ToUniversalTime().Ticks.ToString();role=(Observer-ImageRole ([HitchletProcessImage]::NormalizeLocalDosPath([string]$x.ExecutablePath)));status='unavailable';ownerSid=$null;imageSha256=$null;argvSha256=$null;argc=0}
+          try {
+            $image=[HitchletProcessImage]::NormalizeLocalDosPath([HitchletProcessImage]::Read([int]$x.ProcessId,$x.CreationDate.ToUniversalTime().Ticks))
+            if((Observer-ImageRole $image) -cne $m.role){throw 'observer_image_changed'}
+            $identity=[HitchletFileIdentity]::Read($image);$m.imageSha256=(Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash.ToLowerInvariant()
+            $owner=Invoke-CimMethod -InputObject $x -MethodName GetOwnerSid;if($owner.ReturnValue -ne 0 -or ([string]$owner.Sid) -notmatch '^S-1-5-[0-9-]+$'){throw 'observer_owner_unknown'};$m.ownerSid=[string]$owner.Sid
+            $arguments=[HitchletObserverArgv]::Read([string]$x.CommandLine);$m.argc=$arguments.Length;$tail=[string[]]@($arguments|Select-Object -Skip 1);$m.argvSha256=Observer-TextHash ($tail.Length.ToString([Globalization.CultureInfo]::InvariantCulture)+':'+[string]::Join([string][char]0,$tail))
+            $current=Get-CimInstance Win32_Process -Filter ('ProcessId='+$x.ProcessId)
+            if(!$current){$m.status='exited'}elseif($current.CreationDate.ToUniversalTime().Ticks -ne $x.CreationDate.ToUniversalTime().Ticks -or $current.ParentProcessId -ne $x.ParentProcessId -or $current.CommandLine -cne $x.CommandLine -or [HitchletFileIdentity]::Read($image) -cne $identity){$m.status='changed'}else{$ownerAfter=Invoke-CimMethod -InputObject $current -MethodName GetOwnerSid;if($ownerAfter.ReturnValue -ne 0 -or $ownerAfter.Sid -cne $m.ownerSid){$m.status='changed'}else{$null=[HitchletProcessImage]::Read([int]$x.ProcessId,$x.CreationDate.ToUniversalTime().Ticks);$m.status='stable'}}
+          } catch {$current=Get-CimInstance Win32_Process -Filter ('ProcessId='+$x.ProcessId);if(!$current){$m.status='exited'}}
+          $metadataCache[$key]=$m
+        }
+        $chain+=@($metadataCache[$key])
+      }
+      $producerNow=Get-CimInstance Win32_Process -Filter ('ProcessId='+$observerProducer.ProcessId)
+      if($producerNow -and $producerNow.CreationDate.ToUniversalTime().Ticks -eq $observerProducer.CreationDate.ToUniversalTime().Ticks){$d['observer']=@{producerPid=[int]$observerProducer.ProcessId;producerCreationTicks=$producerFact.creationTicks;chain=$chain};$recorded++}
+    }
+  }
+  } catch {
+    # New optional metadata is not safety evidence and must not change the original inventory result.
+  }
   [pscustomobject]@{complete=[bool]$complete;wslRunning=$wslRunning;runningDistributions=$distributions;localWslEnumerationComplete=$wslLocalComplete;runningTasks=$tasks;bootRecordId=$boot.bootRecordId;bootTime=$boot.bootTime;processes=$processes;services=$services;diagnostics=$reconciled.diagnostics} | ConvertTo-Json -Depth 6 -Compress
   exit
 }
