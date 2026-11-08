@@ -1,7 +1,8 @@
 /** Fixed, read-only WSL native entry. Receives no shell/action/path commands. */
 import { readFile, readlink, readdir } from "node:fs/promises";
 import { z } from "zod";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import { LocalEngine } from "./engine.js";
 import { collectLinuxWorkloads } from "./workloads.js";
 import {
@@ -27,13 +28,8 @@ const input = z
     keeperProof: wslKeeperProofSchema.optional(),
   })
   .strict();
-async function main() {
-  let raw = "";
-  for await (const b of process.stdin) {
-    raw += String(b);
-    if (raw.length > 65536) throw Error("wsl_input_limit");
-  }
-  const { binding, before, keeperProof } = input.parse(JSON.parse(raw));
+export async function collectWslObservation(raw: unknown) {
+  const { binding, before, keeperProof } = input.parse(raw);
   const started = Date.now();
   const finishObserverBridge = binding.systemdUserSessions
     ? await beginWslObserverBridgeObservation(
@@ -178,7 +174,20 @@ async function main() {
     ) + "\n",
   );
 }
-main().catch(() => {
-  process.stderr.write("wsl_workload_observation_failed\n");
-  process.exitCode = 1;
-});
+// Both the original direct entry and the verified single-invocation bootstrap use this collector.
+if (
+  process.argv[1] &&
+  pathToFileURL(resolve(process.argv[1])).href === import.meta.url
+) {
+  void (async () => {
+    let raw = "";
+    for await (const chunk of process.stdin) {
+      raw += String(chunk);
+      if (raw.length > 65536) throw Error("wsl_input_limit");
+    }
+    await collectWslObservation(JSON.parse(raw));
+  })().catch(() => {
+    process.stderr.write("wsl_workload_observation_failed\n");
+    process.exitCode = 1;
+  });
+}

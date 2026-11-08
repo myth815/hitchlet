@@ -4,7 +4,7 @@ import { dirname, posix } from "node:path";
 import { execFile, spawn } from "node:child_process";
 import { setTimeout as delay } from "node:timers/promises";
 import { z } from "zod";
-import { collectHostWsl } from "./host-wsl-client.js";
+import { collectHostWsl, remainingWslPollDelayMs } from "./host-wsl-client.js";
 import {
   wslBindingSchema,
   wslKeeperProofSchema,
@@ -135,6 +135,7 @@ async function main() {
       keeper.exitCode === null &&
       keeper.signalCode === null
     ) {
+      const cycleStarted = performance.now();
       try {
         const value = JSON.parse(
           await ps(
@@ -178,7 +179,7 @@ async function main() {
       } catch {
         /* Leave the preceding sample to expire; never publish a fresh fabricated idle. */
       }
-      await delay(2000);
+      await delay(remainingWslPollDelayMs(performance.now() - cycleStarted));
     }
   } finally {
     stopKeeper();

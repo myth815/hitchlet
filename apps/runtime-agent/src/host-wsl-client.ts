@@ -9,6 +9,37 @@ import {
   type WslKeeperProof,
 } from "./host-wsl.js";
 
+/** Fixed code, not a caller-supplied shell command. Verify the artifact before importing it. */
+export const wslObservationBootstrap = `
+import { readFile, readlink } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { pathToFileURL } from "node:url";
+let raw = "";
+for await (const chunk of process.stdin) {
+  raw += String(chunk);
+  if (raw.length > 65536) throw Error("wsl_input_limit");
+}
+const request = JSON.parse(raw), path = request.binding.collectorPath;
+if (!/^\\/opt\\/hitchlet-observers\\/[A-Za-z0-9._-]+\\/host-wsl-linux\\.js$/.test(path) ||
+    !/^[a-f0-9]{64}$/.test(request.collectorSha256)) throw Error("wsl_collector_input_invalid");
+if (createHash("sha256").update(await readFile(path)).digest("hex") !== request.collectorSha256)
+  throw Error("wsl_collector_identity_changed");
+const before = {
+  distributionMachineId: (await readFile("/etc/machine-id", "utf8")).trim(),
+  bootId: (await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim(),
+  pidNamespace: await readlink("/proc/1/ns/pid"),
+};
+if (before.distributionMachineId !== request.binding.distributionMachineId)
+  throw Error("wsl_distribution_identity_changed");
+const collector = await import(pathToFileURL(path));
+await collector.collectWslObservation({ binding: request.binding, before,
+  ...(request.keeperProof ? { keeperProof: request.keeperProof } : {}) });
+`;
+
+/** Elapsed time is supplied by the caller's monotonic clock; never retimestamp old facts. */
+export const remainingWslPollDelayMs = (elapsedMs: number) =>
+  Math.max(0, 2000 - elapsedMs);
+
 /** Uses the installed Windows Host identity, not a new bearer or Hyper-V credential. */
 export async function collectHostWsl(
   binding: WslBinding,
@@ -42,40 +73,31 @@ export async function collectHostWsl(
       .includes(binding.name);
   if (!(await running())) throw Error("wsl_distribution_not_running");
   const prefix = ["--distribution", binding.name, "--user", "root", "--exec"];
-  const [machine, boot, pid] = await Promise.all([
-    call([...prefix, "/bin/cat", "/etc/machine-id"]),
-    call([...prefix, "/bin/cat", "/proc/sys/kernel/random/boot_id"]),
-    call([...prefix, "/usr/bin/readlink", "/proc/1/ns/pid"]),
-  ]);
-  const before = runtimeNativeContextSchema.parse({
-    distributionMachineId: machine,
-    bootId: boot,
-    pidNamespace: pid,
-  });
-  if (machine !== binding.distributionMachineId)
-    throw Error("wsl_distribution_identity_changed");
   const local = fileURLToPath(new URL("./host-wsl-linux.js", import.meta.url));
-  const path = binding.collectorPath;
   const hash = createHash("sha256")
     .update(await readFile(local))
     .digest("hex");
-  if (
-    (await call([...prefix, "/usr/bin/sha256sum", path])).split(/\s+/)[0] !==
-    hash
-  )
-    throw Error("wsl_collector_identity_changed");
   const result = wslWorkloadSchema.parse(
     JSON.parse(
       await call(
-        [...prefix, "/usr/local/bin/node", path],
+        [
+          ...prefix,
+          "/usr/local/bin/node",
+          "--input-type=module",
+          "--eval",
+          wslObservationBootstrap,
+        ],
         JSON.stringify({
           binding,
-          before,
+          collectorSha256: hash,
           ...(keeperProof ? { keeperProof } : {}),
         }),
       ),
     ),
   );
+  runtimeNativeContextSchema.parse(result.before);
+  if (result.before.distributionMachineId !== binding.distributionMachineId)
+    throw Error("wsl_distribution_identity_changed");
   if (!(await running())) throw Error("wsl_distribution_changed");
   return result;
 }
