@@ -33,3 +33,5 @@ export * from "./vm-runtime-identity.js";
 export * from "./hyperv-runtime.js";
 
 export * from "./runtime-workload.js";
+
+export * from "./hyperv-console.js";

@@ -5,6 +5,10 @@ import { join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
+  hyperVConsoleRequestSchema,
+  hyperVConsoleResultSchema,
+  type HyperVConsoleResult,
+  type HyperVConsoleRequest,
   vmAllocationIdentitySchema,
   vmAllocationOwnerTuple,
   type VmAllocationIdentity,
@@ -56,6 +60,18 @@ const manifestSchema = z
     spec: specSchema,
     specHash: z.string().regex(/^[a-f0-9]{64}$/),
     vmId: z.string().uuid().nullable(),
+    consoleCommands: z
+      .array(
+        z
+          .object({
+            id: z.string().uuid(),
+            hash: z.string(),
+            state: z.enum(["unknown", "completed"]),
+          })
+          .strict(),
+      )
+      .max(4096)
+      .optional(),
     bootstrapRequest: hyperVGuestBootstrapRequestSchema.optional(),
     bootstrapReceipt: hyperVGuestBootstrapReceiptSchema.optional(),
     bootstrapState: z.enum(["pending", "unknown", "applied"]).optional(),
@@ -64,6 +80,7 @@ const manifestSchema = z
 type Manifest = z.infer<typeof manifestSchema>;
 export type HyperVNativeCommand = Readonly<{
   action:
+    | "console"
     | "facts"
     | "prepare"
     | "inspect"
@@ -76,6 +93,7 @@ export type HyperVNativeCommand = Readonly<{
   owner: string;
   specHash: string;
   vmId: string | null;
+  console?: HyperVConsoleRequest["action"];
   spec?: Spec;
 }>;
 export type HyperVNativeRunner = (
@@ -127,6 +145,99 @@ export class HyperVLocalDriver {
   }
   destroy(input: unknown): Promise<HyperVInspection> {
     return this.cleanup(input, true);
+  }
+
+  console(input: unknown): Promise<HyperVConsoleResult> {
+    const request = hyperVConsoleRequestSchema.parse(input);
+    return this.lock(request.identity, async () => {
+      const m = await this.load(request.identity);
+      if (!m) throw Error("Console allocation missing");
+      this.fence(m, request.identity);
+      const observed = await this.observe(request.identity, m);
+      if (
+        Date.parse(request.expiresAt) <= Date.now() ||
+        m.phase !== "owned" ||
+        m.spec.template.guestOs !== "windows" ||
+        m.bootstrapState !== "applied" ||
+        !m.bootstrapReceipt ||
+        observed.presence !== "present" ||
+        !observed.inventoryComplete ||
+        !observed.vm ||
+        observed.vm.state !== "running" ||
+        !this.owns(request.identity, m, observed.vm) ||
+        !this.matches(observed.vm, m.spec) ||
+        canonical(m.identity) !== canonical(request.identity)
+      )
+        throw Error("Console allocation is not accessible");
+      const base = {
+        identity: request.identity,
+        commandId: request.commandId,
+        account: m.bootstrapReceipt.account,
+      };
+      const inputAction = !["access", "frame"].includes(request.action.kind);
+      const commands = m.consoleCommands ?? [];
+      const digest = sha(request.action);
+      const existing = commands.find((c) => c.id === request.commandId);
+      if (existing) {
+        if (existing.hash !== digest) throw Error("Console command ID reused");
+        return { ...base, status: existing.state };
+      }
+      if (inputAction) {
+        if (commands.length >= 4096)
+          throw Error("Console command journal is full");
+        // Persist uncertainty BEFORE an input side effect; a lost reply never retypes a key/password.
+        commands.push({
+          id: request.commandId,
+          hash: digest,
+          state: "unknown",
+        });
+        m.consoleCommands = commands;
+        await this.store(m);
+      }
+      let result: HyperVConsoleResult;
+      try {
+        if (Date.parse(request.expiresAt) <= Date.now())
+          throw Error("Console lease expired");
+        const native = await this.command({
+          ...this.native(request.identity, m, "console"),
+          console: request.action,
+        });
+        result = hyperVConsoleResultSchema.parse({
+          ...base,
+          ...z
+            .object({
+              status: z.enum(["available", "captured", "completed"]),
+              frame: hyperVConsoleResultSchema.shape.frame,
+            })
+            .strict()
+            .parse(native),
+        });
+        const expected =
+          request.action.kind === "access"
+            ? "available"
+            : request.action.kind === "frame"
+              ? "captured"
+              : "completed";
+        if (
+          result.status !== expected ||
+          (request.action.kind === "frame" &&
+            (!result.frame ||
+              result.frame.width !== request.action.width ||
+              result.frame.height !== request.action.height ||
+              Buffer.from(result.frame.dataBase64, "base64").length !==
+                request.action.width * request.action.height * 2))
+        )
+          throw Error("Console response mismatch");
+      } catch {
+        if (inputAction) return { ...base, status: "unknown" };
+        throw Error("Console read unavailable");
+      }
+      if (inputAction) {
+        commands[commands.length - 1]!.state = "completed";
+        await this.store(m);
+      }
+      return result;
+    });
   }
 
   bootstrapApply(input: unknown): Promise<HyperVInspection> {
@@ -654,7 +765,11 @@ export const runHyperVNative: HyperVNativeRunner = (request, timeoutMs) => {
         "-File",
         fileURLToPath(new URL("./hyperv-local.ps1", import.meta.url)),
       ],
-      { timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsHide: true },
+      {
+        timeout: timeoutMs,
+        maxBuffer: request.action === "console" ? 3 * 1024 * 1024 : 1024 * 1024,
+        windowsHide: true,
+      },
       (error, stdout) => {
         if (error) {
           reject(Error("Hyper-V native command failed or timed out"));

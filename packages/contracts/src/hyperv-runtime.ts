@@ -193,7 +193,14 @@ export const hyperVRuntimeFactsSchema = hyperVNativeFactsSchema.extend({
 });
 export type HyperVRuntimeFacts = z.infer<typeof hyperVRuntimeFactsSchema>;
 
+import {
+  hyperVConsoleRequestSchema,
+  hyperVConsoleResultSchema,
+} from "./hyperv-console.js";
 export const hyperVRuntimeActionSchema = z.discriminatedUnion("kind", [
+  z
+    .object({ kind: z.literal("console"), request: hyperVConsoleRequestSchema })
+    .strict(),
   z
     .object({
       kind: z.literal("bootstrap.apply"),
@@ -237,7 +244,7 @@ export const hyperVRuntimeActionResponseSchema = z
   .object({
     requestNonce: z.string().uuid(),
     ...binding,
-    result: hyperVInspectionSchema,
+    result: z.union([hyperVInspectionSchema, hyperVConsoleResultSchema]),
   })
   .strict();
 export const hyperVRuntimeFactsResponseSchema = z
@@ -251,7 +258,9 @@ export type HyperVRuntimeActionRequest = z.infer<
   typeof hyperVRuntimeActionRequestSchema
 >;
 export function hyperVActionIdentity(action: HyperVRuntimeAction) {
-  return action.kind === "reconcile" || action.kind === "bootstrap.apply"
+  return action.kind === "reconcile" ||
+    action.kind === "bootstrap.apply" ||
+    action.kind === "console"
     ? action.request.identity
     : action.identity;
 }

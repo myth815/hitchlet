@@ -1,4 +1,6 @@
 import {
+  type HyperVInspection,
+  type HyperVConsoleResult,
   hyperVRuntimeActionRequestSchema,
   hyperVRuntimeActionResponseSchema,
   hyperVRuntimeFactsRequestSchema,
@@ -17,7 +19,13 @@ export function createHyperVRuntimeServer(
   config: VmRuntimeServerConfig,
   driver: Pick<
     HyperVLocalDriver,
-    "inspect" | "reconcile" | "stop" | "destroy" | "facts" | "bootstrapApply"
+    | "inspect"
+    | "reconcile"
+    | "stop"
+    | "destroy"
+    | "facts"
+    | "bootstrapApply"
+    | "console"
   >,
   journal: FileJournal,
   templates: () => Promise<
@@ -36,11 +44,13 @@ export function createHyperVRuntimeServer(
       nativeRuntimeNamespaceId: config.nativeRuntimeNamespaceId,
       templates: await templates(),
     }),
-    execute: (action) =>
-      action.kind === "bootstrap.apply"
-        ? driver.bootstrapApply(action.request)
-        : action.kind === "reconcile"
-          ? driver.reconcile(action.request)
-          : driver[action.kind](action.identity),
+    execute: async (action): Promise<HyperVInspection | HyperVConsoleResult> =>
+      action.kind === "console"
+        ? driver.console(action.request)
+        : action.kind === "bootstrap.apply"
+          ? driver.bootstrapApply(action.request)
+          : action.kind === "reconcile"
+            ? driver.reconcile(action.request)
+            : driver[action.kind](action.identity),
   });
 }

@@ -18,6 +18,7 @@ import {
   CredentialReceiptSchema,
   RecoveryApprovalSchema,
 } from "@hitchlet/contracts/admin";
+import { ConsoleCommandSchema, ConsoleResultSchema } from "@hitchlet/contracts";
 import { toPublicJsonSchema } from "@hitchlet/contracts";
 import { z } from "zod";
 import {
@@ -61,6 +62,8 @@ export function openApiDocument() {
     ...(converted.$defs ?? {}),
     ...converted.properties,
   }) as Record<string, unknown>;
+  schemas.ConsoleCommand = z.toJSONSchema(ConsoleCommandSchema);
+  schemas.ConsoleResult = z.toJSONSchema(ConsoleResultSchema);
   const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
   const json = (schema: unknown) => ({ "application/json": { schema } });
   const response = (description: string, schema?: unknown) => ({
@@ -512,6 +515,17 @@ export function openApiDocument() {
             parameter("renewalId", "path", { type: "string", format: "uuid" }),
           ],
         }),
+      },
+      "/v1/tickets/{ticketId}/console": {
+        post: operation(
+          "Operate the owner claimed VM console",
+          "200",
+          "ConsoleResult",
+          {
+            parameters: [pathId("ticketId")],
+            requestBody: body("ConsoleCommand"),
+          },
+        ),
       },
       "/v1/tickets/{ticketId}/access": {
         post: operation("Get Simulator access material", "200", "AccessGrant", {

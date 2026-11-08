@@ -49,6 +49,8 @@ class Native {
   loseImportReply = false;
   importNeverObserved = false;
   leaveFiles = false;
+  consoleLost = false;
+  consoleBadFrame = false;
   unavailable = false;
   incomplete = false;
   onImport: (() => Promise<void>) | undefined;
@@ -68,6 +70,25 @@ class Native {
         ],
       };
     if (this.unavailable) throw Error("module unavailable");
+    if (command.action === "console") {
+      if (this.consoleLost) throw Error("native reply lost");
+      if (command.console?.kind === "access") return { status: "available" };
+      if (command.console?.kind === "frame")
+        return {
+          status: "captured",
+          frame: {
+            width: command.console.width,
+            height: command.console.height,
+            pixelFormat: "rgb565le",
+            dataBase64: Buffer.alloc(
+              this.consoleBadFrame
+                ? 1
+                : command.console.width * command.console.height * 2,
+            ).toString("base64"),
+          },
+        };
+      return { status: "completed" };
+    }
     let entry = this.data.get(command.directory);
     if (command.action === "prepare") return { prepared: true };
     if (command.action === "import") {
@@ -545,4 +566,139 @@ it("rejects changed frozen public material and guest environment without alterin
     "stale control version",
   );
   expect(f.applies).toBe(1);
+});
+
+const consoleRequest = (
+  action: import("@hitchlet/contracts").ConsoleAction,
+) => ({
+  identity,
+  commandId: "5a0f42b6-94d1-462c-953a-e8cc1622981c",
+  expiresAt: new Date(Date.now() + 60000).toISOString(),
+  action,
+});
+it("console returns a frame only on the exact initialized running Windows allocation", async () => {
+  const f = await bootstrapFixture();
+  await f.driver.bootstrapApply(f.input);
+  const result = await f.driver.console(
+    consoleRequest({ kind: "frame", width: 16, height: 16 }),
+  );
+  expect(result).toMatchObject({
+    status: "captured",
+    account: "workspace",
+    identity,
+    frame: { width: 16, height: 16 },
+  });
+  expect(count(f.native, "import")).toBe(1);
+  expect(f.applies).toBe(1);
+  f.native.consoleBadFrame = true;
+  await expect(
+    f.driver.console(consoleRequest({ kind: "frame", width: 16, height: 16 })),
+  ).rejects.toThrow("Console read unavailable");
+});
+it("console input persists before mutation and never replays after a lost reply or restart", async () => {
+  const f = await bootstrapFixture();
+  await f.driver.bootstrapApply(f.input);
+  const request = consoleRequest({
+    kind: "text",
+    text: "synthetic-private-text-not-a-credential",
+  });
+  f.native.consoleLost = true;
+  expect((await f.driver.console(request)).status).toBe("unknown");
+  const commands = count(f.native, "console");
+  const restarted = new HyperVLocalDriver({
+    ...f.options,
+    guestBootstrap: f.guest,
+  });
+  f.native.consoleLost = false;
+  expect((await restarted.console(request)).status).toBe("unknown");
+  expect(count(f.native, "console")).toBe(commands);
+  await expect(
+    restarted.console({ ...request, action: { kind: "key", keyCode: 13 } }),
+  ).rejects.toThrow("ID reused");
+  const manifestFiles = await readdir(f.options.manifestDirectory);
+  const manifest = await readFile(
+    join(f.options.manifestDirectory, manifestFiles[0]!),
+    "utf8",
+  );
+  expect(manifest).not.toContain("synthetic-private-text-not-a-credential");
+});
+it("console completed input is idempotent and cleanup invalidates further access", async () => {
+  const f = await bootstrapFixture();
+  await f.driver.bootstrapApply(f.input);
+  const r = consoleRequest({ kind: "key", keyCode: 13 });
+  expect((await f.driver.console(r)).status).toBe("completed");
+  expect((await f.driver.console(r)).status).toBe("completed");
+  expect(count(f.native, "console")).toBe(1);
+  await f.driver.destroy(cleanup);
+  await expect(f.driver.console(r)).rejects.toThrow("stale control version");
+});
+it("console rejects missing bootstrap, expired lease, changed owner and replaced VM before input", async () => {
+  const f = await bootstrapFixture();
+  const r = consoleRequest({ kind: "key", keyCode: 13 });
+  await expect(f.driver.console(r)).rejects.toThrow("not accessible");
+  await f.driver.bootstrapApply(f.input);
+  await expect(
+    f.driver.console({ ...r, expiresAt: new Date(0).toISOString() }),
+  ).rejects.toThrow("not accessible");
+  await expect(
+    f.driver.console({ ...r, identity: { ...identity, operationId: "other" } }),
+  ).rejects.toThrow("not accessible");
+  await expect(
+    f.driver.console({ ...r, identity: { ...identity, generation: 2 } }),
+  ).rejects.toThrow();
+  vm(f.native).id = "00000000-0000-4000-8000-000000009991";
+  await expect(f.driver.console(r)).rejects.toThrow("not accessible");
+  expect(count(f.native, "console")).toBe(0);
+});
+
+it("console input shares allocation ordering with cleanup and cannot run after deletion", async () => {
+  const f = await bootstrapFixture();
+  await f.driver.bootstrapApply(f.input);
+  let entered!: () => void, finish!: () => void;
+  const started = new Promise<void>((r) => (entered = r)),
+    wait = new Promise<void>((r) => (finish = r));
+  const original = f.options.run!;
+  const driver = new HyperVLocalDriver({
+    ...f.options,
+    guestBootstrap: f.guest,
+    run: async (command, timeout) => {
+      if (command.action === "console") {
+        entered();
+        await wait;
+      }
+      return original(command, timeout);
+    },
+  });
+  const input = driver.console(consoleRequest({ kind: "key", keyCode: 13 }));
+  await started;
+  const removal = driver.destroy(cleanup);
+  await Promise.resolve();
+  expect(count(f.native, "remove")).toBe(0);
+  finish();
+  expect((await input).status).toBe("completed");
+  await removal;
+  expect(count(f.native, "remove")).toBe(1);
+  await expect(
+    driver.console({
+      ...consoleRequest({ kind: "key", keyCode: 13 }),
+      identity: cleanup,
+    }),
+  ).rejects.toThrow("not accessible");
+});
+it("the shipped PowerShell native dispatcher admits console before any VM lookup", async () => {
+  const source = await readFile(
+    new URL("../src/drivers/hyperv-local.ps1", import.meta.url),
+    "utf8",
+  );
+  const gate = source.match(
+    /if\(\$r\.action -notin @\(([^)]+)\)\)\{throw 'hyperv_action_unsupported'\}/,
+  );
+  expect(gate).not.toBeNull();
+  expect(gate![1]!.match(/'[^']+'/g)).toContain("'console'");
+  expect(source.indexOf("if($r.action -eq 'console')")).toBeGreaterThan(
+    source.indexOf("function Get-OwnedVm"),
+  );
+  expect(source).not.toMatch(
+    /New-LocalUser|Set-LocalUser|AutoAdminLogon|Enable-NetFirewall|Set-ExecutionPolicy/,
+  );
 });

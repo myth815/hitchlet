@@ -666,6 +666,12 @@ export interface ComputeClientError extends Error {
 
 /** 已绑定消费者认证的 SDK。隐藏 Actor、服务端追踪与手工 CAS；不自动执行业务或销毁环境。 */
 export interface TicketClient {
+  /** Persist commandId before input. A repeated ID never replays unknown native input. */
+  console(
+    ticketId: Id,
+    command: import("./console.js").ConsoleCommand,
+  ): Promise<import("./console.js").ConsoleResult>;
+
   /** 校验恢复结构版本后原样重放已准备请求，不重读 generation/Lease.version，不更换幂等键；续租只查询或等待原提案。
    * @param command 原始受控命令，包含身份、截止与幂等参数。
    * @returns 仅在该方法定义的确认边界返回；Promise 拒绝不代表外部副作用不存在。 */

@@ -73,3 +73,5 @@ export type {
   ImageCatalogClient,
   ComputeClient,
 } from "./consumer.js";
+
+export * from "./console.js";

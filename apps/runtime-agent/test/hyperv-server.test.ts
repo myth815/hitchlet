@@ -89,6 +89,23 @@ beforeEach(async () => {
   reconcileHook = async () => inspection;
   observedActionDeadline = undefined;
   const driver = {
+    console: async (
+      request: import("@hitchlet/contracts/internal").HyperVConsoleRequest,
+    ) => {
+      calls.push("console");
+      return {
+        identity: request.identity,
+        commandId: request.commandId,
+        account: "workspace",
+        status: "captured" as const,
+        frame: {
+          width: 1024,
+          height: 768,
+          pixelFormat: "rgb565le" as const,
+          dataBase64: Buffer.alloc(1024 * 768 * 2).toString("base64"),
+        },
+      };
+    },
     inspect: async () => {
       calls.push("inspect");
       observedActionDeadline = currentCommandDeadlineMs();
@@ -398,4 +415,39 @@ it("connects the controller client through the existing real mTLS transport, wit
   token = "revoked-fixture-token";
   await expect(client.destroy(identity)).rejects.toThrow();
   expect(calls).toEqual(["inspect", "bootstrap.apply"]);
+});
+
+it("console frame uses the existing authenticated Runtime route with a bounded full-size image", async () => {
+  const transport = new RuntimeAgentHttpTransport({
+    baseUrl: origin.toString(),
+    timeoutMs: 5000,
+    loadCredentials: async () => ({
+      token: "fixture-token",
+      ca: cert,
+      cert,
+      key,
+    }),
+  });
+  const client = new HyperVRuntimeHttpClient({
+    transport,
+    installationId: identity.installationId,
+    runtimeIdentityId: identity.runtimeIdentityId,
+    controllerEpoch: 1,
+    deadlineMs: Date.now() + 5000,
+  });
+  const result = await client.console({
+    identity,
+    commandId: "5a0f42b6-94d1-462c-953a-e8cc1622981c",
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    action: { kind: "frame", width: 1024, height: 768 },
+  });
+  expect(result).toMatchObject({
+    status: "captured",
+    account: "workspace",
+    frame: { width: 1024, height: 768 },
+  });
+  expect(Buffer.from(result.frame!.dataBase64, "base64").length).toBe(
+    1024 * 768 * 2,
+  );
+  expect(calls).toEqual(["console"]);
 });

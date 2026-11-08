@@ -48,3 +48,5 @@ export {
   PublicSchemas,
   toPublicJsonSchema,
 } from "./schemas.js";
+
+export * from "./console.js";

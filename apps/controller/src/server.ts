@@ -12,6 +12,7 @@ import {
 import { RotatingLog } from "./rotating-log.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import { createHyperVConsoleExecutor } from "./providers/hyperv-console.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { openStorage } from "./storage/index.js";
@@ -606,6 +607,7 @@ try {
     ...(secrets
       ? {
           secrets,
+          console: createHyperVConsoleExecutor(storage, secrets),
           tartFactsForRevision: (input) =>
             tartRuntimeFactsForRevision(input, secrets),
           hyperVFactsForRevision: (input) =>

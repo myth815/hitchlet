@@ -204,7 +204,10 @@ export class RuntimeAgentHttpTransport implements RuntimeAgentJsonTransport {
             let size = 0;
             res.on("data", (chunk: Buffer) => {
               size += chunk.byteLength;
-              if (size > 256 * 1024)
+              if (
+                size >
+                (path === "/v1/hyperv/actions" ? 3 * 1024 * 1024 : 256 * 1024)
+              )
                 request.destroy(new Error("Runtime Agent response too large"));
               else chunks.push(chunk);
             });

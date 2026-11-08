@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
+  hyperVInspectionSchema,
+  hyperVConsoleResultSchema,
+  type HyperVConsoleRequest,
   vmAllocationIdentitySchema,
   hyperVRuntimeActionSchema,
   hyperVRuntimeActionRequestSchema,
@@ -66,6 +69,12 @@ export class HyperVRuntimeHttpClient {
     return this.action({ kind: "destroy", identity });
   }
 
+  async console(request: HyperVConsoleRequest) {
+    return hyperVConsoleResultSchema.parse(
+      await this.actionResult({ kind: "console", request }),
+    );
+  }
+
   async facts(): Promise<HyperVRuntimeFacts> {
     return readHyperVRuntimeFacts(
       this.options.transport,
@@ -78,6 +87,10 @@ export class HyperVRuntimeHttpClient {
   private async action(
     rawAction: HyperVRuntimeAction,
   ): Promise<HyperVInspection> {
+    return hyperVInspectionSchema.parse(await this.actionResult(rawAction));
+  }
+
+  private async actionResult(rawAction: HyperVRuntimeAction) {
     const action = hyperVRuntimeActionSchema.parse(rawAction);
     const now = this.now();
     const operationRemainingMs = this.options.deadlineMs - now;
@@ -89,7 +102,9 @@ export class HyperVRuntimeHttpClient {
     );
     const actionBudgetMs = actionDeadlineMs - now;
     const identity =
-      action.kind === "reconcile" || action.kind === "bootstrap.apply"
+      action.kind === "reconcile" ||
+      action.kind === "bootstrap.apply" ||
+      action.kind === "console"
         ? action.request.identity
         : action.identity;
     const request = hyperVRuntimeActionRequestSchema.parse({

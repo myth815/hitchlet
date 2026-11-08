@@ -1,4 +1,9 @@
 import {
+  ConsoleCommandSchema,
+  ConsoleResultSchema,
+  type ConsoleCommand,
+} from "@hitchlet/contracts";
+import {
   AcquireRequestSchema,
   AcquireReceiptSchema,
   AccessGrantSchema,
@@ -92,6 +97,17 @@ function randomKey(): string {
 }
 
 export class TicketCommands {
+  async console(ticketId: Id, command: ConsoleCommand) {
+    const body = readRequest(ConsoleCommandSchema, command);
+    return this.http.request(
+      `/v1/tickets/${encodeURIComponent(ticketId)}/console`,
+      "POST",
+      body,
+      (v) => readResponse(ConsoleResultSchema, v),
+      { ticketId, key: body.commandId },
+    );
+  }
+
   private readonly prepared = new Map<string, CacheEntry>();
   constructor(private readonly http: HttpTransport) {}
 

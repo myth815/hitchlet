@@ -73,6 +73,8 @@ import { Authenticator, AuthFailure } from "./http/auth.js";
 import { openApiDocument } from "./http/openapi.js";
 import { TicketCommandService } from "./application/commands.js";
 import { LeaseService } from "./application/leases.js";
+import { ConsoleService, type ConsoleExecutor } from "./application/console.js";
+import { ConsoleCommandSchema } from "@hitchlet/contracts";
 import { AccessService } from "./application/access.js";
 import { ApplicationError } from "./application/errors.js";
 import { AdminService } from "./application/admin.js";
@@ -145,6 +147,7 @@ import { StorageError } from "./storage/index.js";
 import { z, ZodError, type ZodType } from "zod";
 
 export interface AppRuntime {
+  readonly console?: ConsoleExecutor;
   readonly storage?: Storage;
   readonly maintenance?: MaintenanceService;
   readonly logStream?: NodeJS.WritableStream;
@@ -280,6 +283,9 @@ export async function buildApp(
     const queries = new TicketQueries(runtime.storage);
     const ticketCommands = new TicketCommandService(runtime.storage, queries);
     const leases = new LeaseService(runtime.storage);
+    const consoleService = runtime.console
+      ? new ConsoleService(runtime.storage, runtime.console)
+      : undefined;
     const access = new AccessService(
       runtime.storage,
       Date.now,
@@ -1783,6 +1789,27 @@ export async function buildApp(
           .header("Cache-Control", "no-store")
           .header("Pragma", "no-cache")
           .send(grant);
+      },
+    );
+    app.post<{ Params: { ticketId: string } }>(
+      "/v1/tickets/:ticketId/console",
+      async (request, reply) => {
+        const actor = await identify(request, true);
+        if (!actor.scopes.includes("tickets:write") || actor.role === "viewer")
+          return reply.code(403).send(apiError(request.id, "forbidden", false));
+        if (!consoleService)
+          return reply
+            .code(503)
+            .send(apiError(request.id, "access_unavailable", true));
+        const result = await consoleService.command(
+          actor.consumerId,
+          request.params.ticketId,
+          parseInput(ConsoleCommandSchema, request.body),
+        );
+        return reply
+          .header("Cache-Control", "no-store")
+          .header("Pragma", "no-cache")
+          .send(result);
       },
     );
     app.get("/v1/images", async (request, reply) => {

@@ -1,10 +1,10 @@
-# Internal fixed native actions. JSON stdin contains only VM spec/ownership data.
+# Internal fixed native actions. JSON stdin contains VM ownership/spec or bounded console input.
 # This file never enables Hyper-V, changes a host switch/firewall or creates credentials.
 $ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
 [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
 $r=[Console]::In.ReadToEnd() | ConvertFrom-Json
-if($r.action -notin @('facts','prepare','inspect','import','configure','start','stop','remove')){throw 'hyperv_action_unsupported'}
+if($r.action -notin @('facts','prepare','inspect','import','configure','start','stop','remove','console')){throw 'hyperv_action_unsupported'}
 $available=$null -ne (Get-Command Get-VM -ErrorAction SilentlyContinue)
 if($r.action -eq 'facts'){
  $facts=@{available=$available;hostArchitecture=[string]$env:PROCESSOR_ARCHITECTURE;implementedOperations=@('inspect','import','configure','start','stop','remove')}
@@ -172,5 +172,53 @@ if($r.action -in @('stop','remove')){
    [IO.Directory]::Delete($directory)
   }
  }
+}
+if($r.action -eq 'console'){
+ $vm=Get-OwnedVm
+ if(!$vm -or [string]$vm.State -ne 'Running'){throw 'console_owned_running_vm_required'}
+ $system=@(Get-WmiObject -Namespace 'root\virtualization\v2' -Class Msvm_ComputerSystem -Filter ("Name='"+$vm.Id.ToString()+"'"))
+ if($system.Count -ne 1){throw 'console_vm_identity_unknown'}
+ $kind=[string]$r.console.kind
+ if($kind -eq 'access'){
+  $null=Get-WmiObject -Namespace 'root\virtualization\v2' -Class Msvm_Keyboard -List
+  $null=Get-WmiObject -Namespace 'root\virtualization\v2' -Class Msvm_VirtualSystemManagementService -List
+  @{status='available'}|ConvertTo-Json -Compress;exit
+ }
+ if($kind -eq 'frame'){
+  $width=[int]$r.console.width;$height=[int]$r.console.height
+  if($width -lt 16 -or $width -gt 1024 -or $height -lt 16 -or $height -gt 768){throw 'console_frame_bounds'}
+  $settings=@($system[0].GetRelated('Msvm_VirtualSystemSettingData','Msvm_SettingsDefineState',$null,$null,'SettingData','ManagedElement',$false,$null))
+  $manager=@(Get-WmiObject -Namespace 'root\virtualization\v2' -Class Msvm_VirtualSystemManagementService)
+  if($settings.Count -ne 1 -or $manager.Count -ne 1){throw 'console_setting_ambiguous'}
+  $params=$manager[0].GetMethodParameters('GetVirtualSystemThumbnailImage')
+  $params['TargetSystem']=$settings[0].Path.Path;$params['WidthPixels']=[UInt16]$width;$params['HeightPixels']=[UInt16]$height
+  $out=$manager[0].InvokeMethod('GetVirtualSystemThumbnailImage',$params,$null)
+  if([UInt32]$out['ReturnValue'] -ne 0){throw 'console_frame_not_completed'}
+  [byte[]]$pixels=$out['ImageData'];if($pixels.Length -ne 2*$width*$height){throw 'console_frame_length'}
+  @{status='captured';frame=@{width=$width;height=$height;pixelFormat='rgb565le';dataBase64=[Convert]::ToBase64String($pixels)}}|ConvertTo-Json -Depth 4 -Compress;exit
+ }
+ if($kind -in @('key','text','secure_attention')){
+  $keyboard=@($system[0].GetRelated('Msvm_Keyboard'))
+  if($keyboard.Count -ne 1){throw 'console_keyboard_ambiguous'}
+  if($kind -eq 'secure_attention'){
+   $out=$keyboard[0].TypeCtrlAltDel()
+  }elseif($kind -eq 'text'){
+   $text=[string]$r.console.text;if($text.Length -lt 1 -or $text.Length -gt 2048){throw 'console_text_bounds'}
+   $out=$keyboard[0].TypeText($text)
+  }else{
+   $key=[int]$r.console.keyCode;if($key -lt 1 -or $key -gt 255){throw 'console_key_bounds'}
+   $out=$keyboard[0].TypeKey([UInt32]$key)
+  }
+ }elseif($kind -eq 'pointer'){
+  $mouse=@($system[0].GetRelated('Msvm_SyntheticMouse'))
+  if($mouse.Count -ne 1){throw 'console_mouse_ambiguous'}
+  $x=[int]$r.console.x;$y=[int]$r.console.y
+  if($x -lt 0 -or $x -gt 65535 -or $y -lt 0 -or $y -gt 65535){throw 'console_pointer_bounds'}
+  $out=$mouse[0].SetAbsolutePosition([Int32]$x,[Int32]$y)
+  if([UInt32]$out.ReturnValue -ne 0){throw 'console_pointer_not_completed'}
+  if($r.console.click -eq $true){$out=$mouse[0].ClickButton([UInt32]1)}
+ }else{throw 'console_action_invalid'}
+ if([UInt32]$out.ReturnValue -ne 0){throw 'console_input_not_completed'}
+ @{status='completed'}|ConvertTo-Json -Compress;exit
 }
 Observe | ConvertTo-Json -Depth 12 -Compress
