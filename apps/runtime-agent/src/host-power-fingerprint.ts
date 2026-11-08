@@ -13,6 +13,7 @@ export async function powerExecutorHash() {
   for (const name of [
     "host-power-main.js",
     "host-power.js",
+    "host-power-observer.js",
     "host-power-watchdog.js",
     "host-power-watch-launcher.js",
     "host-power-storage.js",

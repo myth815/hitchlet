@@ -4,7 +4,14 @@ import { NativeShutdownWatchdog } from "./host-power-watchdog.js";
 import { collectHostWsl } from "./host-wsl-client.js";
 import { validateWslReceipt, wslReceiptSchema } from "./host-wsl-receipt.js";
 import { readFile, stat } from "node:fs/promises";
-import { dirname } from "node:path";
+import { createHash } from "node:crypto";
+import { dirname, posix } from "node:path";
+import {
+  assessOwnWslObservers,
+  observerArgvHash,
+  observerArtifactPaths,
+  type ObserverArtifacts,
+} from "./host-power-observer.js";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
@@ -77,6 +84,10 @@ let observerPolicy:
       definitionSha256: string;
       ownerSid: string;
       runtimeSha256: string;
+      receiptFile?: string;
+      distributionId?: string;
+      keeperArgvSha256?: string;
+      collectCandidates: boolean;
     }
   | undefined;
 let failurePhase: NativePowerPhase = "startup";
@@ -135,6 +146,21 @@ function native(
               observerPolicy.ownerSid,
               "-ObserverRuntimeSha256",
               observerPolicy.runtimeSha256,
+              ...(observerPolicy.collectCandidates
+                ? [
+                    "-CollectObserverCandidates",
+                    "-ObserverReceiptFile",
+                    observerPolicy.receiptFile!,
+                    "-ObserverDistributionId",
+                    observerPolicy.distributionId!,
+                    ...(observerPolicy.keeperArgvSha256
+                      ? [
+                          "-ObserverKeeperArgvSha256",
+                          observerPolicy.keeperArgvSha256,
+                        ]
+                      : []),
+                  ]
+                : []),
             ]
           : []),
         ...(ownedWatch.length === 2
@@ -198,12 +224,40 @@ async function main() {
   const config = configSchema.parse(await privateJson(configPath)),
     guard = WorkloadGuardSchema.parse(await privateJson(config.guardFile));
   ownedRuntimeExecutable = guard.ownedRuntime?.executable ?? "";
+  const computeBinding = guard.wslDistributions.find(
+    (b) => b.name === "ComputeNode",
+  );
   if (guard.wslObservation && guard.ownedRuntime)
     observerPolicy = {
       task: guard.wslObservation.producerTask,
       definitionSha256: guard.wslObservation.definitionSha256,
       ownerSid: guard.wslObservation.ownerSid,
       runtimeSha256: guard.ownedRuntime.sha256,
+      receiptFile: guard.wslObservation.file,
+      ...(computeBinding
+        ? { distributionId: computeBinding.registrationId }
+        : {}),
+      collectCandidates: !!(
+        guard.wslObservation.readonlyObserver && computeBinding
+      ),
+      ...(computeBinding?.keeper
+        ? {
+            keeperArgvSha256: observerArgvHash([
+              "-d",
+              "ComputeNode",
+              "-u",
+              "openclaw",
+              "--cd",
+              "/",
+              "--exec",
+              computeBinding.keeper.nodeExecutable,
+              posix.join(
+                posix.dirname(computeBinding.collectorPath),
+                "host-wsl-keeper.js",
+              ),
+            ]),
+          }
+        : {}),
     };
   failurePhase = "permissions";
   for (const file of [
@@ -284,6 +338,36 @@ async function main() {
         }),
       );
     }
+    let observerArtifacts: ObserverArtifacts | undefined;
+    if (guard.wslObservation?.readonlyObserver) {
+      const task = inventory.runningTasks.find(
+        (t) =>
+          t.path === guard.wslObservation!.producerTask &&
+          t.definitionSha256 === guard.wslObservation!.definitionSha256 &&
+          t.principalId === guard.wslObservation!.ownerSid,
+      );
+      const paths = task && observerArtifactPaths(task.arguments);
+      if (paths) {
+        try {
+          const [publisherSha256, clientSha256, collectorSha256] =
+            await Promise.all(
+              [paths.publisher, paths.client, paths.collector].map(
+                async (path) =>
+                  createHash("sha256")
+                    .update(await readFile(path))
+                    .digest("hex"),
+              ),
+            );
+          observerArtifacts = {
+            publisherSha256: publisherSha256!,
+            clientSha256: clientSha256!,
+            collectorSha256: collectorSha256!,
+          };
+        } catch {
+          /* Unavailable or changed code retains the original workload hold. */
+        }
+      }
+    }
     const workloadCheckedAtMs = Date.now();
     const reasons = workloadReasons(
       guard,
@@ -293,6 +377,7 @@ async function main() {
       ownedWatch,
       wsl,
       workloadCheckedAtMs,
+      observerArtifacts,
     );
     if ((await powerExecutorHash()) !== executorHash)
       reasons.push("executor_artifact_changed");
@@ -309,9 +394,10 @@ async function main() {
           ? "not_configured"
           : "invalid";
     let receiptCode: string | null = null;
+    let validatedReceipt: ReturnType<typeof validateWslReceipt> | undefined;
     if (inventory.wslRunning && guard.wslObservation) {
       try {
-        validateWslReceipt(
+        validatedReceipt = validateWslReceipt(
           wsl,
           guard.wslObservation,
           inventory,
@@ -323,6 +409,12 @@ async function main() {
         receiptCode = nativeReceiptFailureCode(error);
       }
     }
+    const observerAssessment = assessOwnWslObservers(
+      guard,
+      inventory,
+      validatedReceipt,
+      observerArtifacts,
+    );
     const observation: NativeWorkloadObservation = {
       observedAt: new Date(workloadCheckedAtMs).toISOString(),
       executorPid: process.pid,
@@ -333,6 +425,12 @@ async function main() {
       hostProbeEndedAtMs,
       workloadCheckedAtMs,
       inventoryComplete: inventory.complete,
+      observerAssessment: {
+        configured: !!guard.wslObservation?.readonlyObserver,
+        artifactMatched: observerAssessment.artifactMatched,
+        reconcilerOnlyObservers: observerAssessment.reconcilerOnlyObservers,
+        processPids: [...observerAssessment.processPids],
+      },
       baseProbeStatus: e.probeStatus,
       baseErrorCodes: e.errorCodes,
       diagnostics: inventory.diagnostics ?? [],

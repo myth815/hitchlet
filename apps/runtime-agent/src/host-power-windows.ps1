@@ -1,4 +1,4 @@
-param([ValidateSet('inventory','boot','permissions','watch','shutdown','abort')][string]$Action='inventory', [string]$CacheFile='', [string]$OwnedRuntimeExecutable='', [string]$ProtectedPath='', [string]$LeaseFile='', [int]$ExecutorPid=0, [long]$ExecutorStartedTicks=0, [long]$NotAfterUptimeMs=0, [long]$ControllerNotAfterMs=0, [string]$CycleId='', [int]$WatchLauncherPid=0, [long]$WatchLauncherStartedTicks=0, [int]$WatchHelperPid=0, [long]$WatchHelperStartedTicks=0, [string]$ObserverTask='', [string]$ObserverDefinitionSha256='', [string]$ObserverOwnerSid='', [string]$ObserverRuntimeSha256='')
+param([ValidateSet('inventory','boot','permissions','watch','shutdown','abort')][string]$Action='inventory', [string]$CacheFile='', [string]$OwnedRuntimeExecutable='', [string]$ProtectedPath='', [string]$LeaseFile='', [int]$ExecutorPid=0, [long]$ExecutorStartedTicks=0, [long]$NotAfterUptimeMs=0, [long]$ControllerNotAfterMs=0, [string]$CycleId='', [int]$WatchLauncherPid=0, [long]$WatchLauncherStartedTicks=0, [int]$WatchHelperPid=0, [long]$WatchHelperStartedTicks=0, [string]$ObserverTask='', [string]$ObserverDefinitionSha256='', [string]$ObserverOwnerSid='', [string]$ObserverRuntimeSha256='', [string]$ObserverReceiptFile='', [string]$ObserverDistributionId='', [string]$ObserverKeeperArgvSha256='', [switch]$CollectObserverCandidates)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 function Assert-PrivatePath([string]$Path) {
@@ -43,7 +43,7 @@ function Reconcile-NativeProcessSnapshot($Initial, $Final, $Facts, $Failed, $Ign
     if($p.ProcessId -in $Ignored -or ($p.ParentProcessId -eq 4 -and $p.Name -in @('Registry','Memory Compression','Secure System'))){continue}
     if(!$before.ContainsKey([string]$p.ProcessId)){$state.complete=$false;$diagnostics.Add(@{kind='new_instance';pid=[int]$p.ProcessId;name=[string]$p.Name;parentPid=[int]$p.ParentProcessId})}
   }
-  return @{complete=[bool]$state.complete;processes=$kept;diagnostics=@($diagnostics.ToArray()|Select-Object -First 256)}
+  return @{complete=[bool]$state.complete;processes=$kept;diagnosticCount=$diagnostics.Count;diagnostics=@($diagnostics.ToArray()|Select-Object -First 256)}
 }
 if ($Action -eq 'permissions') {Assert-PrivatePath $ProtectedPath; '{"private":true}'; exit}
 if ($CacheFile) { Assert-PrivatePath (Split-Path -Parent $CacheFile); if(Test-Path -LiteralPath $CacheFile) {Assert-PrivatePath $CacheFile} }
@@ -247,6 +247,7 @@ public static class HitchletProcessImage {
       exit 72
     }
   }
+  $completeBeforeReconcile=[bool]$complete
   try {
     # Bounded catch-up reads identities of new instances; it never exempts them.
     # Concurrent observer helpers and genuine jobs both enter the normal guard.
@@ -261,7 +262,8 @@ public static class HitchletProcessImage {
     }
     $reconciled=Reconcile-NativeProcessSnapshot $liveProcesses $endProcesses $processes $failedProcessIds @(0,4,$PID,$ExecutorPid)
     $complete=$complete -and $reconciled.complete;$processes=$reconciled.processes
-  } catch {$complete=$false;$reconciled=@{diagnostics=@(@{kind='enumeration_failed';pid=0;name='';parentPid=0})}}
+  } catch {$complete=$false;$reconciled=@{complete=$false;diagnosticCount=1;diagnostics=@(@{kind='enumeration_failed';pid=0;name='';parentPid=0})}}
+  $observerCandidates=@()
   try {
   # Diagnostic only: candidate fixed observer plumbing must still remain incomplete/held.
   # Never infer an exemption from a producer parent or merely from a signed image.
@@ -274,6 +276,14 @@ public static class HitchletProcessImage {
     return ''
   }
   function Observer-TextHash([string]$text) {$sha=[Security.Cryptography.SHA256]::Create();try{return ([BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($text)))).Replace('-','').ToLowerInvariant()}finally{$sha.Dispose()}}
+  function Observer-WslHostArguments([string[]]$v) {
+    $out=@{shapeMatches=$false;distributionMatches=$false;vmGuidSha256=$null}
+    if($v.Length -ne 11 -or $v[1] -cne '--distro-id' -or $v[3] -cne '--vm-id' -or $v[5] -cne '--handle' -or $v[7] -cne '--event' -or $v[9] -cne '--parent'){return $out}
+    $distro=[Guid]::Empty;$vm=[Guid]::Empty
+    if((![Guid]::TryParseExact($v[2],'D',[ref]$distro) -and ![Guid]::TryParseExact($v[2],'B',[ref]$distro)) -or (![Guid]::TryParseExact($v[4],'D',[ref]$vm) -and ![Guid]::TryParseExact($v[4],'B',[ref]$vm)) -or $distro -eq [Guid]::Empty -or $vm -eq [Guid]::Empty){return $out}
+    foreach($index in @(6,8,10)){$handle=[uint32]0;if($v[$index] -cnotmatch '^[0-9]{1,10}$' -or ![uint32]::TryParse($v[$index],[ref]$handle) -or $handle -eq 0){return $out}}
+    $out.shapeMatches=$true;$out.distributionMatches=($ObserverDistributionId -and $distro -eq [Guid]$ObserverDistributionId);$out.vmGuidSha256=Observer-TextHash ($vm.ToString('D').ToLowerInvariant());return $out
+  }
   $observerProducer=$null;$producerFact=$null
   if($ObserverTask -and $ObserverDefinitionSha256 -match '^[a-f0-9]{64}$' -and $ObserverOwnerSid -match '^S-1-5-[0-9-]+$' -and $ObserverRuntimeSha256 -match '^[a-f0-9]{64}$'){
     $bound=@($tasks|Where-Object{$_.path -ceq $ObserverTask -and $_.definitionSha256 -ceq $ObserverDefinitionSha256 -and $_.principalId -ceq $ObserverOwnerSid -and $_.enginePid -gt 4})
@@ -284,8 +294,10 @@ public static class HitchletProcessImage {
   }
   if($observerProducer){
     $byPid=@{};foreach($x in $endProcesses){$byPid[[string]$x.ProcessId]=$x};$metadataCache=@{};$recorded=0
-    foreach($d in $reconciled.diagnostics){
-      if($d.kind -cne 'new_instance' -or $recorded -ge 16){continue}
+    $targets=@($reconciled.diagnostics|Where-Object{$_.kind -ceq 'new_instance'})
+    if($CollectObserverCandidates){$targets=@($endProcesses|Where-Object{(Observer-ImageRole ([HitchletProcessImage]::NormalizeLocalDosPath([string]$_.ExecutablePath)))}|ForEach-Object{@{kind='observer_candidate';pid=[int]$_.ProcessId;parentPid=[int]$_.ParentProcessId}})}
+    foreach($d in $targets){
+      if($recorded -ge $(if($CollectObserverCandidates){32}else{16})){continue}
       $at=$byPid[[string]$d.pid];$nodes=@();$valid=$true
       for($depth=0;$depth -lt 4 -and $at -and $at.ProcessId -ne $observerProducer.ProcessId;$depth++){
         $role=Observer-ImageRole ([HitchletProcessImage]::NormalizeLocalDosPath([string]$at.ExecutablePath))
@@ -303,7 +315,7 @@ public static class HitchletProcessImage {
             if((Observer-ImageRole $image) -cne $m.role){throw 'observer_image_changed'}
             $identity=[HitchletFileIdentity]::Read($image);$m.imageSha256=(Get-FileHash -LiteralPath $image -Algorithm SHA256).Hash.ToLowerInvariant()
             $owner=Invoke-CimMethod -InputObject $x -MethodName GetOwnerSid;if($owner.ReturnValue -ne 0 -or ([string]$owner.Sid) -notmatch '^S-1-5-[0-9-]+$'){throw 'observer_owner_unknown'};$m.ownerSid=[string]$owner.Sid
-            $arguments=[HitchletObserverArgv]::Read([string]$x.CommandLine);$m.argc=$arguments.Length;$tail=[string[]]@($arguments|Select-Object -Skip 1);$m.argvSha256=Observer-TextHash ($tail.Length.ToString([Globalization.CultureInfo]::InvariantCulture)+':'+[string]::Join([string][char]0,$tail))
+            $arguments=[HitchletObserverArgv]::Read([string]$x.CommandLine);$m.argc=$arguments.Length;$tail=[string[]]@($arguments|Select-Object -Skip 1);$m.argvSha256=Observer-TextHash ($tail.Length.ToString([Globalization.CultureInfo]::InvariantCulture)+':'+[string]::Join([string][char]0,$tail));if($m.role -ceq 'wsl_host'){$m['wslHostArguments']=Observer-WslHostArguments $arguments}
             $current=Get-CimInstance Win32_Process -Filter ('ProcessId='+$x.ProcessId)
             if(!$current){$m.status='exited'}elseif($current.CreationDate.ToUniversalTime().Ticks -ne $x.CreationDate.ToUniversalTime().Ticks -or $current.ParentProcessId -ne $x.ParentProcessId -or $current.CommandLine -cne $x.CommandLine -or [HitchletFileIdentity]::Read($image) -cne $identity){$m.status='changed'}else{$ownerAfter=Invoke-CimMethod -InputObject $current -MethodName GetOwnerSid;if($ownerAfter.ReturnValue -ne 0 -or $ownerAfter.Sid -cne $m.ownerSid){$m.status='changed'}else{$null=[HitchletProcessImage]::Read([int]$x.ProcessId,$x.CreationDate.ToUniversalTime().Ticks);$m.status='stable'}}
           } catch {$current=Get-CimInstance Win32_Process -Filter ('ProcessId='+$x.ProcessId);if(!$current){$m.status='exited'}}
@@ -312,13 +324,38 @@ public static class HitchletProcessImage {
         $chain+=@($metadataCache[$key])
       }
       $producerNow=Get-CimInstance Win32_Process -Filter ('ProcessId='+$observerProducer.ProcessId)
-      if($producerNow -and $producerNow.CreationDate.ToUniversalTime().Ticks -eq $observerProducer.CreationDate.ToUniversalTime().Ticks){$d['observer']=@{producerPid=[int]$observerProducer.ProcessId;producerCreationTicks=$producerFact.creationTicks;chain=$chain};$recorded++}
+      if($producerNow -and $producerNow.CreationDate.ToUniversalTime().Ticks -eq $observerProducer.CreationDate.ToUniversalTime().Ticks){
+        $proof=@{producerPid=[int]$observerProducer.ProcessId;producerCreationTicks=$producerFact.creationTicks;chain=$chain}
+        if($CollectObserverCandidates){$observerCandidates+=@($proof)}
+        foreach($originalDiagnostic in $reconciled.diagnostics){if($originalDiagnostic.kind -ceq 'new_instance' -and $originalDiagnostic.pid -eq $d.pid -and $originalDiagnostic.parentPid -eq $d.parentPid){$originalDiagnostic['observer']=$proof}}
+        $recorded++
+      }
+    }
+    if($CollectObserverCandidates -and $ObserverReceiptFile -and $ObserverKeeperArgvSha256 -match '^[a-f0-9]{64}$'){
+      Assert-PrivatePath $ObserverReceiptFile
+      $receipt=Get-Content -LiteralPath $ObserverReceiptFile -Raw -Encoding UTF8|ConvertFrom-Json
+      if($receipt.producerPid -eq $observerProducer.ProcessId -and $receipt.ownerSid -ceq $ObserverOwnerSid -and [HitchletProcessImage]::SameCreationMicrosecond([long]$receipt.producerStartedTicks,[long]$producerFact.creationTicks)){
+        $keeperRows=@($metadataCache.Values|Where-Object{$_.pid -eq $receipt.keeper.pid -and $_.role -ceq 'wsl_system' -and $_.status -ceq 'stable' -and $_.ownerSid -ceq $ObserverOwnerSid -and $_.parentPid -eq $observerProducer.ProcessId -and $_.argc -eq 10 -and $_.argvSha256 -ceq $ObserverKeeperArgvSha256 -and [HitchletProcessImage]::SameCreationMicrosecond([long]$receipt.keeper.startedTicks,[long]$_.creationTicks)})
+        if($keeperRows.Count -eq 1){
+          $keeperRow=$keeperRows[0]
+          $storeRows=@($metadataCache.Values|Where-Object{$_.parentPid -eq $keeperRow.pid -and $_.role -ceq 'wsl_store' -and $_.status -ceq 'stable' -and $_.ownerSid -ceq $ObserverOwnerSid -and $_.argc -eq 10 -and $_.argvSha256 -ceq $ObserverKeeperArgvSha256})
+          if($storeRows.Count -eq 1){
+            $storeRow=$storeRows[0]
+            $hostRows=@($metadataCache.Values|Where-Object{$_.parentPid -eq $storeRow.pid -and $_.role -ceq 'wsl_host' -and $_.status -ceq 'stable' -and $_.ownerSid -ceq $ObserverOwnerSid -and $_.wslHostArguments.shapeMatches -and $_.wslHostArguments.distributionMatches -and $_.wslHostArguments.vmGuidSha256})
+            if($hostRows.Count -eq 1){
+              $reference=@{pid=$keeperRow.pid;creationTicks=$keeperRow.creationTicks;vmGuidSha256=$hostRows[0].wslHostArguments.vmGuidSha256;chain=@($hostRows[0],$storeRow,$keeperRow)}
+              foreach($proof in $observerCandidates){$proof['keeperReference']=$reference}
+              foreach($d in $reconciled.diagnostics){if($d.observer){$d.observer['keeperReference']=$reference}}
+            }
+          }
+        }
+      }
     }
   }
   } catch {
     # New optional metadata is not safety evidence and must not change the original inventory result.
   }
-  [pscustomobject]@{complete=[bool]$complete;wslRunning=$wslRunning;runningDistributions=$distributions;localWslEnumerationComplete=$wslLocalComplete;runningTasks=$tasks;bootRecordId=$boot.bootRecordId;bootTime=$boot.bootTime;processes=$processes;services=$services;diagnostics=$reconciled.diagnostics} | ConvertTo-Json -Depth 6 -Compress
+  [pscustomobject]@{complete=[bool]$complete;reconciliation=@{completeBefore=$completeBeforeReconcile;completeAfter=[bool]$reconciled.complete;diagnosticCount=[int]$reconciled.diagnosticCount};observerCandidates=$observerCandidates;wslRunning=$wslRunning;runningDistributions=$distributions;localWslEnumerationComplete=$wslLocalComplete;runningTasks=$tasks;bootRecordId=$boot.bootRecordId;bootTime=$boot.bootTime;processes=$processes;services=$services;diagnostics=$reconciled.diagnostics} | ConvertTo-Json -Depth 12 -Compress
   exit
 }
 # Native local API only. Never use shutdown.exe /t (which implies force for nonzero timeouts).

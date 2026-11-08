@@ -210,3 +210,71 @@ it("drops malformed optional observer telemetry without changing a genuine incom
   expect(parsed.diagnostics?.[0]?.kind).toBe("new_instance");
   expect(parsed.diagnostics?.[0]?.observer).toBeUndefined();
 });
+it("retains only bounded VM proof fields and separates raw completeness from the exact observer assessment", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "power-observer-projection-"));
+  try {
+    const sample = observation();
+    const process = {
+      pid: 11,
+      parentPid: 10,
+      creationTicks: "1000",
+      role: "wsl_host" as const,
+      status: "stable" as const,
+      ownerSid: "S-1-5-21-1000",
+      imageSha256: "a".repeat(64),
+      argvSha256: "b".repeat(64),
+      argc: 11,
+      wslHostArguments: {
+        shapeMatches: true,
+        distributionMatches: true,
+        vmGuidSha256: "c".repeat(64),
+        argv: "secret-value",
+      },
+    };
+    sample.inventoryComplete = false;
+    sample.observerAssessment = {
+      configured: true,
+      artifactMatched: true,
+      reconcilerOnlyObservers: true,
+      processPids: Array.from({ length: 50 }, (_, n) => n + 10),
+    };
+    sample.diagnostics = [
+      {
+        kind: "new_instance",
+        pid: 11,
+        parentPid: 10,
+        observer: {
+          producerPid: 10,
+          producerCreationTicks: "900",
+          chain: [process],
+          keeperReference: {
+            pid: 20,
+            creationTicks: "950",
+            vmGuidSha256: "c".repeat(64),
+            chain: [process, process, process],
+          },
+        },
+      },
+    ];
+    await saveNativeWorkloadObservation(join(dir, "journal"), sample, null);
+    const raw = await readFile(
+        join(dir, "journal.workload-observation.json"),
+        "utf8",
+      ),
+      saved = JSON.parse(raw);
+    expect(raw).not.toContain("secret-value");
+    expect(saved.latest.inventoryComplete).toBe(false);
+    expect(saved.latest.observerAssessment.reconcilerOnlyObservers).toBe(true);
+    expect(saved.latest.observerAssessment.processPids).toHaveLength(32);
+    expect(
+      saved.latest.diagnostics[0].observer.keeperReference.chain[0]
+        .wslHostArguments,
+    ).toEqual({
+      shapeMatches: true,
+      distributionMatches: true,
+      vmGuidSha256: "c".repeat(64),
+    });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

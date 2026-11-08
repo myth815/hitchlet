@@ -10,6 +10,25 @@ export const wslReceiptPolicySchema = z
     producerTask: z.string().startsWith("\\"),
     definitionSha256: z.string().regex(/^[a-f0-9]{64}$/),
     ownerSid: z.string().regex(/^S-1-5-[0-9-]+$/),
+    readonlyObserver: z
+      .object({
+        publisherSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        clientSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        collectorSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        collectorArgvSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        enumerationArgvSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        images: z
+          .object({
+            powershell: z.string().regex(/^[a-f0-9]{64}$/),
+            wsl_system: z.string().regex(/^[a-f0-9]{64}$/),
+            wsl_store: z.string().regex(/^[a-f0-9]{64}$/),
+            wsl_host: z.string().regex(/^[a-f0-9]{64}$/),
+            conhost: z.string().regex(/^[a-f0-9]{64}$/),
+          })
+          .strict(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export const wslReceiptSchema = z
@@ -29,6 +48,7 @@ export const wslReceiptSchema = z
       .strict(),
   })
   .strict();
+export type WslReceipt = z.infer<typeof wslReceiptSchema>;
 /** A local native file is trusted only as output from the exact existing user task. */
 export function validateWslReceipt(
   raw: unknown,

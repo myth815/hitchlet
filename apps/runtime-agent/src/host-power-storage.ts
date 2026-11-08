@@ -125,6 +125,12 @@ export type NativeWorkloadObservation = {
   hostProbeEndedAtMs: number;
   workloadCheckedAtMs: number;
   inventoryComplete: boolean;
+  observerAssessment?: {
+    configured: boolean;
+    artifactMatched: boolean;
+    reconcilerOnlyObservers: boolean;
+    processPids: readonly number[];
+  };
   baseProbeStatus: "complete" | "partial" | "failed";
   baseErrorCodes: readonly string[];
   diagnostics: readonly {
@@ -151,6 +157,26 @@ export type NativeWorkloadObservation = {
 };
 /** Fixed fields only: no native process argv, names, paths, environment or raw errors. */
 function workloadObservationRecord(o: NativeWorkloadObservation) {
+  const observerProcess = (p: NativeObserverDiagnostic["chain"][number]) => ({
+    pid: p.pid,
+    parentPid: p.parentPid,
+    creationTicks: p.creationTicks,
+    role: p.role,
+    status: p.status,
+    ownerSid: p.ownerSid,
+    imageSha256: p.imageSha256,
+    argvSha256: p.argvSha256,
+    argc: p.argc,
+    ...(p.wslHostArguments
+      ? {
+          wslHostArguments: {
+            shapeMatches: p.wslHostArguments.shapeMatches,
+            distributionMatches: p.wslHostArguments.distributionMatches,
+            vmGuidSha256: p.wslHostArguments.vmGuidSha256,
+          },
+        }
+      : {}),
+  });
   return {
     observedAt: o.observedAt,
     executorPid: o.executorPid,
@@ -161,6 +187,14 @@ function workloadObservationRecord(o: NativeWorkloadObservation) {
     hostProbeEndedAtMs: o.hostProbeEndedAtMs,
     workloadCheckedAtMs: o.workloadCheckedAtMs,
     inventoryComplete: o.inventoryComplete,
+    observerAssessment: o.observerAssessment
+      ? {
+          configured: o.observerAssessment.configured,
+          artifactMatched: o.observerAssessment.artifactMatched,
+          reconcilerOnlyObservers: o.observerAssessment.reconcilerOnlyObservers,
+          processPids: o.observerAssessment.processPids.slice(0, 32),
+        }
+      : null,
     baseProbeStatus: o.baseProbeStatus,
     baseErrorCodes: [
       ...new Set(
@@ -205,17 +239,19 @@ function workloadObservationRecord(o: NativeWorkloadObservation) {
         ? {
             producerPid: d.observer.producerPid,
             producerCreationTicks: d.observer.producerCreationTicks,
-            chain: d.observer.chain.slice(0, 4).map((p) => ({
-              pid: p.pid,
-              parentPid: p.parentPid,
-              creationTicks: p.creationTicks,
-              role: p.role,
-              status: p.status,
-              ownerSid: p.ownerSid,
-              imageSha256: p.imageSha256,
-              argvSha256: p.argvSha256,
-              argc: p.argc,
-            })),
+            chain: d.observer.chain.slice(0, 4).map(observerProcess),
+            ...(d.observer.keeperReference
+              ? {
+                  keeperReference: {
+                    pid: d.observer.keeperReference.pid,
+                    creationTicks: d.observer.keeperReference.creationTicks,
+                    vmGuidSha256: d.observer.keeperReference.vmGuidSha256,
+                    chain: d.observer.keeperReference.chain
+                      .slice(0, 3)
+                      .map(observerProcess),
+                  },
+                }
+              : {}),
           }
         : null,
     })),

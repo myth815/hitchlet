@@ -4,6 +4,10 @@ import {
   type wslReceiptSchema,
 } from "./host-wsl-receipt.js";
 import { HostRequestError, isTransientHostFailure } from "./host-client.js";
+import {
+  assessOwnWslObservers,
+  type ObserverArtifacts,
+} from "./host-power-observer.js";
 import { createHash, randomUUID } from "node:crypto";
 import { uptime } from "node:os";
 import { z } from "zod";
@@ -310,43 +314,59 @@ export const guardHash = (g: WorkloadGuard) => {
     )
     .digest("hex");
 };
+const NativeObserverProcessSchema = z
+  .object({
+    pid: z.number().int().positive(),
+    parentPid: z.number().int().nonnegative(),
+    creationTicks: z.string().regex(/^[0-9]+$/),
+    role: z.enum([
+      "powershell",
+      "wsl_system",
+      "wsl_store",
+      "wsl_host",
+      "conhost",
+    ]),
+    status: z.enum(["stable", "exited", "changed", "unavailable"]),
+    ownerSid: z
+      .string()
+      .regex(/^S-1-5-[0-9-]+$/)
+      .nullable(),
+    imageSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+    argvSha256: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+    argc: z.number().int().nonnegative().max(64),
+    wslHostArguments: z
+      .object({
+        shapeMatches: z.boolean(),
+        distributionMatches: z.boolean(),
+        vmGuidSha256: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .nullable(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
 export const NativeObserverDiagnosticSchema = z
   .object({
     producerPid: z.number().int().positive(),
     producerCreationTicks: z.string().regex(/^[0-9]+$/),
-    chain: z
-      .array(
-        z
-          .object({
-            pid: z.number().int().positive(),
-            parentPid: z.number().int().nonnegative(),
-            creationTicks: z.string().regex(/^[0-9]+$/),
-            role: z.enum([
-              "powershell",
-              "wsl_system",
-              "wsl_store",
-              "wsl_host",
-              "conhost",
-            ]),
-            status: z.enum(["stable", "exited", "changed", "unavailable"]),
-            ownerSid: z
-              .string()
-              .regex(/^S-1-5-[0-9-]+$/)
-              .nullable(),
-            imageSha256: z
-              .string()
-              .regex(/^[a-f0-9]{64}$/)
-              .nullable(),
-            argvSha256: z
-              .string()
-              .regex(/^[a-f0-9]{64}$/)
-              .nullable(),
-            argc: z.number().int().nonnegative().max(64),
-          })
-          .strict(),
-      )
-      .min(1)
-      .max(4),
+    chain: z.array(NativeObserverProcessSchema).min(1).max(4),
+    keeperReference: z
+      .object({
+        pid: z.number().int().positive(),
+        creationTicks: z.string().regex(/^[0-9]+$/),
+        vmGuidSha256: z.string().regex(/^[a-f0-9]{64}$/),
+        chain: z.array(NativeObserverProcessSchema).length(3),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type NativeObserverDiagnostic = z.infer<
@@ -354,6 +374,20 @@ export type NativeObserverDiagnostic = z.infer<
 >;
 export const WorkloadInventorySchema = NativeBootRecordSchema.extend({
   complete: z.boolean(),
+  reconciliation: z
+    .object({
+      completeBefore: z.boolean(),
+      completeAfter: z.boolean(),
+      diagnosticCount: z.number().int().nonnegative(),
+    })
+    .strict()
+    .optional()
+    .catch(undefined),
+  observerCandidates: z
+    .array(NativeObserverDiagnosticSchema)
+    .max(32)
+    .optional()
+    .catch(undefined),
   diagnostics: z
     .array(
       z
@@ -427,6 +461,7 @@ export type NativeOwnedWatchProcess = {
   creationTicks: string;
   path: string;
 };
+export type WorkloadInventory = z.infer<typeof WorkloadInventorySchema>;
 export function workloadReasons(
   g: WorkloadGuard,
   raw: unknown,
@@ -435,12 +470,12 @@ export function workloadReasons(
   ownedWatch: readonly NativeOwnedWatchProcess[] = [],
   wslEvidence?: unknown,
   now = Date.now(),
+  observerArtifacts?: ObserverArtifacts,
 ) {
   const parsed = WorkloadInventorySchema.safeParse(raw);
   if (!parsed.success) return ["workload_inventory_invalid"];
   const i = parsed.data,
     reasons: string[] = [];
-  if (!i.complete) reasons.push("workload_inventory_incomplete");
   const [launcher, watch] = ownedWatch;
   const watchChain =
     ownedWatch.length === 2 &&
@@ -480,6 +515,9 @@ export function workloadReasons(
       wslEvidence = undefined;
     }
   }
+  const observers = assessOwnWslObservers(g, i, receipt, observerArtifacts);
+  if (!i.complete && !observers.reconcilerOnlyObservers)
+    reasons.push("workload_inventory_incomplete");
   const wslReasons = i.wslRunning
     ? wslWorkloadReasons(
         g.wslDistributions,
@@ -541,7 +579,13 @@ export function workloadReasons(
   };
   for (const p of i.processes) {
     const owned = watchChain && ownedWatch.some((h) => matchesWatch(p, h));
-    if (p.pid === selfPid || p.pid === probePid || owned) continue;
+    if (
+      p.pid === selfPid ||
+      p.pid === probePid ||
+      owned ||
+      observers.processPids.has(p.pid)
+    )
+      continue;
     // Only this task's actual engine process; children remain ordinary workloads.
     if (
       i.runningTasks.some((t) => t.enginePid === p.pid && reviewedTask(t)) &&
