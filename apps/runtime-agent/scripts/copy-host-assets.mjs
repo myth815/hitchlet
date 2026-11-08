@@ -21,6 +21,7 @@ await copyFile(
 for (const file of [
   "hyperv-powershell-direct.ps1",
   "hyperv-windows-guest.ps1",
+  "hyperv-windows-interactive.ps1",
 ]) {
   await copyFile(resolve("src/drivers", file), resolve("dist/drivers", file));
 }

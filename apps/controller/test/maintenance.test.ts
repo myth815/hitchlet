@@ -1027,3 +1027,163 @@ describe("D23 operational lifecycle", () => {
     );
   });
 });
+
+it("credential intent pins terminal history until reference destruction is durable", async () => {
+  const f = await fixture(),
+    now = Date.now();
+  const ticket = await f.tickets.acquire(
+    f.consumer,
+    "credential-history",
+    f.request,
+  );
+  await f.tickets.cancel(ticket.ticketId, f.consumer);
+  await f.db.run(
+    "UPDATE tickets SET released_at_ms=?,updated_at_ms=? WHERE id=?",
+    [now - 181 * 86400000, now - 181 * 86400000, ticket.ticketId],
+  );
+  await f.db.run(
+    "INSERT INTO idempotency_keys(consumer_id,route_scope,idempotency_key,request_hash,ticket_id,safe_response_json,created_at_ms,retain_until_ms) VALUES(?,?,?,?,?,?,?,?)",
+    [
+      f.consumer,
+      "tickets.console.credentials.intent",
+      ticket.ticketId + ":1",
+      "a".repeat(64),
+      ticket.ticketId,
+      JSON.stringify({
+        state: "destroying",
+        secretRef: "secret:" + "a".repeat(32),
+      }),
+      now - 181 * 86400000,
+      now - 86400000,
+    ],
+  );
+  expect((await pruneHistory(f.db, now)).tickets).toBe(0);
+  await f.db.run(
+    "UPDATE idempotency_keys SET safe_response_json=? WHERE route_scope='tickets.console.credentials.intent'",
+    [JSON.stringify({ state: "destroyed", secretRef: null })],
+  );
+  expect((await pruneHistory(f.db, now)).tickets).toBe(1);
+});
+it("credential API authenticates and binds generation/key, validates input and never caches material", async () => {
+  const f = await fixture(),
+    seen: any[] = [];
+  const result = {
+    ticketId: "fixture",
+    generation: 1,
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+    status: "unknown",
+  };
+  const app = await buildApp(
+    loadConfig({ DATA_DIR: f.dir, LOG_LEVEL: "silent" }),
+    {
+      storage: f.db,
+      consoleCredentials: {
+        prepare: async (...args: any[]) => {
+          seen.push(args);
+          return result;
+        },
+        read: async (...args: any[]) => {
+          seen.push(args);
+          return result;
+        },
+      } as any,
+    },
+  );
+  apps.push(app);
+  const headers = { authorization: `Bearer ${f.token}` };
+  const unauthorized = await app.inject({
+    method: "POST",
+    url: "/v1/tickets/fixture/console-credentials",
+    payload: { generation: 1 },
+  });
+  expect(unauthorized.statusCode).toBe(401);
+  expect(seen).toEqual([]);
+  const missingKey = await app.inject({
+    method: "POST",
+    url: "/v1/tickets/fixture/console-credentials",
+    headers,
+    payload: { generation: 1 },
+  });
+  expect(missingKey.statusCode).toBe(422);
+  const prepared = await app.inject({
+    method: "POST",
+    url: "/v1/tickets/fixture/console-credentials",
+    headers: { ...headers, "idempotency-key": "saved-key" },
+    payload: { generation: 1 },
+  });
+  expect(prepared.statusCode).toBe(200);
+  expect(prepared.headers["cache-control"]).toBe("no-store");
+  expect(seen[0]).toEqual([f.admin, "fixture", 1, "saved-key"]);
+  const read = await app.inject({
+    url: "/v1/tickets/fixture/console-credentials?generation=1",
+    headers,
+  });
+  expect(read.statusCode).toBe(200);
+  expect(read.headers.pragma).toBe("no-cache");
+  expect(seen[1]).toEqual([f.admin, "fixture", 1]);
+  const bad = await app.inject({
+    url: "/v1/tickets/fixture/console-credentials?generation=0",
+    headers,
+  });
+  expect(bad.statusCode).toBe(422);
+  expect(seen).toHaveLength(2);
+  const document = (await app.inject({ url: "/v1/openapi.json" })).json();
+  expect(
+    document.paths["/v1/tickets/{ticketId}/console-credentials"],
+  ).toHaveProperty("get");
+});
+
+it("credential reservation uses the real migrated ledger constraints and stable generation slot", async () => {
+  const { ConsoleCredentialStore } = await import(
+    "../src/storage/console-credential-store.js"
+  );
+  const f = await fixture(),
+    now = Date.now();
+  const receipt = await f.tickets.acquire(
+    f.consumer,
+    "credential-reserve",
+    f.request,
+  );
+  await f.tickets.reserveNext();
+  await f.worker.reconcile();
+  const lease = (await f.db.get<{ allocation_id: string; generation: bigint }>(
+    "SELECT allocation_id,generation FROM leases WHERE ticket_id=?",
+    [receipt.ticketId],
+  ))!;
+  await f.db.run("UPDATE leases SET claimed_at_ms=? WHERE ticket_id=?", [
+    now,
+    receipt.ticketId,
+  ]);
+  const store = new ConsoleCredentialStore(f.db);
+  const intent = {
+    version: 1 as const,
+    allocationId: lease.allocation_id,
+    generation: Number(lease.generation),
+    nonce: randomUUID(),
+    secretRef: "secret:" + "b".repeat(32),
+    state: "reserved" as const,
+  };
+  expect(
+    await store.reserve(f.consumer, receipt.ticketId, intent, now),
+  ).toEqual(intent);
+  expect(
+    await store.reserve(
+      f.consumer,
+      receipt.ticketId,
+      { ...intent, nonce: randomUUID(), secretRef: "secret:" + "c".repeat(32) },
+      now,
+    ),
+  ).toEqual(intent);
+  const prepared = await store.update(f.consumer, receipt.ticketId, intent, {
+    ...intent,
+    state: "prepared",
+  });
+  expect(prepared.state).toBe("prepared");
+  expect(await store.cleaned(f.consumer, receipt.ticketId, prepared)).toBe(
+    false,
+  );
+  const row = (await f.db.get<{ request_hash: string }>(
+    "SELECT request_hash FROM idempotency_keys WHERE route_scope='tickets.console.credentials.intent'",
+  ))!;
+  expect(row.request_hash).toMatch(/^[a-f0-9]{64}$/);
+});

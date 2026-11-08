@@ -1,4 +1,6 @@
 import {
+  ConsoleCredentialRequestSchema,
+  ConsoleCredentialViewSchema,
   ConsoleCommandSchema,
   ConsoleResultSchema,
   type ConsoleCommand,
@@ -97,6 +99,30 @@ function randomKey(): string {
 }
 
 export class TicketCommands {
+  async prepareConsoleCredentials(
+    ticketId: Id,
+    generation: number,
+    options: { idempotencyKey: string },
+  ) {
+    const body = readRequest(ConsoleCredentialRequestSchema, { generation });
+    return this.http.request(
+      `/v1/tickets/${encodeURIComponent(ticketId)}/console-credentials`,
+      "POST",
+      body,
+      (v) => readResponse(ConsoleCredentialViewSchema, v),
+      { ticketId, key: options.idempotencyKey },
+    );
+  }
+  async getConsoleCredentials(ticketId: Id, generation: number) {
+    const checked = readRequest(ConsoleCredentialRequestSchema, { generation });
+    return this.http.request(
+      `/v1/tickets/${encodeURIComponent(ticketId)}/console-credentials?generation=${checked.generation}`,
+      "GET",
+      undefined,
+      (v) => readResponse(ConsoleCredentialViewSchema, v),
+      { ticketId },
+    );
+  }
   async console(ticketId: Id, command: ConsoleCommand) {
     const body = readRequest(ConsoleCommandSchema, command);
     return this.http.request(

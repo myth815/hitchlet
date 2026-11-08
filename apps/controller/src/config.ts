@@ -26,6 +26,10 @@ const ConfigSchema = z
       ])
       .default("disabled"),
     SIMULATOR_DATA_DIR: z.string().min(1).optional(),
+    HITCHLET_CONSOLE_PASSWORDS: z
+      .enum(["true", "false"])
+      .default("false")
+      .transform((v) => v === "true"),
     HITCHLET_POWER_CONFIG: z.string().min(1).optional(),
     HITCHLET_SECRET_KEY_FILE: z.string().min(1).optional(),
     PORTAINER_ALLOW_LOOPBACK_HTTP: z
@@ -94,6 +98,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     "SIMULATOR_DATA_DIR",
     "HITCHLET_SECRET_KEY_FILE",
     "HITCHLET_POWER_CONFIG",
+    "HITCHLET_CONSOLE_PASSWORDS",
     "PORTAINER_ALLOW_LOOPBACK_HTTP",
     "COOKIE_SECURE",
   ] as const;

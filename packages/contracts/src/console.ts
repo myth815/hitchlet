@@ -64,3 +64,36 @@ export const ConsoleResultSchema = z
   })
   .strict();
 export type ConsoleResult = z.infer<typeof ConsoleResultSchema>;
+
+export const ConsoleCredentialRequestSchema = z
+  .object({ generation: z.number().int().positive() })
+  .strict();
+export const ConsoleCredentialViewSchema = z
+  .object({
+    ticketId: z.string().min(1),
+    generation: z.number().int().positive(),
+    expiresAt: z.string().datetime(),
+    status: z.enum([
+      "not_prepared",
+      "pending",
+      "ready",
+      "unknown",
+      "cleanup_pending",
+      "destroyed",
+    ]),
+    credentialId: z.string().uuid().optional(),
+    authentication: z
+      .object({
+        kind: z.literal("ephemeral_password"),
+        username: z.literal("workspace"),
+        password: z.string().min(40).max(128),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine(
+    (v) => (v.status === "ready") === (v.authentication !== undefined),
+    "Only ready access delivers authentication",
+  );
+export type ConsoleCredentialView = z.infer<typeof ConsoleCredentialViewSchema>;

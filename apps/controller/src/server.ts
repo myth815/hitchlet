@@ -12,7 +12,11 @@ import {
 import { RotatingLog } from "./rotating-log.js";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
-import { createHyperVConsoleExecutor } from "./providers/hyperv-console.js";
+import { ConsoleCredentialService } from "./application/console-credentials.js";
+import {
+  createHyperVCredentialExecutor,
+  createHyperVConsoleExecutor,
+} from "./providers/hyperv-console.js";
 import { buildApp } from "./app.js";
 import { loadConfig } from "./config.js";
 import { openStorage } from "./storage/index.js";
@@ -77,9 +81,16 @@ logStream.on("error", () => {
 });
 let maintenanceRunning: Promise<unknown> | undefined;
 let lastRetentionAt = 0;
+let consoleCredentials: ConsoleCredentialService | undefined;
 const maintenanceTick = () => {
   if (!maintenanceRunning)
     maintenanceRunning = (async () => {
+      await consoleCredentials?.cleanup().catch(() => {
+        // A retained deletion intent retries next tick; it must not disable disk monitoring.
+        app?.log.warn(
+          "Console credential cleanup deferred; encrypted reference retained",
+        );
+      });
       const health = await maintenance.sampleDisk();
       if (
         health.admission.startsWith("disk_") ||
@@ -110,6 +121,14 @@ const secrets = config.HITCHLET_SECRET_KEY_FILE
   ? await LocalSecretStore.open(
       config.DATA_DIR,
       config.HITCHLET_SECRET_KEY_FILE,
+    )
+  : undefined;
+consoleCredentials = secrets
+  ? new ConsoleCredentialService(
+      storage,
+      secrets,
+      createHyperVCredentialExecutor(storage, secrets),
+      config.HITCHLET_CONSOLE_PASSWORDS,
     )
   : undefined;
 let recoveryState: "ready" | "recovering" | "unavailable" = controlsReady
@@ -608,6 +627,7 @@ try {
       ? {
           secrets,
           console: createHyperVConsoleExecutor(storage, secrets),
+          ...(consoleCredentials ? { consoleCredentials } : {}),
           tartFactsForRevision: (input) =>
             tartRuntimeFactsForRevision(input, secrets),
           hyperVFactsForRevision: (input) =>

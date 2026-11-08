@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
+  hyperVInteractiveReceiptSchema,
+  hyperVRuntimeCredentialResponseSchema,
+  type HyperVInteractiveRequest,
   hyperVInspectionSchema,
   hyperVConsoleResultSchema,
   type HyperVConsoleRequest,
@@ -70,6 +73,12 @@ export class HyperVRuntimeHttpClient {
     return this.action({ kind: "destroy", identity });
   }
 
+  async consoleCredentials(request: HyperVInteractiveRequest) {
+    return hyperVInteractiveReceiptSchema.parse(
+      await this.actionResult({ kind: "console.credentials", request }),
+    );
+  }
+
   async console(request: HyperVConsoleRequest) {
     return hyperVConsoleResultSchema.parse(
       await this.actionResult({ kind: "console", request }),
@@ -105,7 +114,8 @@ export class HyperVRuntimeHttpClient {
     const identity =
       action.kind === "reconcile" ||
       action.kind === "bootstrap.apply" ||
-      action.kind === "console"
+      action.kind === "console" ||
+      action.kind === "console.credentials"
         ? action.request.identity
         : action.identity;
     const request = hyperVRuntimeActionRequestSchema.parse({
@@ -122,9 +132,11 @@ export class HyperVRuntimeHttpClient {
       request.runtimeIdentityId,
     );
     const response = (
-      action.kind === "console"
-        ? hyperVRuntimeConsoleResponseSchema
-        : hyperVRuntimeActionResponseSchema
+      action.kind === "console.credentials"
+        ? hyperVRuntimeCredentialResponseSchema
+        : action.kind === "console"
+          ? hyperVRuntimeConsoleResponseSchema
+          : hyperVRuntimeActionResponseSchema
     ).parse(
       await this.options.transport.exchangeJson(
         "/v1/hyperv/actions",

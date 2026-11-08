@@ -5,6 +5,10 @@ import { join, win32 } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import {
+  hyperVInteractiveRequestSchema,
+  hyperVInteractiveReceiptSchema,
+  hyperVGuestInteractiveReceiptSchema,
+  type HyperVInteractiveReceipt,
   hyperVConsoleRequestSchema,
   hyperVConsoleResultSchema,
   type HyperVConsoleResult,
@@ -72,6 +76,14 @@ const manifestSchema = z
       )
       .max(4096)
       .optional(),
+    interactive: z
+      .object({
+        nonce: z.string().uuid(),
+        passwordHash: z.string().regex(/^[a-f0-9]{64}$/),
+        state: z.enum(["attempted", "applied", "unknown"]),
+      })
+      .strict()
+      .optional(),
     bootstrapRequest: hyperVGuestBootstrapRequestSchema.optional(),
     bootstrapReceipt: hyperVGuestBootstrapReceiptSchema.optional(),
     bootstrapState: z.enum(["pending", "unknown", "applied"]).optional(),
@@ -111,6 +123,7 @@ export class HyperVLocalDriver {
       workRoot: string;
       run?: HyperVNativeRunner;
       guestBootstrap?: HyperVGuestBootstrapPort;
+      guestInteractive?: import("./hyperv-interactive.js").HyperVGuestInteractivePort;
     },
   ) {
     this.workRoot = win32.normalize(absolutePath.parse(options.workRoot));
@@ -237,6 +250,126 @@ export class HyperVLocalDriver {
         await this.store(m);
       }
       return result;
+    });
+  }
+
+  consoleCredentials(input: unknown): Promise<HyperVInteractiveReceipt> {
+    const request = hyperVInteractiveRequestSchema.parse(input);
+    return this.lock(request.identity, async () => {
+      const m = await this.load(request.identity);
+      if (!m) throw Error("Interactive allocation missing");
+      this.fence(m, request.identity);
+      const observation = await this.observe(request.identity, m);
+      if (
+        Date.parse(request.expiresAt) <= Date.now() ||
+        m.phase !== "owned" ||
+        m.spec.template.guestOs !== "windows" ||
+        m.bootstrapState !== "applied" ||
+        m.bootstrapReceipt?.account !== "workspace" ||
+        observation.presence !== "present" ||
+        !observation.inventoryComplete ||
+        !observation.vm ||
+        observation.vm.state !== "running" ||
+        !this.owns(request.identity, m, observation.vm) ||
+        !this.matches(observation.vm, m.spec) ||
+        canonical(m.identity) !== canonical(request.identity)
+      )
+        throw Error("Interactive allocation is not accessible");
+      if (
+        m.interactive &&
+        (m.interactive.nonce !== request.nonce ||
+          m.interactive.passwordHash !== request.passwordHash)
+      )
+        throw Error("Interactive intent changed");
+      const base = {
+        identity: request.identity,
+        nonce: request.nonce,
+        passwordHash: request.passwordHash,
+        account: "workspace" as const,
+      };
+      if (!this.options.guestInteractive)
+        throw Error("Interactive guest channel unavailable");
+      if (
+        request.mode === "prepare" &&
+        createHash("sha256").update(request.password!).digest("hex") !==
+          request.passwordHash
+      )
+        throw Error("Interactive material mismatch");
+      const guest = {
+        identity: request.identity,
+        nonce: request.nonce,
+        passwordHash: request.passwordHash,
+        account: "workspace" as const,
+        vmId: observation.vm.id,
+        guestOs: "windows" as const,
+        architecture: "amd64" as const,
+      };
+      const deadline = Math.min(
+        Date.parse(request.expiresAt),
+        Date.now() + 30000,
+        currentCommandDeadlineMs() ?? Infinity,
+      );
+      const inspect = async () => {
+        const value = hyperVGuestInteractiveReceiptSchema.parse(
+          await this.options.guestInteractive!.inspect(guest, deadline),
+        );
+        for (const [key, valueExpected] of Object.entries(guest))
+          if (
+            canonical(value[key as keyof typeof value]) !==
+            canonical(valueExpected)
+          )
+            throw Error("Interactive guest receipt mismatch");
+        return value;
+      };
+      let status: HyperVInteractiveReceipt["status"] = "unknown";
+      try {
+        let receipt = await inspect();
+        if (
+          receipt.status === "not_applied" &&
+          request.mode === "prepare" &&
+          !m.interactive
+        ) {
+          // Persist BEFORE the only possible password mutation. Unknown never repeats it.
+          m.interactive = {
+            nonce: request.nonce,
+            passwordHash: request.passwordHash,
+            state: "attempted",
+          };
+          await this.store(m);
+          if (Date.now() >= deadline)
+            throw Error("Interactive deadline expired");
+          await this.options.guestInteractive.apply(
+            guest,
+            request.password!,
+            deadline,
+          );
+          receipt = await inspect();
+        }
+        // Absence after an attempted call is uncertainty, never permission to reset again.
+        status =
+          receipt.status === "not_applied" && m.interactive
+            ? "unknown"
+            : receipt.status;
+        const after = await this.observe(request.identity, m);
+        if (
+          Date.now() >= deadline ||
+          after.presence !== "present" ||
+          !after.inventoryComplete ||
+          !after.vm ||
+          after.vm.id !== guest.vmId ||
+          after.vm.state !== "running" ||
+          !this.owns(request.identity, m, after.vm) ||
+          !this.matches(after.vm, m.spec)
+        )
+          status = "unknown";
+      } catch {
+        status = "unknown";
+      }
+      if (m.interactive) {
+        m.interactive.state = status === "applied" ? "applied" : "unknown";
+        await this.store(m);
+      }
+      return hyperVInteractiveReceiptSchema.parse({ ...base, status });
     });
   }
 

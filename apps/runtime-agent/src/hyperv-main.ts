@@ -11,7 +11,10 @@ import {
 import type { HyperVGuestBootstrapPort } from "./drivers/hyperv-guest.js";
 import { FileJournal } from "./journal.js";
 import { HyperVTemplateRegistry } from "./hyperv-templates.js";
-import { createPowerShellDirectBootstrap } from "./drivers/hyperv-powershell-direct.js";
+import {
+  createPowerShellDirectBootstrap,
+  createPowerShellDirectInteractiveAccess,
+} from "./drivers/hyperv-powershell-direct.js";
 import { createHyperVRuntimeServer } from "./hyperv-server.js";
 import { listenRuntimeServer } from "./server.js";
 
@@ -150,6 +153,7 @@ export async function createHyperVRuntimeApplication(
     inspectRoot?: InspectWorkRoot;
     nativeRunner?: HyperVNativeRunner;
     guestBootstrap?: HyperVGuestBootstrapPort;
+    guestInteractive?: import("./drivers/hyperv-interactive.js").HyperVGuestInteractivePort;
   } = {},
 ) {
   const config = parseHyperVRuntimeConfig(raw);
@@ -167,6 +171,13 @@ export async function createHyperVRuntimeApplication(
     workRoot: config.workRoot,
     ...(dependencies.nativeRunner ? { run: dependencies.nativeRunner } : {}),
     ...(guestBootstrap ? { guestBootstrap } : {}),
+    ...(dependencies.guestInteractive || config.guestBootstrap
+      ? {
+          guestInteractive:
+            dependencies.guestInteractive ??
+            createPowerShellDirectInteractiveAccess(config.guestBootstrap!),
+        }
+      : {}),
   });
   const journal = new FileJournal(join(config.stateDirectory, "journal.json"));
   await journal.initialize();

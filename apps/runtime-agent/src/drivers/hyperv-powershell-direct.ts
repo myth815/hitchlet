@@ -2,6 +2,9 @@ import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { isAbsolute } from "node:path";
 import {
+  hyperVGuestInteractiveRequestSchema,
+  hyperVGuestInteractiveReceiptSchema,
+  type HyperVGuestInteractiveRequest,
   hyperVGuestBootstrapRequestSchema,
   hyperVGuestBootstrapObservationSchema,
   type HyperVGuestBootstrapRequest,
@@ -11,12 +14,20 @@ import {
   type HyperVGuestBootstrapPort,
 } from "./hyperv-guest.js";
 
-export type HyperVGuestCommand = Readonly<{
-  mode: "inspect" | "apply";
-  request: HyperVGuestBootstrapRequest;
-  credentialFile: string;
-  budgetMs: number;
-}>;
+export type HyperVGuestCommand =
+  | Readonly<{
+      mode: "inspect" | "apply";
+      request: HyperVGuestBootstrapRequest;
+      credentialFile: string;
+      budgetMs: number;
+    }>
+  | Readonly<{
+      mode: "interactive.inspect" | "interactive.apply";
+      request: HyperVGuestInteractiveRequest;
+      password?: string;
+      credentialFile: string;
+      budgetMs: number;
+    }>;
 export type HyperVGuestRunner = (
   command: HyperVGuestCommand,
 ) => Promise<unknown>;
@@ -142,3 +153,47 @@ export const runPowerShellDirectGuest: HyperVGuestRunner = (command) => {
     child.stdin.end(JSON.stringify(command));
   });
 };
+
+/** Uses the existing bootstrap channel to configure only the existing clone account.
+ * No account, host credential, group, network or template changes are performed. */
+export function createPowerShellDirectInteractiveAccess(options: {
+  credentialFile: string;
+  run?: HyperVGuestRunner;
+  now?: () => number;
+}): import("./hyperv-interactive.js").HyperVGuestInteractivePort {
+  if (!isAbsolute(options.credentialFile))
+    throw Error("Absolute guest credential reference required");
+  const now = options.now ?? Date.now,
+    run = options.run ?? runPowerShellDirectGuest;
+  async function action(
+    mode: "interactive.inspect" | "interactive.apply",
+    raw: HyperVGuestInteractiveRequest,
+    deadline: number,
+    password?: string,
+  ) {
+    const request = hyperVGuestInteractiveRequestSchema.parse(raw),
+      budgetMs = Math.min(30000, Math.floor(deadline - now()));
+    if (budgetMs < 1) throw Error("Interactive deadline expired");
+    const result = hyperVGuestInteractiveReceiptSchema.parse(
+      await run({
+        mode,
+        request,
+        credentialFile: options.credentialFile,
+        budgetMs,
+        ...(password === undefined ? {} : { password }),
+      }),
+    );
+    if (now() >= deadline) throw Error("Interactive deadline expired");
+    for (const [key, value] of Object.entries(request))
+      if (
+        JSON.stringify(result[key as keyof typeof result]) !==
+        JSON.stringify(value)
+      )
+        throw Error("Interactive receipt mismatch");
+    return result;
+  }
+  return {
+    inspect: (r, d) => action("interactive.inspect", r, d),
+    apply: (r, p, d) => action("interactive.apply", r, d, p),
+  };
+}

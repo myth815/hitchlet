@@ -74,7 +74,11 @@ import { openApiDocument } from "./http/openapi.js";
 import { TicketCommandService } from "./application/commands.js";
 import { LeaseService } from "./application/leases.js";
 import { ConsoleService, type ConsoleExecutor } from "./application/console.js";
-import { ConsoleCommandSchema } from "@hitchlet/contracts";
+import type { ConsoleCredentialService } from "./application/console-credentials.js";
+import {
+  ConsoleCredentialRequestSchema,
+  ConsoleCommandSchema,
+} from "@hitchlet/contracts";
 import { AccessService } from "./application/access.js";
 import { ApplicationError } from "./application/errors.js";
 import { AdminService } from "./application/admin.js";
@@ -148,6 +152,7 @@ import { z, ZodError, type ZodType } from "zod";
 
 export interface AppRuntime {
   readonly console?: ConsoleExecutor;
+  readonly consoleCredentials?: ConsoleCredentialService;
   readonly storage?: Storage;
   readonly maintenance?: MaintenanceService;
   readonly logStream?: NodeJS.WritableStream;
@@ -1805,6 +1810,57 @@ export async function buildApp(
           actor.consumerId,
           request.params.ticketId,
           parseInput(ConsoleCommandSchema, request.body),
+        );
+        return reply
+          .header("Cache-Control", "no-store")
+          .header("Pragma", "no-cache")
+          .send(result);
+      },
+    );
+    app.post<{ Params: { ticketId: string } }>(
+      "/v1/tickets/:ticketId/console-credentials",
+      async (request, reply) => {
+        const actor = await identify(request, true);
+        if (!actor.scopes.includes("tickets:write") || actor.role === "viewer")
+          return reply.code(403).send(apiError(request.id, "forbidden", false));
+        if (!runtime.consoleCredentials)
+          return reply
+            .code(503)
+            .send(apiError(request.id, "access_unavailable", true));
+        const key = request.headers["idempotency-key"];
+        if (typeof key !== "string" || !key || key.length > 200)
+          throw new RangeError("Invalid Idempotency-Key");
+        const body = parseInput(ConsoleCredentialRequestSchema, request.body);
+        const result = await runtime.consoleCredentials.prepare(
+          actor.consumerId,
+          request.params.ticketId,
+          body.generation,
+          key,
+        );
+        return reply
+          .header("Cache-Control", "no-store")
+          .header("Pragma", "no-cache")
+          .send(result);
+      },
+    );
+    app.get<{ Params: { ticketId: string } }>(
+      "/v1/tickets/:ticketId/console-credentials",
+      async (request, reply) => {
+        const actor = await identify(request);
+        if (!actor.scopes.includes("tickets:write") || actor.role === "viewer")
+          return reply.code(403).send(apiError(request.id, "forbidden", false));
+        if (!runtime.consoleCredentials)
+          return reply
+            .code(503)
+            .send(apiError(request.id, "access_unavailable", true));
+        const query = parseInput(
+          z.object({ generation: z.coerce.number().int().positive() }).strict(),
+          request.query,
+        );
+        const result = await runtime.consoleCredentials.read(
+          actor.consumerId,
+          request.params.ticketId,
+          query.generation,
         );
         return reply
           .header("Cache-Control", "no-store")

@@ -1,3 +1,4 @@
+import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
@@ -701,4 +702,115 @@ it("the shipped PowerShell native dispatcher admits console before any VM lookup
   expect(source).not.toMatch(
     /New-LocalUser|Set-LocalUser|AutoAdminLogon|Enable-NetFirewall|Set-ExecutionPolicy/,
   );
+});
+
+async function interactiveFixture() {
+  const f = await bootstrapFixture();
+  await f.driver.bootstrapApply(f.input);
+  let applied = false,
+    applies = 0,
+    lose = false,
+    marker = true;
+  const guest = {
+    inspect: async (
+      r: import("@hitchlet/contracts/internal").HyperVGuestInteractiveRequest,
+    ) => ({ ...r, status: applied && marker ? "applied" : "not_applied" }),
+    apply: async () => {
+      applies++;
+      applied = true;
+      if (lose) {
+        lose = false;
+        throw Error("reply lost");
+      }
+    },
+  };
+  const options = {
+    ...f.options,
+    guestBootstrap: f.guest,
+    guestInteractive: guest,
+  };
+  const password = "Aa1!" + "random-fixture-material-".repeat(2);
+  const input = {
+    identity,
+    nonce: randomUUID(),
+    passwordHash: createHash("sha256").update(password).digest("hex"),
+    password,
+    mode: "prepare" as const,
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  };
+  return {
+    ...f,
+    input,
+    driver: new HyperVLocalDriver(options),
+    restart: () => new HyperVLocalDriver(options),
+    get applies() {
+      return applies;
+    },
+    lose: () => (lose = true),
+    removeMarker: () => (marker = false),
+  };
+}
+it("interactive lost apply reply is recovered from marker across restart without resetting twice", async () => {
+  const f = await interactiveFixture();
+  f.lose();
+  expect((await f.driver.consoleCredentials(f.input)).status).toBe("unknown");
+  const { password: _, ...read } = f.input;
+  expect(
+    (await f.restart().consoleCredentials({ ...read, mode: "inspect" })).status,
+  ).toBe("applied");
+  expect(f.applies).toBe(1);
+  expect((await f.restart().consoleCredentials(f.input)).status).toBe(
+    "applied",
+  );
+  expect(f.applies).toBe(1);
+  const manifest = await readFile(
+    join(
+      f.options.manifestDirectory,
+      (await readdir(f.options.manifestDirectory))[0]!,
+    ),
+    "utf8",
+  );
+  expect(manifest).not.toContain(f.input.password);
+});
+it("an attempted interactive command never re-applies when marker is absent or the request changes", async () => {
+  const f = await interactiveFixture();
+  await f.driver.consoleCredentials(f.input);
+  f.removeMarker();
+  expect((await f.restart().consoleCredentials(f.input)).status).toBe(
+    "unknown",
+  );
+  expect(f.applies).toBe(1);
+  await expect(
+    f.driver.consoleCredentials({ ...f.input, nonce: randomUUID() }),
+  ).rejects.toThrow("intent changed");
+  expect(f.applies).toBe(1);
+});
+it("interactive inspection is non-mutating and expired, foreign, changed or destroyed clones reject", async () => {
+  const f = await interactiveFixture();
+  const { password: _, ...read } = f.input;
+  expect(
+    (await f.driver.consoleCredentials({ ...read, mode: "inspect" })).status,
+  ).toBe("not_applied");
+  expect(f.applies).toBe(0);
+  await expect(
+    f.driver.consoleCredentials({
+      ...f.input,
+      expiresAt: new Date(0).toISOString(),
+    }),
+  ).rejects.toThrow();
+  await expect(
+    f.driver.consoleCredentials({
+      ...f.input,
+      identity: { ...identity, purpose: "validation" },
+    }),
+  ).rejects.toThrow();
+  await expect(
+    f.driver.consoleCredentials({
+      ...f.input,
+      password: "different".repeat(6),
+    }),
+  ).rejects.toThrow("material mismatch");
+  await f.driver.destroy(cleanup);
+  await expect(f.driver.consoleCredentials(f.input)).rejects.toThrow();
+  expect(f.applies).toBe(0);
 });

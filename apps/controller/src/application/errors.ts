@@ -19,7 +19,8 @@ export type ApplicationErrorCode =
   | "renewal_deadline_expired"
   | "renewal_in_progress"
   | "lease_not_accessible"
-  | "access_material_unavailable";
+  | "access_material_unavailable"
+  | "console_credentials_disabled";
 export class ApplicationError extends Error {
   constructor(readonly code: ApplicationErrorCode) {
     super(code);

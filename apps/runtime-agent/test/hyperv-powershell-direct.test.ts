@@ -1,7 +1,10 @@
 import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import type { HyperVGuestBootstrapRequest } from "@hitchlet/contracts/internal";
-import { createPowerShellDirectBootstrap } from "../src/drivers/hyperv-powershell-direct.js";
+import {
+  createPowerShellDirectInteractiveAccess,
+  createPowerShellDirectBootstrap,
+} from "../src/drivers/hyperv-powershell-direct.js";
 import { hyperVPublicKeyFingerprint } from "../src/drivers/hyperv-guest.js";
 const id = "00000000-0000-4000-8000-000000000001";
 function publicKey() {
@@ -158,4 +161,50 @@ describe("fixed Windows PowerShell Direct channel (controlled runner, no Windows
       createPowerShellDirectBootstrap({ credentialFile: "relative" }),
     ).toThrow("Absolute");
   });
+});
+
+it("interactive channel uses only the existing credential reference and strips material on inspection", async () => {
+  const source = fixture().request;
+  const request = {
+    identity: source.identity,
+    nonce: id,
+    passwordHash: "a".repeat(64),
+    account: "workspace" as const,
+    vmId: id,
+    guestOs: "windows" as const,
+    architecture: "amd64" as const,
+  };
+  const run = vi.fn(async () => ({ ...request, status: "applied" }));
+  const port = createPowerShellDirectInteractiveAccess({
+    credentialFile: "/existing/guest.xml",
+    run,
+    now: () => 1000,
+  });
+  await port.apply(request, "Aa1!" + "fixture".repeat(6), 5000);
+  await port.inspect(request, 5000);
+  expect(run.mock.calls[0]?.[0]).toMatchObject({
+    mode: "interactive.apply",
+    credentialFile: "/existing/guest.xml",
+    budgetMs: 4000,
+  });
+  expect(run.mock.calls[1]?.[0]).not.toHaveProperty("password");
+  expect(run.mock.calls[1]?.[0]).toMatchObject({
+    mode: "interactive.inspect",
+    request,
+  });
+  await expect(
+    createPowerShellDirectInteractiveAccess({
+      credentialFile: "/existing/guest.xml",
+      run: async () => ({
+        ...request,
+        nonce: "00000000-0000-4000-8000-000000000002",
+        status: "applied",
+      }),
+      now: () => 1000,
+    }).inspect(request, 5000),
+  ).rejects.toThrow("receipt mismatch");
+  await expect(
+    port.apply(request, "Aa1!" + "fixture".repeat(6), 999),
+  ).rejects.toThrow("expired");
+  expect(run).toHaveBeenCalledTimes(2);
 });

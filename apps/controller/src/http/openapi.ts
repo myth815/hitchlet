@@ -18,7 +18,12 @@ import {
   CredentialReceiptSchema,
   RecoveryApprovalSchema,
 } from "@hitchlet/contracts/admin";
-import { ConsoleCommandSchema, ConsoleResultSchema } from "@hitchlet/contracts";
+import {
+  ConsoleCredentialRequestSchema,
+  ConsoleCredentialViewSchema,
+  ConsoleCommandSchema,
+  ConsoleResultSchema,
+} from "@hitchlet/contracts";
 import { toPublicJsonSchema } from "@hitchlet/contracts";
 import { z } from "zod";
 import {
@@ -62,6 +67,10 @@ export function openApiDocument() {
     ...(converted.$defs ?? {}),
     ...converted.properties,
   }) as Record<string, unknown>;
+  schemas.ConsoleCredentialRequest = z.toJSONSchema(
+    ConsoleCredentialRequestSchema,
+  );
+  schemas.ConsoleCredentialView = z.toJSONSchema(ConsoleCredentialViewSchema);
   schemas.ConsoleCommand = z.toJSONSchema(ConsoleCommandSchema);
   schemas.ConsoleResult = z.toJSONSchema(ConsoleResultSchema);
   const ref = (name: string) => ({ $ref: `#/components/schemas/${name}` });
@@ -515,6 +524,36 @@ export function openApiDocument() {
             parameter("renewalId", "path", { type: "string", format: "uuid" }),
           ],
         }),
+      },
+      "/v1/tickets/{ticketId}/console-credentials": {
+        post: operation(
+          "Prepare existing workspace interactive access",
+          "200",
+          "ConsoleCredentialView",
+          {
+            parameters: [
+              pathId("ticketId"),
+              parameter("Idempotency-Key", "header", { type: "string" }),
+            ],
+            requestBody: body("ConsoleCredentialRequest"),
+          },
+        ),
+        get: operation(
+          "Read or recover existing workspace interactive access",
+          "200",
+          "ConsoleCredentialView",
+          {
+            parameters: [
+              pathId("ticketId"),
+              {
+                name: "generation",
+                in: "query",
+                required: true,
+                schema: { type: "integer", minimum: 1 },
+              },
+            ],
+          },
+        ),
       },
       "/v1/tickets/{ticketId}/console": {
         post: operation(

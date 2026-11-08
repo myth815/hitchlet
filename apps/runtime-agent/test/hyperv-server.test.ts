@@ -89,6 +89,18 @@ beforeEach(async () => {
   reconcileHook = async () => inspection;
   observedActionDeadline = undefined;
   const driver = {
+    consoleCredentials: async (
+      request: import("@hitchlet/contracts/internal").HyperVInteractiveRequest,
+    ) => {
+      calls.push("console.credentials:" + request.mode);
+      return {
+        identity: request.identity,
+        nonce: request.nonce,
+        passwordHash: request.passwordHash,
+        account: "workspace" as const,
+        status: "applied" as const,
+      };
+    },
     console: async (
       request: import("@hitchlet/contracts/internal").HyperVConsoleRequest,
     ) => {
@@ -450,4 +462,49 @@ it("console frame uses the existing authenticated Runtime route with a bounded f
     1024 * 768 * 2,
   );
   expect(calls).toEqual(["console"]);
+});
+
+it("credential preparation/recovery retain separate typed envelopes over real local mTLS and no secret journal", async () => {
+  const transport = new RuntimeAgentHttpTransport({
+    baseUrl: origin.toString(),
+    timeoutMs: 5000,
+    loadCredentials: async () => ({
+      token: "fixture-token",
+      ca: cert,
+      cert,
+      key,
+    }),
+  });
+  const client = new HyperVRuntimeHttpClient({
+    transport,
+    installationId: identity.installationId,
+    runtimeIdentityId: identity.runtimeIdentityId,
+    controllerEpoch: 1,
+    deadlineMs: Date.now() + 5000,
+  });
+  const request = {
+    identity,
+    nonce: "5a0f42b6-94d1-462c-953a-e8cc1622981c",
+    passwordHash: "a".repeat(64),
+    expiresAt: new Date(Date.now() + 60000).toISOString(),
+  };
+  expect(
+    (
+      await client.consoleCredentials({
+        ...request,
+        mode: "prepare",
+        password: "Aa1!" + "private-fixture-".repeat(3),
+      })
+    ).status,
+  ).toBe("applied");
+  expect(
+    (await client.consoleCredentials({ ...request, mode: "inspect" })).status,
+  ).toBe("applied");
+  expect(calls).toEqual([
+    "console.credentials:prepare",
+    "console.credentials:inspect",
+  ]);
+  expect(await readFile(join(root, "journal.json"), "utf8")).not.toContain(
+    "private-fixture",
+  );
 });

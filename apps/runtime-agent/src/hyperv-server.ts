@@ -1,5 +1,7 @@
 import { z } from "zod";
 import {
+  type HyperVInteractiveReceipt,
+  hyperVRuntimeCredentialResponseSchema,
   type HyperVInspection,
   type HyperVConsoleResult,
   hyperVRuntimeActionRequestSchema,
@@ -27,6 +29,7 @@ export function createHyperVRuntimeServer(
     | "destroy"
     | "facts"
     | "bootstrapApply"
+    | "consoleCredentials"
     | "console"
   >,
   journal: FileJournal,
@@ -40,6 +43,7 @@ export function createHyperVRuntimeServer(
     actionResponse: z.union([
       hyperVRuntimeActionResponseSchema,
       hyperVRuntimeConsoleResponseSchema,
+      hyperVRuntimeCredentialResponseSchema,
     ]),
     factsRequest: hyperVRuntimeFactsRequestSchema,
     factsResponse: hyperVRuntimeFactsResponseSchema,
@@ -49,13 +53,19 @@ export function createHyperVRuntimeServer(
       nativeRuntimeNamespaceId: config.nativeRuntimeNamespaceId,
       templates: await templates(),
     }),
-    execute: async (action): Promise<HyperVInspection | HyperVConsoleResult> =>
-      action.kind === "console"
-        ? driver.console(action.request)
-        : action.kind === "bootstrap.apply"
-          ? driver.bootstrapApply(action.request)
-          : action.kind === "reconcile"
-            ? driver.reconcile(action.request)
-            : driver[action.kind](action.identity),
+    execute: async (
+      action,
+    ): Promise<
+      HyperVInspection | HyperVConsoleResult | HyperVInteractiveReceipt
+    > =>
+      action.kind === "console.credentials"
+        ? driver.consoleCredentials(action.request)
+        : action.kind === "console"
+          ? driver.console(action.request)
+          : action.kind === "bootstrap.apply"
+            ? driver.bootstrapApply(action.request)
+            : action.kind === "reconcile"
+              ? driver.reconcile(action.request)
+              : driver[action.kind](action.identity),
   });
 }

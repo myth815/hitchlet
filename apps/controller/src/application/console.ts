@@ -27,46 +27,13 @@ export class ConsoleService {
   }
   async command(consumerId: string, ticketId: string, raw: ConsoleCommand) {
     const command = ConsoleCommandSchema.parse(raw);
-    const row = await this.store.accessContext(ticketId, consumerId);
-    if (!row) throw notFound();
-    const expires = Number(row.expires_at_ms);
-    if (row.execution_mode !== "hyperv")
-      throw conflict("execution_mode_unsupported");
-    if (
-      row.phase !== "ready" ||
-      row.lease_state !== "active" ||
-      row.claimed_at_ms === null ||
-      row.desired_state !== "present" ||
-      row.observed_state !== "running" ||
-      Number(row.generation) !== command.generation ||
-      !Number.isSafeInteger(expires) ||
-      expires <= this.now() ||
-      Number(row.network_revoked) !== 0 ||
-      Number(row.storage_revoked) !== 0
-    )
-      throw conflict("lease_not_accessible");
-    const resources = await this.storage.all<{ ownership_json: string }>(
-      `SELECT r.ownership_json FROM managed_resources r JOIN allocations a ON a.id=r.allocation_id
-       JOIN leases l ON l.allocation_id=a.id JOIN tickets t ON t.id=l.ticket_id
-       WHERE t.id=? AND t.consumer_id=? AND r.kind='vm' AND r.ownership='owned' AND r.observed_state='present'
-       AND r.generation=l.generation AND r.generation=a.generation AND a.desired_state='present'`,
-      [ticketId, consumerId],
+    const { identity, expires } = await readConsoleLease(
+      this.storage,
+      consumerId,
+      ticketId,
+      command.generation,
+      this.now,
     );
-    if (resources.length !== 1) throw conflict("access_material_unavailable");
-    const owner = JSON.parse(resources[0]!.ownership_json) as Record<
-      string,
-      unknown
-    >;
-    const identity = vmAllocationIdentitySchema.parse(
-      Object.fromEntries(
-        Object.keys(vmAllocationIdentitySchema.shape).map((k) => [k, owner[k]]),
-      ),
-    );
-    if (
-      identity.generation !== command.generation ||
-      identity.purpose !== "tenant"
-    )
-      throw conflict("lease_not_accessible");
     const result = hyperVConsoleResultSchema.parse(
       await this.execute({
         identity,
@@ -122,4 +89,54 @@ export class ConsoleService {
         : {}),
     });
   }
+}
+
+export async function readConsoleLease(
+  storage: Storage,
+  consumerId: string,
+  ticketId: string,
+  generation: number,
+  now = Date.now,
+) {
+  const row = await new SQLiteReadStore(storage).accessContext(
+    ticketId,
+    consumerId,
+  );
+  if (!row) throw notFound();
+  const expires = Number(row.expires_at_ms);
+  if (row.execution_mode !== "hyperv")
+    throw conflict("execution_mode_unsupported");
+  if (
+    row.phase !== "ready" ||
+    row.lease_state !== "active" ||
+    row.claimed_at_ms === null ||
+    row.desired_state !== "present" ||
+    row.observed_state !== "running" ||
+    Number(row.generation) !== generation ||
+    !Number.isSafeInteger(expires) ||
+    expires <= now() ||
+    Number(row.network_revoked) !== 0 ||
+    Number(row.storage_revoked) !== 0
+  )
+    throw conflict("lease_not_accessible");
+  const resources = await storage.all<{ ownership_json: string }>(
+    `SELECT r.ownership_json FROM managed_resources r JOIN allocations a ON a.id=r.allocation_id
+       JOIN leases l ON l.allocation_id=a.id JOIN tickets t ON t.id=l.ticket_id
+       WHERE t.id=? AND t.consumer_id=? AND r.kind='vm' AND r.ownership='owned' AND r.observed_state='present'
+       AND r.generation=l.generation AND r.generation=a.generation AND a.desired_state='present'`,
+    [ticketId, consumerId],
+  );
+  if (resources.length !== 1) throw conflict("access_material_unavailable");
+  const owner = JSON.parse(resources[0]!.ownership_json) as Record<
+    string,
+    unknown
+  >;
+  const identity = vmAllocationIdentitySchema.parse(
+    Object.fromEntries(
+      Object.keys(vmAllocationIdentitySchema.shape).map((k) => [k, owner[k]]),
+    ),
+  );
+  if (identity.generation !== generation || identity.purpose !== "tenant")
+    throw conflict("lease_not_accessible");
+  return { identity, expires };
 }

@@ -4,11 +4,16 @@ import type { LocalSecretStore } from "../storage/secret-store.js";
 import type { ConsoleExecutor } from "../application/console.js";
 import { createHyperVRuntimeClient } from "./runtime-credentials.js";
 /** Current authenticated transport, bound to the original provision operation and exact Node. */
-export function createHyperVConsoleExecutor(
+function executor(
   storage: Storage,
   secrets: LocalSecretStore,
-): ConsoleExecutor {
-  return async (request) => {
+  interactive: boolean,
+) {
+  return async (
+    request:
+      | import("@hitchlet/contracts/internal").HyperVConsoleRequest
+      | import("@hitchlet/contracts/internal").HyperVInteractiveRequest,
+  ) => {
     const i = request.identity;
     const row = await storage.get<{
       config_json: string;
@@ -50,6 +55,25 @@ export function createHyperVConsoleExecutor(
       controllerEpoch: Number(row.controller_epoch),
       deadlineMs: Math.min(Date.parse(request.expiresAt), Date.now() + 15000),
     });
-    return runtime.console(request);
+    return interactive
+      ? runtime.consoleCredentials(
+          request as import("@hitchlet/contracts/internal").HyperVInteractiveRequest,
+        )
+      : runtime.console(
+          request as import("@hitchlet/contracts/internal").HyperVConsoleRequest,
+        );
   };
+}
+
+export function createHyperVConsoleExecutor(
+  storage: Storage,
+  secrets: LocalSecretStore,
+): ConsoleExecutor {
+  return executor(storage, secrets, false);
+}
+export function createHyperVCredentialExecutor(
+  storage: Storage,
+  secrets: LocalSecretStore,
+): import("../application/console-credentials.js").ConsoleCredentialExecutor {
+  return executor(storage, secrets, true);
 }

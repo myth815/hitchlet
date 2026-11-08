@@ -35,3 +35,5 @@ export * from "./hyperv-runtime.js";
 export * from "./runtime-workload.js";
 
 export * from "./hyperv-console.js";
+
+export * from "./hyperv-interactive.js";

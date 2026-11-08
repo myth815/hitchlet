@@ -51,7 +51,7 @@ export async function pruneHistory(
     }
   }
   const oldTickets = await db.all<{ id: string }>(
-    "SELECT id FROM tickets WHERE phase='released' AND released_at_ms<? AND cleanup_status IN('complete','not_needed') ORDER BY released_at_ms LIMIT 100",
+    "SELECT id FROM tickets WHERE phase='released' AND released_at_ms<? AND cleanup_status IN('complete','not_needed') AND NOT EXISTS(SELECT 1 FROM idempotency_keys i WHERE i.ticket_id=tickets.id AND i.route_scope='tickets.console.credentials.intent' AND COALESCE(json_extract(i.safe_response_json,'$.state'),'unknown')<>'destroyed') ORDER BY released_at_ms LIMIT 100",
     [now - 180 * DAY],
   );
   for (const t of oldTickets) {
