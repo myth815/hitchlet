@@ -1,6 +1,8 @@
 import { expect, it } from "vitest";
 import {
   hyperVRuntimeActionRequestSchema,
+  hyperVRuntimeActionResponseSchema,
+  hyperVRuntimeConsoleResponseSchema,
   hyperVRuntimeFactsRequestSchema,
   type VmAllocationIdentity,
   type HyperVInspection,
@@ -158,4 +160,30 @@ it("does not accept false absence or fabricated guest readiness", async () => {
     const { client } = fixture((r) => ({ ...r, result }));
     await expect(client.inspect(identity)).rejects.toThrow();
   }
+});
+
+it("keeps the published lifecycle response inspection-only and uses a distinct console response", () => {
+  const reply = {
+    requestNonce: "03e29203-1fc9-4efc-88f9-5ea4f9f8dc79",
+    installationId: identity.installationId,
+    runtimeIdentityId: identity.runtimeIdentityId,
+    result: {
+      identity,
+      commandId: "acf8ea95-626b-4534-a6e2-a8827aa3fa81",
+      status: "available",
+      account: "workspace",
+    },
+  };
+  expect(hyperVRuntimeActionResponseSchema.safeParse(reply).success).toBe(
+    false,
+  );
+  expect(hyperVRuntimeConsoleResponseSchema.safeParse(reply).success).toBe(
+    true,
+  );
+  expect(
+    hyperVRuntimeActionResponseSchema.safeParse({
+      ...reply,
+      result: inspection,
+    }).success,
+  ).toBe(true);
 });

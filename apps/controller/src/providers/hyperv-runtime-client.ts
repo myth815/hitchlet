@@ -7,6 +7,7 @@ import {
   hyperVRuntimeActionSchema,
   hyperVRuntimeActionRequestSchema,
   hyperVRuntimeActionResponseSchema,
+  hyperVRuntimeConsoleResponseSchema,
   hyperVRuntimeFactsRequestSchema,
   hyperVRuntimeFactsResponseSchema,
   type VmAllocationIdentity as HyperVAllocationIdentity,
@@ -120,7 +121,11 @@ export class HyperVRuntimeHttpClient {
       request.installationId,
       request.runtimeIdentityId,
     );
-    const response = hyperVRuntimeActionResponseSchema.parse(
+    const response = (
+      action.kind === "console"
+        ? hyperVRuntimeConsoleResponseSchema
+        : hyperVRuntimeActionResponseSchema
+    ).parse(
       await this.options.transport.exchangeJson(
         "/v1/hyperv/actions",
         request,

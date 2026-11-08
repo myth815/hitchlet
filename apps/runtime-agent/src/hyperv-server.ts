@@ -1,8 +1,10 @@
+import { z } from "zod";
 import {
   type HyperVInspection,
   type HyperVConsoleResult,
   hyperVRuntimeActionRequestSchema,
   hyperVRuntimeActionResponseSchema,
+  hyperVRuntimeConsoleResponseSchema,
   hyperVRuntimeFactsRequestSchema,
   hyperVRuntimeFactsResponseSchema,
   hyperVActionIdentity,
@@ -35,7 +37,10 @@ export function createHyperVRuntimeServer(
   return createVmRuntimeServer(config, journal, {
     backend: "hyperv",
     actionRequest: hyperVRuntimeActionRequestSchema,
-    actionResponse: hyperVRuntimeActionResponseSchema,
+    actionResponse: z.union([
+      hyperVRuntimeActionResponseSchema,
+      hyperVRuntimeConsoleResponseSchema,
+    ]),
     factsRequest: hyperVRuntimeFactsRequestSchema,
     factsResponse: hyperVRuntimeFactsResponseSchema,
     identity: hyperVActionIdentity,

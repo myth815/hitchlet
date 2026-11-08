@@ -244,7 +244,15 @@ export const hyperVRuntimeActionResponseSchema = z
   .object({
     requestNonce: z.string().uuid(),
     ...binding,
-    result: z.union([hyperVInspectionSchema, hyperVConsoleResultSchema]),
+    result: hyperVInspectionSchema,
+  })
+  .strict();
+/** Console has its own response; existing lifecycle consumers retain inspection-only types. */
+export const hyperVRuntimeConsoleResponseSchema = z
+  .object({
+    requestNonce: z.string().uuid(),
+    ...binding,
+    result: hyperVConsoleResultSchema,
   })
   .strict();
 export const hyperVRuntimeFactsResponseSchema = z
