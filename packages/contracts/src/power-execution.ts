@@ -104,6 +104,19 @@ export const PowerExecutionViewSchema = z
     executions: z.array(PowerExecutionSchema),
   })
   .strict();
+/** Read-only projection of the real executor, not the legacy capacity preview. */
+export const MachinePowerExecutionStatusSchema = z
+  .object({
+    source: z.literal("power-execution"),
+    configured: z.boolean(),
+    enabled: z.boolean(),
+    automatic: z.boolean(),
+    verified: z.boolean(),
+    qualificationState: z.enum(["not_configured", "unverified", "verified"]),
+    qualificationId: id.nullable(),
+    reasons: z.array(z.string()),
+  })
+  .strict();
 export const HostPowerEventSchema = z
   .object({
     cycleId: id.optional(),

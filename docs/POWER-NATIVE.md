@@ -2,6 +2,50 @@
 
 本模块实现 Windows 物理 Host 的 opt-in 正常关机和常驻控制器本地 LAN WOL。默认自动电源关闭。D22a 的策略、预演、合成 accepted/off 事件仍完全隔离，不能启用本模块。sleep、强制结束应用、智能插座、VM/云和任意远程命令均不在本模块内。
 
+## 机器库存的实时电源投影与资格恢复
+
+`GET /v1/machines` 和 `GET /v1/machines/:machineId/dry-run` 的
+`powerExecution` 来自同一个 `PowerExecutionService` 读取路径：
+
+- `source: "power-execution"`，区分仅有容量事实的旧预览。
+- `configured`、`enabled`、`automatic` 是受信安装配置，不表示物理验收已通过。
+- `verified` 与 `qualificationState` 表达当前绑定的资格；`qualificationId`
+  是当前受信绑定引用的记录，无引用时为 null。旧绑定的 ready 历史不能代替现行资格。
+- `shutdownDisabledReasons` 使用实际执行器的安全阻因，并明确加入当前绑定未通过资格的原因。
+  不再无条件显示“Actual power execution is disabled pending D22b acceptance”。
+  资格通过仍可能被真人会话、协作者占用、任务或维护状态阻止关机。
+
+此投影只读，不调用 start/tick/WOL/关机，也不改 enabled、automatic、verified、Hold
+或资格记录。存储层仅做容量/策略预览时可以没有 `powerExecution`，缺失不代表已验证。
+新字段属于共享 contracts；部署需配对更新 controller、SDK/contracts 与打包使用严格旧 schema
+的客户端。不能只替换 controller 后假定旧严格解析器自动接受新增字段。
+
+当前软件绑定的资格未通过时，按以下顺序恢复：
+
+1. 读取现行 guard/executor、受信绑定和历史资格，保留旧记录。当前匹配记录 cancelled，
+   或历史 ready 的绑定不匹配，都不能写成 verified。
+2. 完成所有无需电源动作的代码、类型及隔离账本测试，确认控制面持久恢复、真实观测新鲜、
+   Node 状态有效、实际用户与协作者任务/维护已由其所有者正常结束。未知业务状态仍保持保护；
+   单个常驻 PID、零真人会话、没有可见子进程或容器都不能独立证明空闲。
+3. 在现有授权涵盖真实正常关机/WOL且实时安全条件允许时，经正常
+   `POST /v1/machines/:machineId/power-executions`，body `{"qualification":true}`
+   启动一次新资格。先检查既有未终态周期；结果不明按原周期查回，不重复创建。
+   这一步不能用仿真替代，也不能通过修改账本、开关或上传报告跳过。
+4. 由原 Host prepare/commit 守卫再次确认，正常关机。随后按该周期/expectedVersion 的
+   正常 wake 命令验证产品 WOL、不同 OS boot、Host 及所有登记 Node 的恢复，最终同周期 ready。
+   固定配置入口不会仅因 ready 就改写资格引用：操作员审阅真实回执后，将新周期 ID
+   登记为 `HITCHLET_POWER_CONFIG` 对应机器的 `qualificationId`，按原正常部署边界重新加载
+   控制器，再读回同一 ID 和 `verified`；保留原 enabled/automatic，不在此步骤擅自开关。
+   若实际部署另有自动接入层，必须独立核对其正常引用映射，不把未交付的自动绑定当成已实现。
+   `verified` 始终由所引用记录、绑定及真实恢复事实计算，不能直接写该字段或账本。
+5. 另外验证无新派发、无在途票/Claim/协作者/真人使用时，配置空闲期结束后的自动关机；
+   空闲期内的新任务必须取消关机。资格关机/WOL成功不等于这条完整生产空闲流程已验收。
+
+单元/隔离 SQLite 测试使用显式注入的 OS/WOL 替身，覆盖配置关闭、未配置、未通过资格、
+同绑定资格通过、绑定变化、协作者保护以及路由一致性；这些测试不关闭或唤醒真实主机。
+恢复资格前若仍缺 OpenClaw 内部任务/队列/维护状态，只报告该具体缺口并保留保护，
+不替其改工程、不停其服务，也不新增泛化监控或队列框架。
+
 代码与合成故障测试不代表任何机器已验收。逐机报告必须来自同一控制器账本中的资格运行；本轮实机结果由独立主审另行记录。没有登记 Docker Node 的资格只证明物理 Host 恢复，不证明 Docker ready。已登记的全部 Node 必须重新报告健康且观测未过期，才可结束恢复。
 
 ## 准备与安装

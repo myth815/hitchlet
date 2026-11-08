@@ -517,9 +517,8 @@ export function evaluateMachineAdmission(
       ),
     ]),
   ) as Resources;
-  const shutdownReasons = [
-    "Actual power execution is disabled pending D22b acceptance",
-  ];
+  // Capacity admission knows safety facts, not the trusted native power grant.
+  const shutdownReasons: string[] = [];
   if (humanPresence !== "absent")
     shutdownReasons.push(`Human presence is ${humanPresence}`);
   if (snapshot?.probeStatus !== "complete" || !fresh)

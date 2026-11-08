@@ -8,6 +8,7 @@ import {
   type PowerInstallationMachine,
   type HostPowerEvent,
   type HostPowerDirective,
+  type MachineDependencyView,
 } from "@hitchlet/contracts/admin";
 import { PowerExecutionStore } from "../storage/power-execution-store.js";
 import type { Storage } from "../storage/index.js";
@@ -140,6 +141,40 @@ export class PowerExecutionService {
         ...p,
         token: null,
       })),
+    };
+  }
+  /** Machine inventory uses the same current grant/qualification as execution. */
+  async machineView(
+    machine: MachineDependencyView,
+  ): Promise<MachineDependencyView> {
+    const qualificationId =
+      this.grant(machine.machineId)?.qualificationId ?? null;
+    const power = await this.view(machine.machineId);
+    const reasons = [
+      ...(!power.verified && power.configured
+        ? [
+            "Native power qualification has not passed for the current trusted binding",
+          ]
+        : []),
+      ...power.reasons,
+    ];
+    return {
+      ...machine,
+      shutdownDisabledReasons: [...new Set(reasons)],
+      powerExecution: {
+        source: "power-execution",
+        configured: power.configured,
+        enabled: power.enabled,
+        automatic: power.automatic,
+        verified: power.verified,
+        qualificationState: !power.configured
+          ? "not_configured"
+          : power.verified
+            ? "verified"
+            : "unverified",
+        qualificationId,
+        reasons: [...new Set(reasons)],
+      },
     };
   }
   async start(machineId: string, qualification: boolean, actor?: PowerActor) {

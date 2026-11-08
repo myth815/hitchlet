@@ -803,14 +803,20 @@ export async function buildApp(
       await requireAdmin(request);
       reply.header("Cache-Control", "no-store");
       return MachineDependencyViewSchema.array().parse(
-        await admin.machineDependencies(),
+        await Promise.all(
+          (await admin.machineDependencies()).map((m) =>
+            realPower.machineView(m),
+          ),
+        ),
       );
     });
     app.get("/v1/machines/:machineId/dry-run", async (request, reply) => {
       await requireAdmin(request);
       reply.header("Cache-Control", "no-store");
       return MachineDependencyViewSchema.parse(
-        await admin.machineDryRun(uuidParam(request.params, "machineId")),
+        await realPower.machineView(
+          await admin.machineDryRun(uuidParam(request.params, "machineId")),
+        ),
       );
     });
     app.get(

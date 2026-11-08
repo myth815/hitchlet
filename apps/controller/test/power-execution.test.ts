@@ -250,6 +250,100 @@ async function fixture() {
   };
 }
 describe("persisted native power qualification (synthetic OS/WOL ports)", () => {
+  it("machine power projection reports configuration and unverified qualification without starting power", async () => {
+    const f = await fixture();
+    const inventory = new SQLiteMachineNodeStore(f.db, f.clock);
+    const raw = await inventory.machineDryRun(f.machineId);
+    expect(raw.shutdownDisabledReasons).not.toContain(
+      "Actual power execution is disabled pending D22b acceptance",
+    );
+    const absent = await new PowerExecutionService(f.db).machineView(raw);
+    expect(absent.powerExecution).toMatchObject({
+      source: "power-execution",
+      configured: false,
+      enabled: false,
+      automatic: false,
+      verified: false,
+      qualificationState: "not_configured",
+      qualificationId: null,
+    });
+    const current = await f.service.machineView(raw);
+    expect(current.powerExecution).toMatchObject({
+      configured: true,
+      enabled: true,
+      verified: false,
+      qualificationState: "unverified",
+      qualificationId: null,
+    });
+    expect(current.shutdownDisabledReasons).toContain(
+      "Native power qualification has not passed for the current trusted binding",
+    );
+    f.config.machines[0]!.enabled = false;
+    expect((await f.service.machineView(raw)).powerExecution!.enabled).toBe(
+      false,
+    );
+    expect(await f.service.store.list(f.machineId)).toHaveLength(0);
+    expect(f.wol).not.toHaveBeenCalled();
+  });
+  it("machine power projection separates current qualification from holds and rejects an old binding", async () => {
+    const f = await fixture();
+    await f.accepted();
+    f.advance(120000);
+    await f.service.tick();
+    let cycle = await f.get();
+    await f.service.command(f.machineId, cycle.id, cycle.version, "wake");
+    await f.service.tick();
+    await f.boot();
+    await f.heartbeat();
+    await f.service.tick();
+    cycle = await f.get();
+    expect(cycle.phase).toBe("ready");
+    f.config.machines[0]!.qualificationId = cycle.id;
+    const inventory = new SQLiteMachineNodeStore(f.db, f.clock);
+    const read = async () =>
+      f.service.machineView(await inventory.machineDryRun(f.machineId));
+    const current = await read();
+    expect(current.powerExecution).toMatchObject({
+      verified: true,
+      qualificationState: "verified",
+      qualificationId: cycle.id,
+    });
+    expect(current.shutdownDisabledReasons).not.toContain(
+      "Actual power execution is disabled pending D22b acceptance",
+    );
+    await f.db.run(
+      "INSERT INTO holds(id,machine_id,kind,reason,created_by_consumer_id,created_at_ms) VALUES(?,?,'manual',?,?,?)",
+      [
+        randomUUID(),
+        f.machineId,
+        "real collaborator remains protected",
+        f.adminId,
+        f.clock(),
+      ],
+    );
+    const held = await read();
+    expect(held.powerExecution!.verified).toBe(true);
+    expect(
+      held.shutdownDisabledReasons.some((r) =>
+        r.includes("real collaborator remains protected"),
+      ),
+    ).toBe(true);
+    f.config.machines[0]!.guardHash = "d".repeat(64);
+    const changed = await read();
+    expect(changed.powerExecution).toMatchObject({
+      verified: false,
+      qualificationState: "unverified",
+      qualificationId: cycle.id,
+    });
+    expect(changed.shutdownDisabledReasons).toContain(
+      "Native power qualification has not passed for the current trusted binding",
+    );
+    expect(
+      changed.shutdownDisabledReasons.some((r) =>
+        r.includes("real collaborator remains protected"),
+      ),
+    ).toBe(true);
+  });
   it.each(["paused=1", "disk_state='low'", "recovery_json='{}'"])(
     "does not initiate shutdown while controller maintenance closes admission: %s",
     async (change) => {

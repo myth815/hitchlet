@@ -2,6 +2,7 @@ import {
   PowerExecutionStartSchema,
   PowerExecutionCommandSchema,
   PowerExecutionSchema,
+  MachinePowerExecutionStatusSchema,
 } from "./power-execution.js";
 import { z } from "zod";
 import {
@@ -278,6 +279,8 @@ export const MachineDependencyViewSchema = z
     physicalUsage: MachineResourcesSchema,
     workloadUsage: MachineResourcesSchema,
     shutdownDisabledReasons: z.array(z.string()),
+    /** Present when the application has read the trusted native executor state. */
+    powerExecution: MachinePowerExecutionStatusSchema.optional(),
     holds: z.array(
       z.object({ id, kind: z.string(), reason: z.string() }).strict(),
     ),
@@ -368,6 +371,7 @@ export type MaintenanceHoldReceipt = z.infer<
   typeof MaintenanceHoldReceiptSchema
 >;
 export type HumanUsePolicy = z.infer<typeof HumanUsePolicySchema>;
+export type MachineDependencyView = z.infer<typeof MachineDependencyViewSchema>;
 export const NodeAdmissionModeSchema = z
   .object({
     expectedVersion: z.number().int().positive(),

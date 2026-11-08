@@ -231,6 +231,55 @@ async function fixture() {
   };
 }
 describe("Machine policies and the shared SQLite admission fence", () => {
+  it("machine power projection is exposed consistently by inventory and dry-run routes without enabling power", async () => {
+    const f = await fixture();
+    const app = await buildApp(loadConfig({ DATA_DIR: f.dir }), {
+      storage: f.db,
+    });
+    try {
+      const headers = { authorization: `Bearer ${f.adminToken}` };
+      const inventory = await app.inject({
+        method: "GET",
+        url: "/v1/machines",
+        headers,
+      });
+      const dry = await app.inject({
+        method: "GET",
+        url: `/v1/machines/${f.machineId}/dry-run`,
+        headers,
+      });
+      expect(inventory.statusCode).toBe(200);
+      expect(dry.statusCode).toBe(200);
+      const left = inventory
+        .json()
+        .find((m: { machineId: string }) => m.machineId === f.machineId);
+      const right = dry.json();
+      expect(left.powerExecution).toEqual(right.powerExecution);
+      expect(
+        MachineDependencyViewSchema.parse(left).powerExecution,
+      ).toMatchObject({
+        source: "power-execution",
+        configured: false,
+        enabled: false,
+        automatic: false,
+        verified: false,
+        qualificationState: "not_configured",
+      });
+      expect(left.shutdownDisabledReasons).not.toContain(
+        "Actual power execution is disabled pending D22b acceptance",
+      );
+      expect(left.shutdownDisabledReasons).toContain(
+        "Native power is not enabled in trusted installation configuration",
+      );
+      expect(
+        await f.db.all(
+          "SELECT id FROM operations WHERE kind='power.execution'",
+        ),
+      ).toEqual([]);
+    } finally {
+      await app.close();
+    }
+  });
   it("uses a strict two-minute Node freshness boundary without future or missing timestamps", () => {
     const now = 1_800_000_000_000;
     expect(isNodeObservationFresh(now - 45_000, now)).toBe(true);
