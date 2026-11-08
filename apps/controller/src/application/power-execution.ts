@@ -323,6 +323,40 @@ export class PowerExecutionService {
     await this.store.write(s, n, p, [], actor);
     return n;
   }
+  /** A durable collaborator Hold invalidates pre-commit power work before the API confirms it. */
+  async cancelForMaintenanceHold(machineId: string, actor: PowerActor) {
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const p = (await this.store.active()).find(
+        (candidate) => candidate.machineId === machineId,
+      );
+      if (!p) return;
+      if (p.phase === "cancel_pending") throw new ApplicationError("conflict");
+      if (
+        ["committing", "shutdown_requested", "off_expected", "waking"].includes(
+          p.phase,
+        )
+      )
+        throw new ApplicationError("conflict");
+      const s = await this.store.safety.load(machineId, this.now());
+      try {
+        await this.cancel(
+          s,
+          p,
+          "Collaborator maintenance hold acquired",
+          false,
+          actor,
+        );
+        return;
+      } catch (error) {
+        if (
+          !(error instanceof ApplicationError && error.code === "conflict") ||
+          attempt === 1
+        )
+          throw error;
+      }
+    }
+    throw new ApplicationError("conflict");
+  }
   async tick() {
     for (const p of await this.store.active()) {
       try {

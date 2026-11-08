@@ -12,6 +12,10 @@ import { ApplicationError } from "../application/errors.js";
 import { StorageError, type Storage } from "./index.js";
 import type { Statement } from "./protocol.js";
 
+export const collaboratorMaintenanceHoldMarker = (id: string) =>
+  `[collaborator-maintenance:${id}] `;
+const collaboratorMaintenancePrefix = "[collaborator-maintenance:";
+
 /* One deterministic SQLite read owns all inputs to the pure rule. The exact same expression
  * is compared inside BEGIN IMMEDIATE before writing a claim or policy. Heartbeat updates
  * do not increment Machine.version, so entity-version CAS alone is insufficient. */
@@ -138,9 +142,17 @@ export async function loadMachineAdmission(
       })),
       allocations: data.allocations,
       claims: data.claims,
-      holds: data.holds.filter(
-        (h) => h.expiresAt === null || h.expiresAt > now,
-      ),
+      holds: data.holds
+        .filter((h) => h.expiresAt === null || h.expiresAt > now)
+        .map((h) => ({
+          ...h,
+          reason: h.reason.startsWith(collaboratorMaintenancePrefix)
+            ? h.reason.replace(
+                /^\[collaborator-maintenance:[0-9a-f-]{36}\] /i,
+                "",
+              )
+            : h.reason,
+        })),
       observation,
     },
   };

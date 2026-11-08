@@ -139,6 +139,23 @@ export function openApiDocument() {
       ...errors,
     },
   });
+  const collaboratorHoldOperation = (
+    summary: string,
+    successCode = "200",
+    requestSchema: z.ZodType | undefined,
+    responseSchema: z.ZodType,
+    parameters: Record<string, unknown>[] = [],
+  ) => ({
+    ...adminOperation(
+      summary,
+      successCode,
+      requestSchema,
+      responseSchema,
+      parameters,
+    ),
+    description:
+      "Requires an active authenticated Consumer with the matching tickets scope. Write operations are limited to a machine with an existing authorized Node; read-by-ID and release are limited to the Hold owner.",
+  });
   return {
     openapi: "3.1.0",
     info: { title: "Hitchlet API", version: "1.0.0" },
@@ -798,6 +815,40 @@ export function openApiDocument() {
           AdminSchemas.MachinePolicyUpdateSchema,
           AdminSchemas.MachinePolicyReceiptSchema,
           [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/maintenance-holds/{holdId}": {
+        put: collaboratorHoldOperation(
+          "Create or idempotently reassert an owner-bound collaborator maintenance Hold; it has no expiry and protects power while leaving normal Compute admission rules intact",
+          "200",
+          AdminSchemas.MaintenanceHoldInputSchema,
+          AdminSchemas.MaintenanceHoldReceiptSchema,
+          [pathId("machineId"), pathId("holdId")],
+        ),
+        get: collaboratorHoldOperation(
+          "Read an owner-bound collaborator maintenance Hold, including its released state",
+          "200",
+          undefined,
+          AdminSchemas.MaintenanceHoldReceiptSchema,
+          [pathId("machineId"), pathId("holdId")],
+        ),
+      },
+      "/v1/machines/{machineId}/maintenance-holds": {
+        get: collaboratorHoldOperation(
+          "List only the authenticated owner’s active collaborator maintenance Holds for this machine",
+          "200",
+          undefined,
+          AdminSchemas.MaintenanceHoldReceiptSchema.array(),
+          [pathId("machineId")],
+        ),
+      },
+      "/v1/machines/{machineId}/maintenance-holds/{holdId}/release": {
+        post: collaboratorHoldOperation(
+          "Explicitly release an owner-bound collaborator maintenance Hold; repeated release returns the same receipt",
+          "200",
+          AdminSchemas.MaintenanceHoldReleaseSchema,
+          AdminSchemas.MaintenanceHoldReceiptSchema,
+          [pathId("machineId"), pathId("holdId")],
         ),
       },
       "/v1/nodes/{nodeId}/admission-mode": {

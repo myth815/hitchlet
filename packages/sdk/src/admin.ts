@@ -323,6 +323,59 @@ export class AdminCommands {
       isCancelled ? { isCancelled } : {},
     );
   }
+  maintenanceHolds(machineId: string, isCancelled?: () => boolean) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/maintenance-holds`,
+      "GET",
+      undefined,
+      (v) =>
+        parseResponse(AdminSchemas.MaintenanceHoldReceiptSchema.array(), v),
+      isCancelled ? { isCancelled } : {},
+    );
+  }
+  maintenanceHold(
+    machineId: string,
+    holdId: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/maintenance-holds/${encodeURIComponent(holdId)}`,
+      "GET",
+      undefined,
+      (v) => parseResponse(AdminSchemas.MaintenanceHoldReceiptSchema, v),
+      isCancelled ? { isCancelled } : {},
+    );
+  }
+  acquireMaintenanceHold(
+    machineId: string,
+    holdId: string,
+    body: { reason: string },
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    const input = AdminSchemas.MaintenanceHoldInputSchema.parse(body);
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/maintenance-holds/${encodeURIComponent(holdId)}`,
+      "PUT",
+      input,
+      (v) => parseResponse(AdminSchemas.MaintenanceHoldReceiptSchema, v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
+  releaseMaintenanceHold(
+    machineId: string,
+    holdId: string,
+    key: string,
+    isCancelled?: () => boolean,
+  ) {
+    return this.http.request(
+      `/v1/machines/${encodeURIComponent(machineId)}/maintenance-holds/${encodeURIComponent(holdId)}/release`,
+      "POST",
+      AdminSchemas.MaintenanceHoldReleaseSchema.parse({}),
+      (v) => parseResponse(AdminSchemas.MaintenanceHoldReceiptSchema, v),
+      { key, retry: false, ...(isCancelled ? { isCancelled } : {}) },
+    );
+  }
   previewHumanUsePolicy(
     machineId: string,
     body: {

@@ -1,6 +1,7 @@
 import { configuredExecutionModes } from "./providers/execution-registry.js";
 import { readFile, stat } from "node:fs/promises";
 import { PowerExecutionService } from "./application/power-execution.js";
+import { MaintenanceHoldService } from "./application/maintenance-holds.js";
 import {
   PowerInstallationSchema,
   PowerExecutionStartSchema,
@@ -132,6 +133,9 @@ import {
   MachinePolicyUpdateSchema,
   MachinePolicyDryRunSchema,
   MachinePolicyReceiptSchema,
+  MaintenanceHoldInputSchema,
+  MaintenanceHoldReleaseSchema,
+  MaintenanceHoldReceiptSchema,
 } from "./http/admin-protocol.js";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { probePortainer } from "./providers/portainer-probe.js";
@@ -293,6 +297,7 @@ export async function buildApp(
       configuredExecutionModes(config.EXECUTION_MODE),
       runtime.hyperVFactsForRevision,
     );
+    const maintenanceHolds = new MaintenanceHoldService(runtime.storage);
     const requireAdmin = async (
       request: Parameters<typeof auth.authenticate>[0],
       write = false,
@@ -325,6 +330,10 @@ export async function buildApp(
       "PUT /v1/nodes/:id/admission",
       "PUT /v1/machines/:id/admission",
     ]);
+    const collaboratorHoldRoutes = new Set([
+      "PUT /v1/machines/:machineId/maintenance-holds/:holdId",
+      "POST /v1/machines/:machineId/maintenance-holds/:holdId/release",
+    ]);
     app.addHook("preHandler", async (request, reply) => {
       const template = `${request.method} ${request.routeOptions.url}`;
       const path = request.url.split("?")[0]!;
@@ -335,9 +344,34 @@ export async function buildApp(
         return; // Ticket revoke has its own atomic idempotency boundary.
       const key = request.headers["idempotency-key"];
       if (typeof key !== "string") return; // Existing HTTP clients may omit it; SDK management writes always provide it.
-      const actor = journalOperatorRoutes.has(template)
-        ? await identify(request, true)
-        : await requireAdmin(request, true);
+      const actor =
+        journalOperatorRoutes.has(template) ||
+        collaboratorHoldRoutes.has(template)
+          ? await identify(request, true)
+          : await requireAdmin(request, true);
+      if (collaboratorHoldRoutes.has(template)) {
+        if (
+          !["admin", "operator", "consumer"].includes(actor.role) ||
+          !actor.scopes.includes("tickets:write")
+        )
+          throw new AuthFailure("forbidden");
+        const machineId = uuidParam(request.params, "machineId"),
+          holdId = uuidParam(request.params, "holdId"),
+          holdActor = { consumerId: actor.consumerId, scopes: actor.scopes };
+        if (request.method === "PUT")
+          await maintenanceHolds.authorizeAcquire({
+            machineId,
+            holdId,
+            body: parseInput(MaintenanceHoldInputSchema, request.body),
+            actor: holdActor,
+          });
+        else
+          await maintenanceHolds.authorizeRelease({
+            machineId,
+            holdId,
+            actor: holdActor,
+          });
+      }
       if (journalOperatorRoutes.has(template)) {
         if (
           !["admin", "operator"].includes(actor.role) ||
@@ -779,6 +813,74 @@ export async function buildApp(
         await admin.machineDryRun(uuidParam(request.params, "machineId")),
       );
     });
+    app.get(
+      "/v1/machines/:machineId/maintenance-holds",
+      async (request, reply) => {
+        const actor = await identify(request);
+        reply.header("Cache-Control", "no-store");
+        return MaintenanceHoldReceiptSchema.array().parse(
+          await maintenanceHolds.list(uuidParam(request.params, "machineId"), {
+            consumerId: actor.consumerId,
+            scopes: actor.scopes,
+          }),
+        );
+      },
+    );
+    app.get(
+      "/v1/machines/:machineId/maintenance-holds/:holdId",
+      async (request, reply) => {
+        const actor = await identify(request);
+        reply.header("Cache-Control", "no-store");
+        return MaintenanceHoldReceiptSchema.parse(
+          await maintenanceHolds.get(
+            uuidParam(request.params, "machineId"),
+            uuidParam(request.params, "holdId"),
+            { consumerId: actor.consumerId, scopes: actor.scopes },
+          ),
+        );
+      },
+    );
+    app.put(
+      "/v1/machines/:machineId/maintenance-holds/:holdId",
+      async (request, reply) => {
+        const actor = await identify(request, true),
+          machineId = uuidParam(request.params, "machineId"),
+          holdId = uuidParam(request.params, "holdId"),
+          holdActor = { consumerId: actor.consumerId, scopes: actor.scopes };
+        if (actor.role === "viewer") throw new AuthFailure("forbidden");
+        const receipt = await maintenanceHolds.acquire({
+          machineId,
+          holdId,
+          body: parseInput(MaintenanceHoldInputSchema, request.body),
+          actor: holdActor,
+          requestId: request.id,
+        });
+        await realPower.cancelForMaintenanceHold(machineId, {
+          operatorId: actor.consumerId,
+          requestId: request.id,
+        });
+        reply.header("Cache-Control", "no-store");
+        return MaintenanceHoldReceiptSchema.parse(receipt);
+      },
+    );
+    app.post(
+      "/v1/machines/:machineId/maintenance-holds/:holdId/release",
+      async (request, reply) => {
+        const actor = await identify(request, true),
+          machineId = uuidParam(request.params, "machineId"),
+          holdId = uuidParam(request.params, "holdId");
+        if (actor.role === "viewer") throw new AuthFailure("forbidden");
+        parseInput(MaintenanceHoldReleaseSchema, request.body);
+        const receipt = await maintenanceHolds.release({
+          machineId,
+          holdId,
+          actor: { consumerId: actor.consumerId, scopes: actor.scopes },
+          requestId: request.id,
+        });
+        reply.header("Cache-Control", "no-store");
+        return MaintenanceHoldReceiptSchema.parse(receipt);
+      },
+    );
     app.post(
       "/v1/machines/:machineId/human-use-policy/dry-run",
       async (request, reply) => {

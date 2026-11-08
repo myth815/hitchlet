@@ -347,6 +347,26 @@ export const MachinePolicyDryRunSchema = z
     updateDisabledReasons: z.array(z.string()),
   })
   .strict();
+/** Collaborator maintenance usage is a power hold, not a tenant-admission veto. */
+export const MaintenanceHoldInputSchema = z
+  .object({ reason: z.string().trim().min(1).max(1000) })
+  .strict();
+export const MaintenanceHoldReleaseSchema = z.object({}).strict();
+export const MaintenanceHoldReceiptSchema = z
+  .object({
+    id,
+    machineId: id,
+    reason: z.string().min(1).max(1100),
+    createdByConsumerId: id,
+    createdAtMs: z.number().int().nonnegative(),
+    expiresAtMs: z.null(),
+    releasedAtMs: z.number().int().nonnegative().nullable(),
+    state: z.enum(["active", "released"]),
+  })
+  .strict();
+export type MaintenanceHoldReceipt = z.infer<
+  typeof MaintenanceHoldReceiptSchema
+>;
 export type HumanUsePolicy = z.infer<typeof HumanUsePolicySchema>;
 export const NodeAdmissionModeSchema = z
   .object({
@@ -1184,6 +1204,9 @@ export const AdminSchemas = {
   MachinePolicyDryRunSchema,
   MachinePolicyUpdateSchema,
   MachinePolicyReceiptSchema,
+  MaintenanceHoldInputSchema,
+  MaintenanceHoldReleaseSchema,
+  MaintenanceHoldReceiptSchema,
   NodeInputSchema,
   NodeAdmissionModeSchema,
   NodeAdmissionModeReceiptSchema,
@@ -1262,6 +1285,12 @@ export function managementRequestContract(
   const route = (pattern: string) =>
     new RegExp(`^${pattern.replaceAll(":id", uuid)}$`).test(path);
   if (method === "POST") {
+    if (route("/v1/machines/:id/maintenance-holds/:id/release"))
+      return {
+        request: MaintenanceHoldReleaseSchema,
+        response: MaintenanceHoldReceiptSchema,
+        cas: false,
+      };
     if (route("/v1/machines/:id/power-executions"))
       return {
         request: PowerExecutionStartSchema,
@@ -1423,6 +1452,12 @@ export function managementRequestContract(
       };
   }
   if (method === "PUT") {
+    if (route("/v1/machines/:id/maintenance-holds/:id"))
+      return {
+        request: MaintenanceHoldInputSchema,
+        response: MaintenanceHoldReceiptSchema,
+        cas: false,
+      };
     if (route("/v1/machines/:id/human-use-policy"))
       return {
         request: MachinePolicyUpdateSchema,
