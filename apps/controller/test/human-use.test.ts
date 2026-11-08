@@ -84,6 +84,67 @@ function fixture(): MachineAdmissionContext {
   };
 }
 describe("one Machine human-use and physical-budget admission rule", () => {
+  it("bounds explicit temporary compute consent without declaring held work idle or enabling power", () => {
+    const c = fixture();
+    c.observation!.snapshot.unmanagedActivityHold = true;
+    expect(evaluateMachineAdmission(c, now, "n", amounts(1)).allowed).toBe(
+      false,
+    );
+    c.policy!.unmanagedComputeConsentUntilMs = now + 10_000;
+    const permitted = evaluateMachineAdmission(c, now, "n", amounts(600));
+    expect(permitted.allowed).toBe(true);
+    expect(permitted.ceiling).toEqual(amounts(600));
+    expect(permitted.hostObservation.unmanagedActivityHold).toBe(true);
+    expect(permitted.shutdownReasons).toContain(
+      "Unmanaged activity is unknown or held",
+    );
+    expect(evaluateMachineAdmission(c, now, "n", amounts(601)).allowed).toBe(
+      false,
+    );
+    expect(
+      evaluateMachineAdmission(c, now + 10_000, "n", amounts(1)).allowed,
+    ).toBe(false);
+  });
+  it.each([
+    "partial",
+    "failed",
+    "stale",
+    "revoked",
+    "human",
+    "unknown",
+    "pressure",
+    "missing_pressure",
+    "manual",
+    "block_new",
+    "maintenance",
+  ])("temporary compute consent cannot bypass %s protection", (kind) => {
+    const c = fixture();
+    c.policy!.unmanagedComputeConsentUntilMs = now + 60_000;
+    c.observation!.snapshot.unmanagedActivityHold = true;
+    if (kind === "partial") c.observation!.snapshot.probeStatus = "partial";
+    if (kind === "failed") c.observation!.snapshot.probeStatus = "failed";
+    if (kind === "stale") c.observation!.receivedAtMs = now - 30_001;
+    if (kind === "revoked") c.observation!.revoked = true;
+    if (kind === "human") c.observation!.snapshot.activeInteraction = true;
+    if (kind === "unknown")
+      c.observation!.snapshot.unmanagedActivityHold = null;
+    if (kind === "pressure") c.observation!.snapshot.resources!.cpuPercent = 80;
+    if (kind === "missing_pressure") c.observation!.snapshot.resources = null;
+    if (kind === "manual") c.nodes[0]!.manualInventory = true;
+    if (kind === "block_new")
+      c.policy!.admissionDuringInteraction = "block_new";
+    if (kind === "maintenance")
+      c.holds = [
+        {
+          id: "exclusive",
+          kind: "maintenance",
+          reason: "Other owner maintenance",
+        },
+      ];
+    expect(evaluateMachineAdmission(c, now, "n", amounts(1)).allowed).toBe(
+      false,
+    );
+  });
   it("dedicated use is not an observation or pressure bypass; unknown workload is never false", () => {
     const c = fixture();
     c.observation!.snapshot.unmanagedActivityHold = null;

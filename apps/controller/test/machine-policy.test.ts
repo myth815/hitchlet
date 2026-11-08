@@ -438,6 +438,119 @@ describe("Machine policies and the shared SQLite admission fence", () => {
       /private-person|pairingToken|credential|heartbeat|secret:/,
     );
   });
+  it.each(["consent", "observation"])(
+    "expires temporary compute %s at the SQLite reservation fence while preserving real held evidence",
+    async (deadlineKind) => {
+      const f = await fixture();
+      const until = Date.now() + 1500;
+      const version = Number(
+        (await f.db.get<{ version: bigint }>(
+          "SELECT version FROM machines WHERE id=?",
+          [f.machineId],
+        ))!.version,
+      );
+      await f.inventory.updateHumanUsePolicy({
+        machineId: f.machineId,
+        expectedVersion: version,
+        policy: {
+          ...f.policy,
+          unmanagedComputeConsentUntilMs: until,
+          maximumObservationAgeSeconds:
+            deadlineKind === "observation"
+              ? 1
+              : f.policy.maximumObservationAgeSeconds,
+        },
+        operatorId: f.adminId,
+        requestId: randomUUID(),
+      });
+      const h = f.heartbeat(1);
+      h.snapshot.probeStatus = "complete";
+      h.snapshot.sessionsComplete = true;
+      h.snapshot.sessions = [];
+      h.snapshot.activeInteraction = false;
+      h.snapshot.unmanagedActivityHold = true;
+      h.snapshot.errorCodes = [];
+      await f.host.heartbeat(f.pair.agentId, f.authorization, h);
+      const permit = await prepareMachineAdmission(
+        f.db,
+        f.machineId,
+        f.nodeId,
+        { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+        f.now,
+      );
+      await f.db.batchTransaction([permit]);
+      const view = await f.inventory.machineDryRun(f.machineId);
+      expect(view.canAdmitTenants).toBe(true);
+      expect(view.hostObservation.unmanagedActivityHold).toBe(true);
+      expect(view.shutdownDisabledReasons).toContain(
+        "Unmanaged activity is unknown or held",
+      );
+      await new Promise((resolve) =>
+        setTimeout(
+          resolve,
+          Math.max(
+            0,
+            (deadlineKind === "observation" ? f.now + 1000 : until) -
+              Date.now(),
+          ) + 30,
+        ),
+      );
+      await expect(f.db.batchTransaction([permit])).rejects.toMatchObject({
+        code: "STORAGE_CAS_FAILED",
+      });
+      await expect(
+        prepareMachineAdmission(
+          f.db,
+          f.machineId,
+          f.nodeId,
+          { cpuMillis: 1, memoryMiB: 1, scratchMiB: 0 },
+          Date.now(),
+        ),
+      ).rejects.toMatchObject({ code: "STORAGE_CAS_FAILED" });
+    },
+  );
+  it("rejects expired or more than one-hour compute consent and CAS-fences its removal", async () => {
+    const f = await fixture();
+    const version = Number(
+      (await f.db.get<{ version: bigint }>(
+        "SELECT version FROM machines WHERE id=?",
+        [f.machineId],
+      ))!.version,
+    );
+    for (const until of [f.now, f.now + 3_600_001]) {
+      await expect(
+        f.inventory.updateHumanUsePolicy({
+          machineId: f.machineId,
+          expectedVersion: version,
+          policy: { ...f.policy, unmanagedComputeConsentUntilMs: until },
+          operatorId: f.adminId,
+          requestId: randomUUID(),
+        }),
+      ).rejects.toMatchObject({ code: "invalid_request" });
+    }
+    const before = await loadMachineAdmission(f.db, f.machineId, f.now);
+    await f.inventory.updateHumanUsePolicy({
+      machineId: f.machineId,
+      expectedVersion: version,
+      policy: { ...f.policy, unmanagedComputeConsentUntilMs: f.now + 60_000 },
+      operatorId: f.adminId,
+      requestId: randomUUID(),
+    });
+    await expect(
+      f.db.batchTransaction([machineAdmissionFence(before)]),
+    ).rejects.toMatchObject({ code: "STORAGE_CAS_FAILED" });
+    await f.inventory.updateHumanUsePolicy({
+      machineId: f.machineId,
+      expectedVersion: version + 1,
+      policy: f.policy,
+      operatorId: f.adminId,
+      requestId: randomUUID(),
+    });
+    expect(
+      (await f.inventory.machineDryRun(f.machineId)).humanUsePolicy!
+        .unmanagedComputeConsentUntilMs,
+    ).toBeUndefined();
+  });
   it("rejects a heartbeat race without depending on Machine.version; old sequence cannot restore its permit", async () => {
     const f = await fixture(),
       before = await f.db.get("SELECT version FROM machines WHERE id=?", [

@@ -176,7 +176,24 @@ export async function prepareMachineAdmission(
   );
   if (!evaluation.allowed)
     throw new StorageError("STORAGE_CAS_FAILED", evaluation.reasons.join("; "));
-  return machineAdmissionFence(snapshot);
+  const fence = machineAdmissionFence(snapshot);
+  if (!evaluation.unmanagedComputeConsent) return fence;
+  const observation = snapshot.context.observation!;
+  const ageMs =
+    Math.min(snapshot.context.policy!.maximumObservationAgeSeconds, 30) * 1000;
+  const deadline = Math.min(
+    snapshot.context.policy!.unmanagedComputeConsentUntilMs!,
+    observation.receivedAtMs + ageMs,
+    Date.parse(observation.snapshot.observedAt) + ageMs,
+  );
+  // An immutable preview is not a permit after consent expires while waiting for the DB writer.
+  return {
+    ...fence,
+    sql:
+      fence.sql +
+      " AND CAST((julianday('now')-2440587.5)*86400000 AS INTEGER) < ?",
+    params: [...(fence.params ?? []), deadline],
+  };
 }
 export function policyContext(
   snapshot: MachineAdmissionSnapshot,

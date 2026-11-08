@@ -236,6 +236,7 @@ export class SQLiteMachineNodeStore {
   }) {
     const policy = HumanUsePolicySchema.parse(input.policy),
       now = this.now();
+    validateComputeConsent(policy, now);
     const snapshot = await loadMachineAdmission(this.db, input.machineId, now);
     if (snapshot.data.machine?.version !== input.expectedVersion)
       throw new ApplicationError("conflict");
@@ -256,6 +257,7 @@ export class SQLiteMachineNodeStore {
   }) {
     const policy = HumanUsePolicySchema.parse(input.policy),
       time = this.now();
+    validateComputeConsent(policy, time);
     const snapshot = await loadMachineAdmission(this.db, input.machineId, time);
     if (snapshot.data.machine?.version !== input.expectedVersion)
       throw new ApplicationError("conflict");
@@ -1267,6 +1269,12 @@ export class SQLiteMachineNodeStore {
 
 /** Policy ceilings can be reduced below existing use: those claims remain charged and new
  * admission stops. A new physical reserve may not confiscate already occupied capacity. */
+function validateComputeConsent(policy: HumanUsePolicy, now: number) {
+  const until = policy.unmanagedComputeConsentUntilMs;
+  if (until !== undefined && (until <= now || until > now + 3_600_000))
+    throw new ApplicationError("invalid_request");
+}
+
 function policyUpdateReasons(snapshot: MachineAdmissionSnapshot): string[] {
   const roots = snapshot.context.pools.filter(
     (p) => p.parentAllocationId === null,

@@ -192,6 +192,13 @@ export const HumanUsePolicySchema = z
     blockShutdownOnUnknownPresence: z.literal(true),
     maximumObservationAgeSeconds: z.number().int().min(1).max(3600),
     admissionDuringInteraction: z.enum(["block_new", "within_reserved_budget"]),
+    /** Explicit, time-bounded compute consent only; never permits power or attests idle work. */
+    unmanagedComputeConsentUntilMs: z
+      .number()
+      .int()
+      .positive()
+      .safe()
+      .optional(),
     /** humanReserved is included in systemReserve; it must never be subtracted twice. */
     humanReserved: MachineResourcesSchema,
     systemReserve: MachineResourcesSchema,

@@ -12,6 +12,7 @@ import {
   type PowerContext,
 } from "../src/domain/power.js";
 import { HumanUsePolicySchema } from "@hitchlet/contracts/admin";
+import { evaluateMachineAdmission } from "../src/domain/human-use.js";
 const now = 1792454400000;
 const amounts = (n: number) => ({ cpuMillis: n, memoryMiB: n, scratchMiB: n });
 function context(): PowerContext {
@@ -168,6 +169,27 @@ function ready(c = context()) {
   return { c, p };
 }
 describe("isolated power decisions", () => {
+  it("temporary shared compute consent cannot become a shutdown permit", () => {
+    const c = context();
+    c.admission.policy!.admissionDuringInteraction = "within_reserved_budget";
+    c.admission.policy!.unmanagedComputeConsentUntilMs = now + 60_000;
+    c.admission.observation!.snapshot.unmanagedActivityHold = true;
+    expect(
+      evaluateMachineAdmission(c.admission, now, "node", amounts(500)).allowed,
+    ).toBe(true);
+    expect(shutdownReasons(c, now)).toContain(
+      "Unmanaged activity is unknown or held",
+    );
+    const p = advancePowerPreview(
+      c,
+      state(c),
+      { kind: "evaluate" },
+      now,
+      randomUUID(),
+    );
+    expect(p.phase).toBe("idle");
+    expect(p.idleSinceMs).toBeNull();
+  });
   it.each(["present", "unknown", "partial", "stale", "revoked", "manual"])(
     "%s evidence cannot drain",
     (kind) => {

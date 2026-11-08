@@ -173,6 +173,22 @@ export function evaluateMachineAdmission(
     snapshot.resources !== null &&
     memoryPressurePercent !== null &&
     snapshot.unmanagedActivityHold !== true;
+  const unmanagedComputeConsent =
+    !manual &&
+    fresh &&
+    !observation?.revoked &&
+    snapshot?.probeStatus === "complete" &&
+    snapshot.sessionsComplete &&
+    humanPresence === "absent" &&
+    snapshot.unmanagedActivityHold === true &&
+    policy?.admissionDuringInteraction === "within_reserved_budget" &&
+    (policy.unmanagedComputeConsentUntilMs ?? 0) > now &&
+    cpuPercent !== null &&
+    Number.isFinite(cpuPercent) &&
+    cpuPercent < policy.cpuPressureLimitPercent &&
+    memoryPressurePercent !== null &&
+    Number.isFinite(memoryPressurePercent) &&
+    memoryPressurePercent < policy.memoryPressureLimitPercent;
   const limitations = manual
     ? [
         "Constant-online manual inventory trial: frozen conservative budget; shared-host use is not verified",
@@ -188,6 +204,10 @@ export function evaluateMachineAdmission(
   if (context.holds.some((h) => h.kind === "unmanaged_work"))
     limitations.push(
       "External unmanaged inventory Hold remains; approved physical budget must include its workload and the Hold prevents power actions",
+    );
+  if (unmanagedComputeConsent)
+    limitations.push(
+      "Temporary explicit compute consent uses only the attended budget; external work remains held and automatic power remains blocked",
     );
   const admissionAssurance = manual
     ? ("manual_inventory_trial" as const)
@@ -254,7 +274,7 @@ export function evaluateMachineAdmission(
   // A current, positive Host safety signal always vetoes even the static trial path.
   if (snapshot?.probeStatus === "failed")
     block("host_probe_failed", "Host probe failed");
-  if (snapshot?.unmanagedActivityHold === true)
+  if (snapshot?.unmanagedActivityHold === true && !unmanagedComputeConsent)
     block("unmanaged_activity_held", "Unmanaged activity is held");
   if (!manual) {
     if (!fresh)
@@ -269,7 +289,11 @@ export function evaluateMachineAdmission(
       );
     if (humanPresence === "unknown")
       block("human_presence_unknown", "Human presence is unknown");
-    if (snapshot?.unmanagedActivityHold !== false && !boundedPartial)
+    if (
+      snapshot?.unmanagedActivityHold !== false &&
+      !boundedPartial &&
+      !unmanagedComputeConsent
+    )
       block(
         "unmanaged_activity_unknown",
         "Unmanaged activity is unknown or held",
@@ -459,7 +483,10 @@ export function evaluateMachineAdmission(
         block("capacity_exhausted", `Insufficient ${k} in Node pool`);
   }
   const ceiling = policy
-    ? humanPresence === "absent" && !manual && !boundedPartial
+    ? humanPresence === "absent" &&
+      !manual &&
+      !boundedPartial &&
+      !unmanagedComputeConsent
       ? policy.unattendedMaximum
       : policy.attendedMaximum
     : zeroResources();
@@ -472,7 +499,7 @@ export function evaluateMachineAdmission(
       if (proposedPhysical[k] > ceiling[k])
         block(
           "machine_capacity_exhausted",
-          `Machine ${k} exceeds ${humanPresence === "absent" && !manual && !boundedPartial ? "unattended" : "attended"} ceiling`,
+          `Machine ${k} exceeds ${humanPresence === "absent" && !manual && !boundedPartial && !unmanagedComputeConsent ? "unattended" : "attended"} ceiling`,
         );
   const available = Object.fromEntries(
     resourceKeys.map((k) => [
@@ -504,6 +531,7 @@ export function evaluateMachineAdmission(
   return {
     admissionAssurance,
     limitations,
+    unmanagedComputeConsent,
     allowed: reasons.length === 0,
     reasons: [...new Set(reasons)],
     reasonCodes: [...new Set(reasonCodes)],
