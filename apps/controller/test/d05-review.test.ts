@@ -109,7 +109,7 @@ async function addPortainerAuditIntent(f: Awaited<ReturnType<typeof fixture>>) {
   const id = randomUUID();
   await f.storage.run(
     `INSERT INTO operations(id,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,kind,step_key,dedup_key,state,request_hash,intent_json,result_json,next_check_at_ms,deadline_ms,created_at_ms,updated_at_ms)
-     SELECT ?,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,'allocation.provision','integrity-audit-fixture',?,'succeeded',request_hash,json_set(intent_json,'$.executionMode','portainer'),result_json,?,?,?,? FROM operations WHERE id=?`,
+     SELECT ?,installation_id,allocation_id,runtime_identity_id,connection_revision_id,image_artifact_id,generation,control_version,controller_epoch,'allocation.provision','integrity-audit-fixture',?,'succeeded',request_hash,json_set(intent_json,'$.executionMode','portainer','$.runtimeConfig.executionMode','portainer'),result_json,?,?,?,? FROM operations WHERE id=?`,
     [
       id,
       `${allocation.allocation_id}:integrity-audit-fixture`,
@@ -1281,6 +1281,22 @@ describe("independent D05 protocol and lease review", () => {
         (await app.inject({ url: `/v1/tickets/${f.ready.id}`, headers }))
           .statusCode,
       ).toBe(200);
+      // Missing lease returns 404 after authentication and owner selection;
+      // it must not be blocked solely because admission was disabled.
+      const proofQuery =
+        "leaseId=00000000-0000-4000-8000-000000000099&generation=1";
+      for (const endpoint of ["ready-inventory", "cleanup-proof"]) {
+        for (const ticketId of [f.ready.id, foreign.ticketId]) {
+          expect(
+            (
+              await app.inject({
+                url: `/v1/tickets/${ticketId}/${endpoint}?${proofQuery}`,
+                headers,
+              })
+            ).statusCode,
+          ).toBe(404);
+        }
+      }
       const list = await app.inject({ url: "/v1/tickets", headers });
       expect(list.statusCode).toBe(200);
       expect(list.json().items.map((item: { id: string }) => item.id)).toEqual([
@@ -1384,6 +1400,16 @@ describe("independent D05 protocol and lease review", () => {
         (await app.inject({ url: `/v1/tickets/${f.ready.id}`, headers }))
           .statusCode,
       ).toBe(401);
+      for (const endpoint of ["ready-inventory", "cleanup-proof"]) {
+        expect(
+          (
+            await app.inject({
+              url: `/v1/tickets/${f.ready.id}/${endpoint}?${proofQuery}`,
+              headers,
+            })
+          ).statusCode,
+        ).toBe(401);
+      }
     },
   );
 

@@ -63,6 +63,26 @@ describe("SSH readiness connection lifecycle", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("closes an SSH readiness stream that exceeds the bounded output size", async () => {
+    const client = new TestClient();
+    fixture.client = client;
+    const stream = Object.assign(new EventEmitter(), {
+      stderr: new EventEmitter(),
+      destroy: vi.fn(),
+    });
+    client.exec.mockImplementation((_command, callback) =>
+      callback(null, stream),
+    );
+    const rejected = expect(probeSsh(input)).rejects.toThrow(
+      "SSH readiness output exceeded its limit",
+    );
+    client.emit("ready");
+    stream.emit("data", Buffer.alloc(4097, "x"));
+    await rejected;
+    expect(stream.destroy).toHaveBeenCalledOnce();
+    expect(client.end).toHaveBeenCalledOnce();
+  });
+
   it.each([
     [1001, 1000],
     [1000, 1001],

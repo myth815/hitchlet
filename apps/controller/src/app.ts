@@ -1457,6 +1457,8 @@ export async function buildApp(
       "GET /v1/tickets",
       "POST /v1/tickets",
       "GET /v1/tickets/:ticketId",
+      "GET /v1/tickets/:ticketId/ready-inventory",
+      "GET /v1/tickets/:ticketId/cleanup-proof",
       "POST /v1/tickets/:ticketId/release",
       "POST /v1/tickets/:ticketId/cancel",
       "POST /v1/tickets/:ticketId/renew",

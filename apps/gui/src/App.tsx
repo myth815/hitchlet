@@ -380,6 +380,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
       if (
         e instanceof ComputeClientError &&
         !e.retryable &&
+        e.operationOutcome === "rejected" &&
         e.recovery.idempotencyKey &&
         principal
       )

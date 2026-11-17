@@ -54,6 +54,7 @@ export class ComputeClientError extends Error {
   readonly requestId: string | null;
   readonly retryable: boolean;
   readonly statusCode: number | null;
+  readonly operationOutcome: "rejected" | null;
   readonly recovery: RecoveryReference;
 
   constructor(args: {
@@ -61,6 +62,7 @@ export class ComputeClientError extends Error {
     message: string;
     requestId?: string | null;
     statusCode?: number | null;
+    operationOutcome?: "rejected" | null;
     retryable?: boolean;
     recovery?: Partial<RecoveryReference>;
     cause?: unknown;
@@ -70,6 +72,7 @@ export class ComputeClientError extends Error {
     this.code = args.code;
     this.requestId = args.requestId ?? null;
     this.statusCode = args.statusCode ?? null;
+    this.operationOutcome = args.operationOutcome ?? null;
     this.retryable = args.retryable ?? false;
     this.recovery = Object.freeze({
       command: args.recovery?.command ?? null,

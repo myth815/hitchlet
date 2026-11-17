@@ -31,6 +31,7 @@ test("assembles a dependency-closed Runtime candidate outside the workspace with
     ]);
     assert.equal(manifest.configOrCredentialsIncluded, false);
     assert.equal(manifest.packages.zod, "4.1.12");
+    assert.ok(manifest.inputs["pnpm-workspace.yaml"]);
     for (const name of [
       "dist/hyperv-main.js",
       "dist/drivers/hyperv-local.ps1",

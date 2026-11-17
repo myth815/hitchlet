@@ -1,5 +1,7 @@
 import { Client } from "ssh2";
 
+const MAX_OUTPUT_BYTES = 4096;
+
 export async function probeSsh(input: {
   host: string;
   port: number;
@@ -10,6 +12,7 @@ export async function probeSsh(input: {
   await new Promise<void>((resolve, reject) => {
     const client = new Client();
     let settled = false;
+    let outputBytes = 0;
     const done = (error?: Error) => {
       if (settled) return;
       settled = true;
@@ -34,12 +37,19 @@ export async function probeSsh(input: {
           stream.once("error", done);
           let stdout = "";
           let stderr = "";
-          stream.on("data", (chunk: Buffer) => {
-            stdout += chunk.toString("utf8");
-          });
-          stream.stderr.on("data", (chunk: Buffer) => {
-            stderr += chunk.toString("utf8");
-          });
+          const collect = (chunk: Buffer, target: "stdout" | "stderr") => {
+            if (settled) return;
+            outputBytes += chunk.byteLength;
+            if (outputBytes > MAX_OUTPUT_BYTES) {
+              stream.destroy();
+              done(new Error("SSH readiness output exceeded its limit"));
+              return;
+            }
+            if (target === "stdout") stdout += chunk.toString("utf8");
+            else stderr += chunk.toString("utf8");
+          };
+          stream.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
+          stream.stderr.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
           stream.once("close", (code: number | null) => {
             const lines = stdout.trim().split(/\r?\n/);
             if (

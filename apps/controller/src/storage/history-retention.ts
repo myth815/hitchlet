@@ -270,7 +270,7 @@ export async function pruneHistory(
   // Successful side-effect details expire earlier than the compact summary.
   // Keep all still-live, unknown, receipt-dependent and power-recovery records.
   await db.run(
-    `UPDATE operations SET result_json=json_object('detailsPrunedAtMs',?,'outcome','succeeded') WHERE state='succeeded' AND updated_at_ms<? AND allocation_id IN(SELECT id FROM allocations WHERE cleanup_status='complete') AND json_type(result_json,'$.detailsPrunedAtMs') IS NULL AND NOT EXISTS(SELECT 1 FROM agent_commands c WHERE c.operation_id=operations.id) AND NOT EXISTS(SELECT 1 FROM lease_renewals r WHERE r.operation_id=operations.id) AND NOT EXISTS(SELECT 1 FROM image_versions v WHERE instr(v.manifest_json,operations.id)>0)`,
+    `UPDATE operations SET result_json=json_object('detailsPrunedAtMs',?,'outcome','succeeded') WHERE state='succeeded' AND updated_at_ms<? AND allocation_id IN(SELECT id FROM allocations WHERE cleanup_status='complete') AND json_type(result_json,'$.detailsPrunedAtMs') IS NULL AND NOT EXISTS(SELECT 1 FROM agent_commands c WHERE c.operation_id=operations.id) AND NOT EXISTS(SELECT 1 FROM lease_renewals r WHERE r.operation_id=operations.id) AND NOT (kind='allocation.cleanup' AND EXISTS(SELECT 1 FROM allocations a JOIN tickets t ON t.id=a.ticket_id WHERE a.id=operations.allocation_id)) AND NOT EXISTS(SELECT 1 FROM image_versions v WHERE instr(v.manifest_json,operations.id)>0)`,
     [now, now - 30 * DAY],
   );
   // Audit is low-frequency. Configuration revisions/revocations and Agent

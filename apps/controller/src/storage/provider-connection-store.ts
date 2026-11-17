@@ -508,6 +508,7 @@ export class SQLiteProviderConnectionStore {
         kind: "run",
         sql: "UPDATE operations SET state='succeeded',result_json=?,version=version+1,updated_at_ms=? WHERE id=? AND state='running'",
         params: [JSON.stringify(result), time, operationId],
+        expectChanges: 1,
       },
     ]);
     return result;

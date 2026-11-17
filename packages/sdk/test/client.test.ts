@@ -488,6 +488,85 @@ describe("HitchletClient consumer surface", () => {
     expect(writes).toBe(1);
   });
 
+  it("marks explicit rejected renewal separately from its actual HTTP status", async () => {
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).endsWith("/renew"))
+        return response(
+          {
+            outcome: "rejected",
+            renewal: {
+              id: ids.renewal,
+              leaseId: ids.lease,
+              proposedVersion: 2,
+              proposedExpiresAt: "2026-10-19T02:00:00.000Z",
+              isInitialClaim: true,
+              decisionDeadline: "2026-10-20T00:01:00.000Z",
+              createdAt: at,
+              updatedAt: at,
+              state: "rejected",
+              reasonCode: "quota_changed",
+              confirmedReceipt: null,
+            },
+            reasonCode: "quota_changed",
+          },
+          409,
+        );
+      return response(ticket("ready"));
+    });
+    const client = new HitchletClient("http://localhost", { fetch: fetcher });
+    await expect(
+      client.tickets.claim(ids.ticket, { idempotencyKey: "claim-key" }),
+    ).rejects.toMatchObject({
+      code: "quota_changed",
+      statusCode: 409,
+      operationOutcome: "rejected",
+      recovery: { idempotencyKey: "claim-key" },
+    });
+  });
+
+  it("preserves rejected renewal state when discovered by a successful poll GET", async () => {
+    let now = 0;
+    const fetcher = vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/renewals/"))
+        return response(
+          {
+            ...pendingRenewal(),
+            state: "rejected",
+            reasonCode: "quota_changed",
+          },
+          200,
+        );
+      if (String(input).endsWith("/renew"))
+        return response(
+          {
+            outcome: "pending",
+            renewal: pendingRenewal(),
+            location: "renewal",
+            lastConfirmedExpiresAt: at,
+          },
+          202,
+        );
+      return response(ticket("ready"));
+    });
+    const client = new HitchletClient("http://localhost", {
+      fetch: fetcher,
+      now: () => now,
+      sleep: async (ms) => {
+        now += ms;
+      },
+    });
+    const error = await client.tickets
+      .claim(ids.ticket, { idempotencyKey: "claim-key" })
+      .catch((value: unknown) => value);
+    expect(error).toMatchObject({
+      code: "quota_changed",
+      statusCode: 200,
+      operationOutcome: "rejected",
+      recovery: { idempotencyKey: "claim-key" },
+    });
+    expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
   it("reads, waits, claims, gets access, renewals and releases through their typed routes", async () => {
     const routes: string[] = [];
     const claimed = ticket("ready", {

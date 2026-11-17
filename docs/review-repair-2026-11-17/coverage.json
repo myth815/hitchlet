@@ -1,0 +1,3651 @@
+{
+  "base": "e7d07a481970c54b58accb3bb86e4e8b668dd66a",
+  "tracked_files": 470,
+  "in_scope": 411,
+  "unit": "baseline tracked files; new fixes/tests and this report are listed by the local commit diff",
+  "files": [
+    {
+      "repo": "hitchlet",
+      "path": ".dockerignore",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "fa06a8723e422d7a8beb19ca6b01e7ffa1547d8ec51cb73e1a50ada2f7f22e52"
+    },
+    {
+      "repo": "hitchlet",
+      "path": ".env.example",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "df02e94d877867082743e244aef89c0bd3f597cecb44056743c7078e748619eb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": ".gitignore",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "9e9c37c8e5a1d675198dddd7f352fd8415044170432416227ba23ce5bfc02e94"
+    },
+    {
+      "repo": "hitchlet",
+      "path": ".node-version",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "a1c56e968c358e10872d64220b3ae759ffe7feaffc4da95fae425dbcca43fe44"
+    },
+    {
+      "repo": "hitchlet",
+      "path": ".prettierignore",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "d93f8c7fdfc0a06145ee33ad7d0d35a787c03adc2d6b4cd52087ddb544140eda"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "AGENTS.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "Dockerfile",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "78e59b472018518013ace636a88b66793fb9c3d5a8bf5f55d8a8dfc2ca6d9e62"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "LICENSE",
+      "classification": "excluded",
+      "reason": "Non-executable license/assets; not a runtime, tool, config or test input"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "README.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/package.json",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "84314e3f2a5959a880ca1c371123c4e6cb8c827be43224f9a2a38d8bb5f9e61a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/scripts/copy-schema.mjs",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "519a9af60e1001725b3a0478edc3b1514c25854323aabc5bf6cecdb0d3acd60c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/scripts/dev-watch.mjs",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "16adb3eeafbd9fb3235f9ff7f831911d65e01949989e69a7602b06544baa3143"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/app.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "034005371ee7d7707f8e55781772ca033f5517194f9e7d0bd7cda2c89e526a02"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/access.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "39aac61532daa6eac3829e6455ba8007403baacf47dbfcefc1d53cac56b63ccd"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/admin-command-journal.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "86f52effa3e2b580cb1f931633a297444fd4b910ce825191616ad7688e4ef50c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/admin.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "813b9eccfeaade5c6b61bd9c2950ce88ff59881b78cd7cf4e05ab1b8bf9f0737"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/commands.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "ed6dba8de405ff64eb2d13d05b1a83e4a2585810614f630901018b6fd04aefe3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/console-credentials.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "07bc7ec71ae1ccec953c62ab950ab47642bdf4187547677b13af861b8fa1b6d3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/console.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b1ac7cf20743cc0792a33fb8d4474bfe0442944a26c7d99c4b2c170598a3cf78"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/errors.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "d7358d52a9456aac24055fe9c0a667a575e7159666104289f25c3dda0ab56ae0"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/host-agents.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "9e66066211286f302c746fb6d2c0579a4f9f4d97c965da79ea7b370824602082"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/hyperv-facts.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "2d2d760af326780f6484af86c298ec9887008ede73b8826b6d97438beb084680"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/image-cache.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b3d35d79eda29c20a5fae0bf50d04910ad9964a511ecf177f1d5a187d2081e6c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/image-publishing.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "ba51ae7f04b6c83a466ab375301e62a9b1edfb9b5945edfa18fff69abffbd35b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/image-validation.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "cb595be72bdc6ce05d4d17c43783a7f4cf18e56a7bb9ec328c9a4083b92c66f2"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/leases.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "5461ddcc7b4ac970583bc0ed16cc8b2e5a0e3d773eedd16bd117ad5ea37b1b7b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/maintenance-holds.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "6d769fb9557520f9f2a6ecd2764236786b04d35a888eb485d15fcea72b58bf02"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/maintenance.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "07ea93195d6aff14158ae06ae6cff198efd5359eede5b4b7039465ad87feb2ee"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/management.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "cc66feac366deab98851476681f9f50ec22445aca895da191113ea32f77fe70e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/operations.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "519ed6237d4df2fa891389377cecd50a689a8ee6d27e6dded662f6ba3dc216cf"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/portainer-background.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "3d6c3e7ba1eff395de31df3adfdc067e61d1a94fd17affdb2a04af489ad33957"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/power-execution.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "de72f74b1c9b53716e041762682691f78a27e022acf4a3bd47398ef6aae92443"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/power.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "0df9cf8310d5314c9edbccac7c2533339c3a18341db7fc4e9902fe2d7d94afb9"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/provider-connections.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "fe0c26eecc74f2ddeffa1e8ec69be41b47c2df78c976098ab5c63b14c8d36997"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/queries.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "d0b7316a1f30760f5fb6ac0a3b16f6804e678891ddefe1aad337cce957af58f4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/recovery.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b2f5250ac6fa5deb386ed246ac5d2dee87d0661931bbd06253358653e7a45af4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/tart-facts.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "feb6bce2a50936538b1b297e0771308f1106801e6aef25d7fea7218bd67ec3bf"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/tart-recovery.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "48c43294fd82dc123b7e75f7473dd9f12ca77ab6a66e7ab512ea82bac00933cb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/ticket-cleanup-proof.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "88662b6ee52547e33b0e30038d0a1cbc1826fbd311a5fed2601e08b753139a71"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/ticket-ready-inventory.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "1abbc0517a0a9853a338d188ae2c1b38433147406e6d599d1f7b93ad0c883189"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/application/tickets.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "52bbbc44d6ee42230203b3e20677e15a41abcb16850dbac68bc400e2d7b562db"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/config.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "14aa3e20d4f6209b27e7623827a1e97f8edfd9c2231e35f56c81450665343986"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/admission.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "580d8ccbe6e852f1e4b6caf2868ba3e208baa706a3fb2a542eb4ac09adfb8f70"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/attested-capability.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "01536ea294c9c5a57f471b88610388659b47ae9356d2b5fb2ba53aab59c5930a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/console-frame.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "0dad7acdbb9af68be1c21880b6618f1ec9c69f95a6f82e1f75d51a21d14f8270"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/docker-image-reference.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "8136cd0e18c8702e2c37ae6661ce54b0011859d5b4ee760ad5cde843c40cd3e4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/docker-recipe.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "fa91dd039a81d787baaf69fa6b9344f870ebaecfa4eddc28dd4d475279854241"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/human-use.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "c6fb43975aa988ff948d0e1719e039c93f3682cc1376fc4903b6672ac55a9718"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/power-execution.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "5fb0a547f29d8c06c65c73ed2a1e9a4b476d68edafaae976902dafab165309fb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/power.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "8249312ef5878edcfc4ae0328e235fcc0c7b9722aecdad72bfcd19608acc28c8"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/resource-manifest.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "d034cde60fc2ca40549fe00ea7268a060cb80b625ef6903176bd7c8e3b854392"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/role-scopes.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "39fc02ab0bbc0eb8c16d709ca0237ec0ec270bd001ae59d217a0f8b4a2fdb933"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/domain/ticket.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "0637cf381febe188ad44822aa328c6285de6fe17efad2aa2e876de477447c3e2"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/http/admin-protocol.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "e6259e8d61fb9fdf298aea062a7094dba9f730404db692af8087f672e1ac73f5"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/http/auth.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b632d2bf41d05a60b1d20c1b02e0ae211a5005755e439e8a11dfc0350adf309d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/http/cleanup-proof-route.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "fb6afc94e6ccb375b13e14e876c4ed71b9b25d858dddb926c54870157e61ea88"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/http/management-openapi.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "45b010ed8ebd069eda05d95e366bf8bd6b444677ca4abec39d92f76bea9d8ddf"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/http/management-routes.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "8f4b3851808cbba696a674a04612484d508abbb05e1d07e0a356f5a5e4562e91"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/http/openapi.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "8c882935ca7942f5f23b7039f8f59c49fb04e44f4732355b8051712c3d551dce"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/http/ready-inventory-route.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "a3cacf08d2997b3a989ce3a7511fc41f655ee68790ddc7fbfe1b2baafa6f2425"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/init-admin.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "8f71e95d5ea0ffc4fe84d158a592be18caa3e43a68fec44de7662ecd52932e51"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/init-simulator.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "05c4380123f04877c97ba9872243d632e0774597d2de496d023725700ff8da09"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/execution-dispatcher.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4ead57745f6e401cf4dd026151fdc2706cfe55b7881ca6ab9a5737b2b1b3982d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/execution-registry.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "482e9568cf9b4906c8989c9616f1ab04a31fe4b946be9a63d4861b9e556640a4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/hyperv-console.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "a6b1a5dac0b1820d16d49c7ef82264b0bdbecd1da4c758d0fd6065edf6607844"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/hyperv-provider.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "72cc1427fe9add849678770c7f417619f2e9ca694ca4f551a7ca359a4ced934c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/hyperv-runtime-client.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "38d8e76b5a5efa8c4a6f278f14191ceeaaa07d4a1716b97b7ce8df1dcc99f9c0"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/hyperv-runtime-composition.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "070e4f392a9ddc501001417ada7280bccf952d6571d819e8ddc422935efcd1d9"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/hyperv-runtime-resolver.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "87b48aeb8c2b5c6b33e81f5c7886ec90be666569eb4e30906bb43d9164e6d8d6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/hyperv-ssh-readiness.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "a91a0a4985a7d25e488c8e973ab73de9aa6e2a190dba5711706ac6b0c88acfd2"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/hyperv-ssh-relay.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "f7f80731c559017c330190e23f6c4d0917bbfcbf3a9b7c4e7765dc0e07761459"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/image-cache-port.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "3cc130cb1b87ab4ff05d295424a22044b012dffa91021122b03f6e664a531bdb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/port.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "5bdf293fa7b95a983e8d565067d2726c907fd39dd6f7b8020007d3edeea55900"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/portainer-cache.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "7221156e5250c1c9d77d4f23d52df2b13155fea5c6702608573274252d805bcc"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/portainer-probe.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "6d9474da0359855202ff8a0412de4b5a34f7b55f47c669db3b9284592277f8c1"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/portainer-provider.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "77eb886c6f9aba9c63b47a1afadfd18caebde786e58731e92b9b5cbc86025c44"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/recovery-control.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "f430ca4236615d01611f2e3fcb8f6b99f63cba098eadbaa142b569d298904b40"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/runtime-credentials.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "27755bdff467895caa05ec13a2da0ca0c332bba22511180e88f3ebd292cf39fe"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/runtime-network-client.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "909ba64e4b3e3ffffb1bb6ad9b8df68f4c6ddc088ae1d18df0d38c1248d83e96"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/runtime-network-port.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "973864ae32c25073059ac9c2d89463a43b6997278d463595f90ced14449e237d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/simulator.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "dbfd4e0b74b1b5b76a15d3d47b15a25ec35ee6ba3402658ad300e7646deb8f99"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/ssh-readiness-command.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "8bebe7c4dcc55489f0262a021f48d2512e22f6ddcb340567a8a8e28a5dade048"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/ssh-readiness.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "c41ad8b1a00eb44e5aff4cf570b08772f118e7dc59f8be6d1fa7711a971ddc55"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/tart-provider.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4e2515d32266688b3ee0a0cda9d8f81cdb8705e927157a8ec27baa5349a08b41"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/tart-runtime-client.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "853b01696b0f7e5027844734a85d125baaba32dc43430870eefba78420015271"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/tart-runtime-composition.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "2961dde4d07dc9610844744e64c44f8024d59a1ff236d035e50384b69faa284f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/tart-runtime-resolver.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "79d4de62a0abc1f220e0ed157ec3a9704e4f7cb0aaa56fb60e62ef1fd1e1e604"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/providers/tart-ssh-readiness.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "7ecadcd5ff0042e4ae369a87ce400546cff8b21a7660ca992dcbae621393f2aa"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/recovery-cli.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "cf4565cd641aeab5063111c0e3b81353b5f3bf55a2c4b5a79cee765ba8275e11"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/rotating-log.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "1c90b98246bea01c20f107d3d22ace564643c7dff5eaa009beaa220c68b81bb5"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/secret-cli.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "a203ad2cb6badec25b25da7f8ac864075a213d2337d68aad05cbed4b38b527fc"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/server.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "dac81c3e05139e75698e171d7a3b64fed1c68bc6c8880e8d566a1b0acb977fd0"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/README.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/access-material-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b9f29c9b4484354c8767ac0c3b688c4a235eb598daeb6c7ef33ea98d317aff0b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/admin-command-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "6febe95295d4cacab3967b5a431ced595d2b6b6d61c832a52c96e0f699069b0b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/admin-read-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "c9c196a540e5a280593a0dc932ad27f93a34abb13a28877cb9b6e4aef3c071df"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/admin-store-utils.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "a097e88147eb223ffe62914628c8f355f4361df749ca4ee0f789e8b7d1ba6718"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/admin-stores.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "4f5b765030f4356c3b977ff57a3be1732af9d5a43cf567d2fee7b3b5e68cae18"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/console-credential-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "f8e51baf37a36564d749d10587bf6c59ef3fa351e7b8b2d3777c8cf7aae8978c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/history-retention.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "8ce1ace7e7d95337bc193b9036abcc81b8b90448d300351ed6dae525d899a1b0"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/host-agent-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "a46bea0b0d73f0f78250f8454bcd3aafc3a8138620ecf1ebdd04c53f2807e803"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/human-use-guard.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "d5d73dcfb86c7861e22ef28c1302b5034e73aa06eff7472ce32530e1b5fc1a95"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/hyperv-admin-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b944de73e84edffa7da128c91f4dc9bd7a1bd95cc6af544321b9aa395e7873ee"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/idempotency-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "df73872497a3ce60b2ce667f58cc3b8fdcab13d8e1487d8d9b8344561d7c0e9a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/identity-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "29fd84cdb25ceb02d058f004ed38e217d323a401d14e5a41806bbca138109062"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/image-cache-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "ec5c9eaddfde29aa803d6d6f5316c27dc3ae29c5e92237a420ec472deacf8991"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/image-publication-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "125245eec1dc35b6b2366c30b47b0799d39b5cb7b57bcbdceb92971285b265fb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/image-validation-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "545643ec6140aba39f791545ec0978d8bfcd50a70d747f8e1abbbc17d1c7ddc6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/index.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "c0524a2b304061fc4f6d2510dd34b926a80c674ea3af9748b5058c8b509db44c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/machine-node-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "08759f9c04fbf64d91712dda0d23c1e409e0c340f570185fa43352f664b50900"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/maintenance-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "c395933090a1204a24104f4ac7a7c57a616edf6da39d67a36bdb52e0ef7d3b44"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/management-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "79fe2419382b27eea34d0f16a7a8d1d30d6054d13e0696d79307fd89f2e55fab"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/migrations/001-initial.sql",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "d90511ec5d15b17847c612ec83bdc08573398fbd2278fb430fe4cb7316236aec"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/migrations/002-session-credential-lineage.sql",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "cfb1ea21075789b79782a4fa209728fcefcab2a479add0740c419012ad067227"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/migrations/003-validation-evidence.sql",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "0d264d3e9eb4454f20bd2c2692d7cf3c6f0fd65a7e20e0f7fd714e504886d7f9"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/migrations/004-managed-resource-identities.sql",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "0ff9a930e0bbaed0364c10fb28ed64ef4cb8fa9c082e5d5b411520964265d9f4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/migrations/005-host-observations.sql",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "1f56147d8fb65bda578bb4ce579573fc90ce6243e55b4256b44d41d470cf1c4c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/migrations/006-power-dry-run.sql",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "a9542bbfc4de3fd1f156af5fa4d5270ff1cbb8194cc6281843250b3381a12c2f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/migrations/007-operations-maintenance.sql",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "7d1780c4081b2fcc9caca31e3109ea5d418075fd5c9eaa70a6344c1ed9530a76"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/operation-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "47761da73a74d5d28a26e8f6ed9e15abdb0f233bde8a2ddaa0f25857c73deb3c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/power-execution-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "061bdde53e6e233e48ae1e761a981808d967a774535382e6f3df0a8bd4987609"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/power-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "d4f436155af68cf9cc9452efc9448d9aefb1f91fd44dbcc307cb845ef5a09e2d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/profile-revocation-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "5980889aba7ebfb10a3b5b3c80ec0ded59d342358cbdbd2c9571e89808cf654d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/profile-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "dbb8596ddee79cb3250eaca78108651839975b4ada5bdc8a6af06a002e897f9d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/protocol.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "5c328e1f5bbbb234ba73ccafdd8e639733852e1db6314915e9d8075c601d2261"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/provider-connection-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "f960a15ea66d880e339c199e6f6f8e4259d14d8224fd982572bc7f3bf06fe6be"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/read-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "03f2bdba43c2405eab3f9ece48dcc51ac1d1895739c79de0638150e95e4ee828"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/recovery-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b64d4bf1ff4d1b21dc2fafe3bcc8bfcd557238e337073019f348f7dc54de17de"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/renewal-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "84f0b9c2539f21b41d165ec43d7d38e3cf6b64235fe611d26c372862b4f04a36"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/secret-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "f3d5ed0961de6e907fdeff736cede67b3ab113ffe41ec6d4ff68da603740392a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/termination-context.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "5a7f4dc6caf08a5f14817361620d2e2094ea96ae5e697f56360efd7fec4a3420"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/ticket-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "c12338943d2d32c040fde5038d749bb5272506aca5f17afa65d2d2b3fdb04ebb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/validation-store.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "3cc55a5975c4e3c6abbd7ff51fbce1cb0ad59d4e8aced09b56d65e022d35f7a6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/src/storage/worker.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "979841724c7ae2db54faffcad6fcf6f859ca25b2e6d7d7a6a50c5c7391b358c6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/access-material-store.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "36a11677fbc3e4fefebe86af5df62d860dfc358e1ecc857ab5d188fadba381f8"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/admin-bootstrap.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "09303a42199fc715016d1ed00cff9942e09b27dc8b39bae2e8a13a31d6373967"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/admin-read-api.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "944ead07ff6a6575c5485d932b7c4bd75412292029600ad5da3aef20d57592ce"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/admin.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "c3f7568e8f35e5449c6b65ac3db8e745fa171faa1de59256261fac883d4a3de3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/admission.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "83bbf884962e6045eccd0d952a7282913188a9dc1017b3e33c1b8d784d795e3f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/app.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "4fe0efd9ab4f322040e084cd69d8a116b8744acfe14603b7cbab430da7ccffb6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/config.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "18fb27479393fb5f45abe8a5607bf40cfde3b490daadef0bf04b2db5d910d851"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/console-credentials.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "44222fe581f500d2918906ba19bd918ec63e461b9da8ffb8cf488e35ee1bebb4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/console.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "2e9148c0d28296a02d3e127080daf7cb6f0f57903f5c5a79b51ae294b090c5e3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/d05-review.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "fc18824a76b079c335ec34061b779a577c3eea6ec425a5d1eb57af482df0d866"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/docker-image-reference.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "753a194d1ed71570f6137a24e7263874d780fdcfdf9b8c0ea9aec90e4fcb84de"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/execution-dispatcher.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "69387c0a6838433eddf899e6746843839250702fd392b78da1ba5ba2e70e0a2e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/fixtures/crash-worker.mjs",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "356fdfd38af28b8c1a0535149a4e3bd813c3bfc96d849d83229036d18f24dad9"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/fixtures/validation-process.mjs",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "3b519e084859d138caddd6401ced18e3608f4479e85adc0428afc7ccbff35be1"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/host-agents.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b5cc4c458e42adf56b852a141981982d8af93be9acd922f2e16f40762cafa2bd"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/human-use.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "f4690ac58288b80b729d54c67155f0e99bd8ad2a534f40278089235fe33d5f2b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/hyperv-console.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "212c79fb59ef30a6fec3c10fb8179865a0263c362946a685cf7c3be28c0d27b3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/hyperv-draft.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "ab6d18c8367af2046bd030cc5f0e9cd006ca471df3e3123c3e0fdef396ffff78"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/hyperv-management-lifecycle.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "acc41da27b3b5f15aef5aab296bcfc000f09a355100339846b9cfc23a596e181"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/hyperv-provider.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "18da8482135c0407389d9f0277d330a4fea71db97c829cbe4956dfcffd34db94"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/hyperv-runtime-client.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "90e5bfc6deed57177ed6aa12e6104b90b39e4259c6440b2c81b66b72eed8cd66"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/hyperv-ssh-readiness.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "564631d85222f65f4c01b0c3b4145e0389e759392d934c94d245df923ee54c04"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/hyperv-ssh-relay.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "67a4d342e7e08c4919dcecf5225dfbc0fc964833f3c66f6c9bb4c273969e89a5"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/image-cache-worker.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "89d8445b9e88c6460864e9ec37aaa28a4af94d17df740b44ca59268a8c880e88"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/lease-background.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "89ef3f3f48208aabcde9ed3ccf36d82ca912c0d3ff970f8a71bff9e2ea25f6d9"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/machine-policy.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "8776dda89282610a0bd6b7233c6a1df79ef02c43ad89c8a2ed8d28889c49b9b2"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/maintenance-holds.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b547ccde15bea8a9a155e6b56993a90fe0a5be51fb781ecfff9bf6be50ccf726"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/maintenance.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "73915456cd2df51cb550ea92ece22c9dd19288a3fbc3b11c9693dbeee559618e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/management.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "b53322a7d883461c3914b2aded3c66250dc71cd1c1b5b08fd4a4bea7f25b455a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/operation-store-integrity.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "8dbc51bd43db23c70be7bb745b862fe941628ab245b6e4387e403333156c326e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/portainer-background.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "474a495072699c2313ab1105446fff94cb1f08dd3cbaf64a71799765f8783d1d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/portainer-cache.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4cfe0be0bc60431031eb55dc37d0b2a2f7501bd46c07881c21407f0e029c3aa9"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/portainer-cleanup.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4159d30ce63d163a98968892705f2ba470cfe5938434dbf6dac270cadbc55e60"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/power-domain.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "a9d3c89150650054d8e2878f2d507f78b1405ba776c33e86470e9d0413a54093"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/power-execution.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "64e06f01c780ff4bd008869e6bd2ef890cbc48cfeefc0a98520e895ad7b3be05"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/power.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "189e0afabfe75b69f6df3f3eb8447b99db808015b3b2d65fcd2e2ece080d88df"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/provider-probe.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "f4d5b22e3607c2f13d30144a6f1401f1fd57dc9c92da9c1d063ef1f076721aa6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/runtime-network-client.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "e46e9e107e8f5bb5299cb826c3bbdf4817ee173427b6c2aea6304b0614b0f6ff"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/runtime-storage-client.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "ae14a1258807a621a22efcd6cc06762ae4a5279068eecef94b6b843a6d74f4e5"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/sdk-example.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "5052ab0d43af4c8f8517d1e476715d85f1479335c7edf30ea9e9ef431883f2a0"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/secret-store.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "db50418ecb84adcb615f18bce8e80fee60b6e974489ccebd6a52280347dd2699"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/ssh-readiness.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "f27722de3b0e7cc072eeed093244af2f07758d0830667e05a3895c269853b8bd"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/storage.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "944bc3e811a96e0d7269f34c1ec4f87a658b2e5bfbb0e6acb60f7151991cf618"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/tart-admin-publication.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "db23f171eba398c61c2d8d8238899ba4fff88dc98d89584176fa7d0cb6bf1d10"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/tart-nat-qualification.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "a878f0596c807ce0287c585cdf5e8d10590d7f24b158b6805fe23d9bcac39687"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/tart-provider.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "bfa4111208cca248cc67d9e79241ffe91b0efe1b244a006eb8f4837a0acb27a1"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/tart-recovery.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "44cf871545c2fb68431ea86008fbf6a5dd70df0d07995426837c3e0b1cef755a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/tart-runtime-client.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "3dfaf576b21245d2ebe1b2ffca9211d4e1fc407c292a6222e469c4d06fef57eb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/tart-ssh-readiness.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "2a47da18f37c8bccc14450de6e3d115973c704d59aff300466dbb545d5f11a5c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/ticket-cleanup-proof.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "191555c4638456684badb571a9421bc73f0a5e6a924deb5178454b71de100103"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/ticket-domain.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "3b6b742d2bf6aa566769d3a40cee07160c0db518791d4ac741107329f9a623f3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/ticket-ready-inventory.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "4fc43caaa3c2f7ea312001a46c836ce8eef617c9f5d587f0b853248dbbbc1f0b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/tickets.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "669d59501e7cc2e92a393bf9272a6e6485b286f5321ff16ffe72a1242b31e6e7"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/test/validation-lifecycle.test.ts",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "3c340570c96ab573d8d4c2fc6b23ebc23055e1f0f062b21be683c7a431d653ec"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/controller/tsconfig.json",
+      "classification": "in_scope",
+      "shard": "h-controller",
+      "status": "source_review_complete",
+      "candidate_sha256": "c3c10454698d92a673821cf4a655060c6865be2e3219f50f69e2a13c8742f04b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/index.html",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "da05f69c2bae951d6e9845c8305ac701322a05bf30ba71675170c4912adfe448"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/package.json",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "3d5766c8de10607c7edc29e7f5b543968bd2bd4d1399f78114b3c9a6094911cb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/AdminPanel.test.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b4970fd8b82180e432b339e49c7f2c8108416e4e7f01512eb8c5dd78572ae0a1"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/AdminPanel.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "ac6e08e49480de4f2d97d75a38e6df06b634615d3cce4d29844dbb6c0724ab18"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/App.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "949dd74041f360d95845cba1d45e5a8608e8c9789499a46e66b227c41b17f701"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/AuthorizedAcquire.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e6202cbb8f80ab5654e414f839ce3552e31ac84665a50f538478336ed1d681c5"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/ConsumerSetup.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "992a9df267ddf0f8c498fffc7eb66f7415d2df1da4b52e97023b87d91b37de20"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/DailyNodeActions.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "0597ffd80323d0d49a113ad7532264d8ab547b83402730ed6c02f2dd1ed91767"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/EventUpdates.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b39d00d34b5c47e7e3ce7bc4f7b00975a8c6ff3fe76716fecbfd1cd72d919320"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/ImageSetup.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "55d59498e75651686592974a5bd3ca8e409058ac803f79847340c76b1f927bb5"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/InventorySetup.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "6a0ae17f983508791c87076f7663898d73d182cfc86077f699ef4f1232e6f9cd"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/MachinePanel.test.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b5225fd0c96cb8b7907e62ce280ec99e316f9e6ea0e64ecaf9cfe5b16c7f7326"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/MachinePanel.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "244a99298ea2e9414a94c6e7a01e904c3610285017d749a47319186c39a53b9f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/Management.test.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "60520619d8e1439312c56fdb095e74f9041390ce65fa46138f65957d07916741"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/ManagementConsole.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "c1694ead369f9ee89ffca6c52229010a0ef81a3c4d7e578e894ea14e0d350e86"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/ManagementTickets.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "ed02feb329f4624088d9631fde56dd4c2eedf92bfcd1fb87034cdb794f0ad233"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/ManagementUI.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e35f594478a3df5137e082faf65b7f4495289f971403d1757885c8d52b91545a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/NetworkProtection.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "41fc90f84962cf4c4cf0928c87ea21c296e97201b89eacea1be33528f4e40f2c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/Panels.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e93075464aeeb1e28362e8f49d73d8f679d02b9c0807e3dddd143af222ff6cf3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/PowerExecutionPanel.test.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "508820814a959cdb66486a253c38f7f8aeccf1499d47fe9855fff28a62d4de54"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/PowerExecutionPanel.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e7e11bd9434d896e853eea16ebade17e31b2feaa96a08bbcbc5dd5a31d6966ca"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/PowerPanel.test.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "80a0095a7e8db102388a19b3cd8f8773845243e0207056fbf55ee0e5cfdbabc7"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/PowerPanel.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "cd05797bca3d74b57415ccfc1da825792bc1bb143fb9edcc8875d45be6d2434b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/ProfileRevocation.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b605d74b13ce0bafd3892312342155f94eb5c2023d05d6f9a5d4ac5830807554"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/ProfileSetup.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e5a5b117a7484640725912bf83df4113d9197dc1392ca050af1a260fcb00edeb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/SystemPanel.test.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "9b67270c8ec5ced5fce151e396c538d08633198937a8a2358a1857d0c88ea7e2"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/SystemPanel.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b9bf5be886f410ed544097a55420c6ef02f83867ed873b976206b76fef92c954"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/ValidationEvidence.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "77f2a599b09d919232b0c34bbbe3e17de59adca6e5c60443de81f27fd1596033"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/format.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "da828461684e8b12d1dc103649545b0be4964b5c4376584bddc6540ce7e1d228"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/main.test.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "fb7c0dc365f06310e3983fdd7113da7bae4657b5845a1cbe117c99cc674978a0"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/main.tsx",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "ab357a1d5e79101e31d7d55df81a15017635f2f22c82353e568be53c4fa81f60"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/management-prepared.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "ffd859bfbf1600fa0818247ab78e1b2b28b0ed53ac15fdc5d49c2aa77e363866"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/prepared.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "2f6d61eebaccca1b7db25268e070bbfcdcb4986720f96392a6ea40aab3a82753"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/src/style.css",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e43e4c32310e53e252fe7c323215177a74e84ee9f8608b6664bd1515ea45399a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/tsconfig.json",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "fc356404b53373405dbf8617173b7884404af9e56d6f9be36ea766188b1e0ed8"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/gui/vite.config.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "479d8999dfedea0ba92f076fccfa1e1be75fe0c383dd8b08536e714133478e5c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/Dockerfile",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "6cc0c2577752d467cc8a3e5bf8e78f754db9feaad748fc8d90ba0515c8e7fd63"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/Dockerfile.dockerignore",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "95c38121452f5928ff5822e628c8b8d70a4bd8ad451a37b8bfc9f81a20c042b7"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/HOST.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/README.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/package.json",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "98aaa0a4287cc9ac9e56f69e03016a8b6893bc1b323fafb0601dd07d295211c6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/scripts/copy-host-assets.mjs",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4ebebf6493cbf8161ae6944a3f864dac4f4fce6003653be1cf2d3f70e19f4be7"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/scripts/preflight-context.sh",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4d32d78c60e0edd1a23a7e316c145a0a8de79fe9ddaa338d62790b4baf970359"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/scripts/probe-published-port.sh",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "c2063b823c6d80cf69d97d9eb0a0f9325f103e81ab01a950f060b9108a076d7c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/canonical.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "5432d10d569186e2b9c7bc319d49b26e20bb0145ebdfa69b69793793600fa4de"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/command-exec.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "135bcb8d0ffa6719f97e86fdd475d2403c96eb29c641c39e8326b4620ab36866"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/hyperv-guest.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "8c9fa832e6717b0e17493d6f64346ac77acbec3e41df0524f7b4f1cea8095053"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/hyperv-interactive.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "777386ef562e1176efb528c3f879886f180105f540f00905b1563b2be03d2ae6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/hyperv-local.ps1",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "0ee609a4768a00941102435e99a7869c8ca9da95fdd1ddcabe986f43eba45ae7"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/hyperv-powershell-direct.ps1",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "1d534e09307235d2fb50ca96cf23abef8ecec0e33a1f391e590f7fe0dc93524c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/hyperv-powershell-direct.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "58f80d6417ddf86cb0aa5a0dd19ca3dc2d62e035acd6dde426e75b16812a5f7e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/hyperv-windows-guest.ps1",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "8801e502a639e0a6e7b9b34c2954ee141faea8044e070416ca588ddbbb26353e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/hyperv-windows-interactive.ps1",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "1eab19af9132ceceb20b94877b3cdf50670a1e5c8e90f3ac098c34e1e4a5a7f8"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/hyperv.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "931119a8c40c234bc45caa2b0637fa0b23be5b57b0045667df3cf07c255c95cf"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/tart-guest-bootstrap.cjs",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "a54639a036dcb53eb9ad74d59f84a0b0fbbd41b0545d0f0aa87d83195a1c9e87"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/tart-network.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "d556984d03ad05d63ac0c362d8b889000dc5a91eefca02ca5118d9c378c25df6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/drivers/tart.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "9912837bc04e1c212709ba4eb4cc8c6d17b1b92c9a6fc7a0d2b10364766e664f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/engine.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "0ee8cf7555b9f8262f477d8ed59847a855a875c4be5b261a2923da7aef360475"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/firewall.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "dc93f9f476e35ff6b37772320f015f752904cc76d6b48a91497c5f922ba8bc16"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-client.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "2f52e661ff6c2cc5d65f4fe72b247e7a39a30aeb9478a8cf71f9940f8bc204ef"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-main.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "2c96ddc0e6c57013dd2bb9e5d94ba38e3b8554e814f0049416324fcce55d8c2a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-power-fingerprint.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "30e32e2bed96014a7f6d178d7b76a0eb9d546290ebb916b5a2aaaa3bdf9001b2"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-power-main.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "302fcae219197d353c74c6612f08a75509ae28f23d3067f8c67181cd291c17ce"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-power-observer.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "039a5c596784391a9fced99c74344de9b5b28ec77c8974244b497224f6ba2262"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-power-storage.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "93de1b281e08bbd7694a337cead7701a9920ccbe0714f47397fe788003872304"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-power-watch-launcher.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "b42513dad99acc6d1ac3f62c5344cb2ab935527e5992385a1b76e34ec4c898b3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-power-watchdog.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "2752bcfc9e37e54e30ed14adf8e9158058460e76efad5a67222a807a4b051056"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-power-windows.ps1",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4a4401ce0f37f00f86b5bdff4b2304afe96dad0820311c58a10ee8c85447abe1"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-power.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "884b860e90a585767923ada61bae380a4fe069a07db106c27644fc16a313ab38"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-probes.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "e6f6e9cf5d68b2950ff84703fdbf03ec08e47d00d2e9ba797525e0361f35b1e4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-service.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "aaa27c17f44297f8a787c0e7115a1fa99e4632ed7ddb33ae3435e550dc8b2e32"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-windows.ps1",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "239869c2fd9367aa020443e8b10a32555fee2df9d215650df4685d262fe13415"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-wsl-client.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "c752371114b2dafa0a12a09f4fa6746008b5ff0792a4e291bbe16953f10b984f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-wsl-keeper.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "e60a7fc79e7548fcc9784cf371031625fdc13648b4df2d819c91a6533e73616d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-wsl-linux.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "9ac8c3485dadeddcc7f38aaac34fe9cdd07497e7179407e253413c4a1771d784"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-wsl-management.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "7bbfa026cd8aa6b5414badcb5cec219a01e49cca54ca644810565302531f1c71"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-wsl-platform.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "6678436d61f344fe7318dcb3e003f526400c3cbee939d08cc87b20cfd5c7bae9"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-wsl-publisher.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "116edf3683a4dbcffcf0ccda1f95d350ad6323cc6defc16da024a2986593c6e8"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-wsl-receipt.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "35ffe49b8f1e0cba1ec0404cab1258dd21fea525a4bf4554f15fa4d5c580cdc3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/host-wsl.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "84d62a76bfd901939fdc3546bd9dce15a1158a425514332b2678bd9d615962c4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/hyperv-main.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "9d47a497c7c51a973976cd1e256b108d7fca4c3ada8c5794ac9fa44a4e761923"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/hyperv-server.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "820e4c53bad3afb97f275153486764a81ebf0a4358367e0a7d2d968485432667"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/hyperv-templates.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "d2e74865777daecd87c5362a54b8c07a0e42db9356645c4b0bcd766ad4ba2aee"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/journal.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "2835f72e90ef472c3ef436c59584c534a437f4fad38350bfb5fd836f4d7c7644"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/main.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "b4a00a4e7842dbab7521a853eb6956a0362758da83e16f9e08f3d637592a2cf4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/server.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "ac587630851715281667a971ca6e172a604214ca80c8b31874e8a2bc3efe99d5"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/storage.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "09bb64e4f20be10269bef5b1b7e86610d2a775490757e91e1fab7e013dac57b3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/tart-main.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "38f91dcc0898f1ba82afd0bcd56db4e120c904139fb5e6453bedf13f0f6916b5"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/tart-server.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "d55546bc24cbed18b20038f337d82b74da8ca1680bf8c779195cc647e275a56a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/vm-server.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "e54c5422095a2cb2e43a9af1bf81ea0dfdadd51b5e1d7027e87b592109053e5e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/worker.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "b3182ee4bf981cfa0188693356f322eb31d9a412d7ce89212e38f4ca892fa57c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/src/workloads.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "f9d0f8d8c97c2600676bb2d772eabeba6c32a79ba2c0be351a1c8e8c7d0634e7"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/command-exec.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "039d3004ea94fa85741da8f50a4f0c7a1fa38a84a523773d32e5008c298afe34"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/engine.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "7f24f70091d5edc07ea9217fecbacb7f3b884080196b465e4c9f18d40e8bfd01"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/firewall.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "b7f5a411d06e69a7f263c1dc29d2f9ab44edb4a89c0de1ddd5b27b641bf9182a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/fixtures/mac-console.json",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "80574a19d6d12b83e9f5b04d805e47542c9a39e07fb535bd572bdd2001dd6723"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-client.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4fdfe956cffd06303fab0ccf309462496916a3cc18850bbf858214fd4d03b540"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-power-evidence.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "5e349274f5a636737915b853b78e3798e610cef8a7b11e920a5b00ad33a3824e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-power-native-image.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "2627593c6a875dd129ec9e607dea0596bd54fbc63fba332e2dcfd88755d16155"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-power-observation-record.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "33aa689fafe17fa148165aaf4b8aa21cec478e0ac80eb0172e7f57c255fa8fdb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-power-observer.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "c5dbf4b6720af630e329d7d5f671c2c10a0113da20ba5e3021a327f1cfaacb92"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-power-watch-launcher.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "3dd1354adf4e848832deacb797485b13e29af0881c9d4b59a299303b4e94fbbc"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-power.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "32d78f2a5b4753e0de82bb742bae027e4538e39c9b1222366623b3ffc558951f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-probes.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "756a6992f3f6b12c9603aa506a314eb8fc59c346205c041b32068a7f77e83cf1"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-service.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "426e9a31042d08e39019323bbfa8eb239e346065b7823806acdd0fa22d30328a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-system-tasks.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "11414eee115f1eb8328da97f0b6281a1ca9a9a2a6e3a0488595cdb2c9575d3be"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-windows-session.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "9582d27ed04cae05ea7de9c2730dc8b59e836defc563916832f10ecbcfc73eda"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-wsl-cadence.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "a31e6d501049ca718843eb8f7e407533997017ce2876a7ebe9e68ce9e23259ba"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-wsl-keeper.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "c3e428144be5523ac5e00200ab2f7e5e28ca23b71ca6e2ac3a60dbba90329f31"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-wsl-management.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4605aabf157fdb62d98ff40b7a9551c0ff4ef98fd0e0d57992bb6e60786bbfb1"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-wsl-observer-bridge.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "8761de5ae69878d18297cde16c2e2a8edbd03d6177c8a35929e3f6f0cd2566be"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-wsl-platform.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "8397b5122bf2d212e7a06639a4016807238aad3479666b64c53db39337148e03"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-wsl-receipt.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "e8339eaff95060a777874c2fcded00a2307724930e5239fa6de74b45028e1962"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-wsl-redirector.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "5028fcbb25b1299666802e7ef933c9471ad71af81845f37f9922fdc9faa9fc65"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/host-wsl.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "b9737c319fa3562fc82d47e8c22a52b68659e72f2fe959d196bf89790cd6f207"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/hyperv-driver.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "016a05fb2a63ed8bc3ca44e1060c7d2380c9b9f00f2e0b8e6d66e48f7ba6237b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/hyperv-main.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "c8b060e286742e6da5a53d4f4a0bfc5803067c6649c515ae112de106ada2ed20"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/hyperv-powershell-direct.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "15dc251ba255c610baef66b5d0190cf715e4157dbebd1f24456202fa0b672d16"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/hyperv-server.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "4ac5f6dd67918461cd430f4b3f53e8636b8469cebab634568b7585121c878332"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/hyperv-templates.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "65454384732e452766404f635fd8fa85ba9765c454936eeeb4eca3ddc1e54b3a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/journal.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "e7bd9c8c62c4037744ffd0d0a40bcf4421d0ecd5c5f96d527897d9782a1b10d2"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/main-storage.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "d7f55bacb756b37573b37c1bce5bca1b4bbfd17b454aa1f88eb8c057e6af93a4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/storage.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "90a1b5282a747789c8eaedcd76033ecf5ca9ba90ad1b060323549667df0317af"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/tart-driver.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "64f275e622fbf1e924321e663115cebca664ad4fd95a9ab0e61d4d639d39562d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/tart-guest-bootstrap.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "5eb911600efa4cc4fa13e551957400372d979d99a99133f3bd758388e42845b7"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/tart-main.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "b24ac61ea943280d17a0d8c3059224600b75ddba71acd7aaef792d1df71d4305"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/tart-network.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "d6d8222ac5e038f809a8fb222cb73783c5d084bf1baaf7c386f4bf9937283542"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/tart-server.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "5519c1cb357d9df2f397d6ba2829d4c89264a7fdbc8918cedbcf6495b357679b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/worker.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "26ab652d2854f07bc6b2361efb8db26944cc32f766bd0fa8d754355f5eafa764"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/workload-engine.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "3a9b1087e431b94b335d65d5ea519342b3849e3a48a1aa03329ced4c1159a397"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/workload-native.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "c712dbd65fa9314b9476e34592e2296b3864deea66273d19d438657ba97b4657"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/test/workloads.test.ts",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "fff46d0e55d5f7cd6983534539c47a340db305bcfb01c70bde1b8b1617717714"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "apps/runtime-agent/tsconfig.json",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "f6966615e06635fa766bf5cf12c163ce7a4dca5cc46476d9cbfb63c8416d41ee"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "compose.portainer.yaml",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "97e89687a4605ac5c116b44a532837e2d5803d4f40772ac126436ae2bfeabffd"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "compose.yaml",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "8e364f5eb644315c47d26cfdd46b019e8cbb2f27afaa95f44f4ee998b8a6e878"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docker/node-ssh-v1/Dockerfile",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "81870db3b9ab5601ac76f27bf25bb1d9f5d2691f89ef6498540a97709102fe4e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docker/node-ssh-v1/README.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docker/node-ssh-v1/entrypoint.sh",
+      "classification": "in_scope",
+      "shard": "h-runtime",
+      "status": "source_review_complete",
+      "candidate_sha256": "62c9231dfe0f2e6c7a5c1747ce737260f4328dcaa4185eea9a78712970aba45e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/AUDIT-USABILITY-2026-11-02.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/COLLABORATOR-MAINTENANCE-HOLDS.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/CONSUMER-READINESS.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/DEVELOPMENT-NEXT.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/DOCKER-ACCEPTANCE.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/DOCKER-GO-ACCEPTANCE-2026-11-04.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/ENVIRONMENT-SELECTION.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-CONSOLE.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-INTERACTIVE-CREDENTIALS.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-MANAGEMENT-AND-GUEST.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-NATIVE-KERNEL.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-PREPARATION-2026-11-04.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-PROVIDER.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-READINESS-AND-DRAFTS.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-RUNTIME-ENTRY.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-RUNTIME-TRANSPORT.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/HYPERV-WINDOWS-ACCEPTANCE-2026-11-05.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/IMPLEMENTATION.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/POWER-NATIVE.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/PRACTICAL-BOUNDARIES-2026-11-03.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/RELEASE-READINESS-2026-11-05.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/RUNTIME-CANDIDATE-PACKAGE.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/SMB-EXACT-ROOT.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/STUDIO-ARM-RC-2026-11-03.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/STUDIO-ARM-RELEASE-CANDIDATE.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/STUDIO-HANDOFF-2026-11-02.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/STUDIO-REAL-ACCEPTANCE-2026-11-02.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/STUDIO-RELIABILITY-2026-11-02.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/STUDIO-REPEATABLE-START.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/STUDIO-SSH-ADAPTER-REAL-2026-11-02.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/STUDIO-SUPERVISOR-RELOAD.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/TART-DOCKER-SERVICES-ACCEPTANCE-2026-11-05.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/TART-DRIVER.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/TART-LINUX-ARM-ACCEPTANCE-2026-11-03.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/TART-LINUX-ARM-PREPARATION.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/TART-NETWORK.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/TART-STUDIO-ACCEPTANCE-PLAN.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/TART-STUDIO-CLI-ACCEPTANCE-2026-11-03.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/TEMPORARY-SHARED-COMPUTE.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/VESTA-GOVERNANCE-VM-2026-11-04.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/VM-CLI-TEST-RECIPE.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/WINDOWS-WSL-PREFLIGHT-2026-11-02.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/WSL-WORKLOAD-OBSERVATION.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/adr/0001-d00-foundation.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/api-sdk.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/README.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/VERIFICATION.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "66fc9cfd67739f8631d02e29cca421ccca1dd6b5f22d612793b3b9665ae265e4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/README.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/agent.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "af1a4679390ed570140c49571dc743834ebdbf2e33f2c4838867109136e5a68d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/common.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "c671877891b7fcbb5b9b512547551b95b3ac3966c1d3b738e6d2f84ce6269d79"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/consumer.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "74b31fd639374b64c8f7fa1220fd2d4f807627f273ce10f81c2c3a30d9e4e1be"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/contracts.typecheck.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "4953ca704055f73056389d5014c496bd94682c5b873eef8209b22dc3d88c8248"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/domain.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "8b0896d3773b2964bb7311eae896c5b8baf3ac094092bd5c8331d0d516a727b8"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/provider.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "34a1a38f3addfe87eaae5433c8db5d0a368cc5fa60f84735035b3da79ed8764c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/public.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "855e9d8eb00cd56da0771f3106a844a72f0f03ec36fd983873795de7c8669a36"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/services.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b1e053055dec42ddc25a418ea7bc56b4fd54f36f9db6f3d67fb4d8fb9ab75655"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/contracts/usage.examples.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "23361d29f6f20236557ba673444fc3f85f5e179ae0fbd57c747281ec22607783"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/schema.sql",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "ef10da001bb635a224e7140f2f8ecaddf0741d2d042cef891be046151fd4a46b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/tsconfig.json",
+      "classification": "in_scope",
+      "shard": "root-supplement",
+      "review_notes": "Design typecheck configuration",
+      "status": "source_review_complete",
+      "candidate_sha256": "3cea49e2e4d6accd8bfb9929763ca004a181762eec4b1179d98e038a66f8889c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/design/verify-schema.cjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "701f5bfc394645e062c98564fe1b6e5ffabff16cbe2526c47daa40ca670894b5"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "docs/runbook.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "package.json",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "5ed350f160784aee32d03212ffbf0cbc0df68404251c4a582168feaf3336908d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/package.json",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "3982f6b20a26beea85d666869601467398287596d0ed09f80f34072b610ba3fc"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/admin.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "5dabe43271e7de9436c90366294592e27169cab259e3154675fe9c8e3bc802ed"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/cleanup-proof.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "222d2ee519a5656f8463d983060b3e44f1b1b9cc8db546204fe55f4a28eb4b4a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/common.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "3d637ba31195244a2a43a4665a67d3291039cdc7a9ba0370f25c03cb5fd5aeb2"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/console.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "6d0a70cdb197dbdd0934605d8dbe63a8cdecb48ffc248100c84af6616258bedf"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/consumer.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "45d2ef78b2cae7741a8fb88dd84fda916305d19844e8fe685367ad7968d419ef"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/health.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "3fa71fd1f162f01fe043aded654aed32bdcfa0d07b5ebe1a63ba3cf686c1e8b6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/host-agent.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "beb4a93583955f6ba91004716d35c9e3c66ab094905e2497bd145c4d85ed8286"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/host-observation.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "eea0956e132cdbbba6b0ae188763b7723ed4b71ebc09f0f0b1054d80d7d81d15"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/hyperv-console.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "adc069a419b74c13af0856c8daadfc37aab2fb1044b24be9b9178da5f0fba602"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/hyperv-interactive.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e0a0cf808f9e1608ebab4e403270ba5412573ef0dca84400ccf8d4f379c3ff59"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/hyperv-runtime.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "97867699149a1731151fcc63bdbcf9004e5151e9b1da6b9358c319556d447b0e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/index.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "d62fd6e3d65a9fe7f4248fde7c13fd40b6641d2410315cb8d8cff0184e9f52d9"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/internal.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "96d4cdf02c866028ddb77effe69119c9d7c6733e112932d71962f38cdf061994"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/maintenance.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "19962dac6a3002d48609d02adec28fb2813dc83b6af99b0194f4e02c8988d19e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/management.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "1439a8017d56785315d5ed0449b78770b5c0aa301865824b3f6725267f7cfa16"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/power-execution.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "70ae359c7abfc6ea6029edeb07fd0d3b29bf8b7b43147e8b2eef5e9820bc15fb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/power.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "6b703db85d791c36cebfa4df97bd21a0e8dbc69e54c66967e4e5b9469d97d008"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/public-boundary.typecheck.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "c421be0f365f53137fbb03c4d27be551f21f7ad20affed718dce2ac86e21dbbc"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/public.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "279e9c563df4db48d92b278dfee9a99dc658fb002091833c1feb9b4121e2ffa8"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/ready-inventory.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b944bdb877b4ae543d1e519b05accf7b3d6928df61a1f56bc7575af4e9ff9641"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/recovery.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "de3abeb66c5c40ce1888a1aec9dd6cdd3ac7bf0e2f5a84c3c9cb5b5504ae8d73"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/runtime-network.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "d8dc10905d2b500a49249c9369d9af23ae0781535a9da7d52f58db789b9e66bc"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/runtime-storage.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "75e8eee276a76c50cb625ab856607e1fe0b3f6a77cb521e08dcbb10ce251a20f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/runtime-workload.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "2a65fb89494634873b0bf15a5c07d5a68f850abc8491c8cc1afe62433c4b31c3"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/schemas.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "c251518ca61531eae4d0a6c3872d30fda0b0973480275d4f606a3a0a82919d15"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/tart-network.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "a34840a83bb96a593a62a9898e3906660f702ac48b2364c51205c4d5e871b33a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/tart-runtime.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "8660d4846bec902ac2afd311b40bfd5cd74af5289c23e68e24edc860a2204f39"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/tart-transport.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "028686cb72fdeaac6b0f356dedda8ab4be7491f96c4ca70e87d12d40c6651f26"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/src/vm-runtime-identity.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "d9793661c06e06f97cacf2865ca95706a87a893da2932df5b4ae587f8ae8e293"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/admin.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "1e35241bea9c7b75ee81401a5ad12ff044d0a0285416b35a936286abd835e96d"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/health.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "80a925921675a78a3effff678234dc10d220a788f3284e2615744458f991302a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/host-observation.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "6d47713919dc63f9efdb25da721332feef792739e625961c0555aa917484903b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/hyperv-runtime.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "0a983a5a2618ee0318b2497b99363629250804447f09734c2070ea9c38a86cb7"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/management.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "ba449b4d470b3e4e20150ac3cac36f84c52a7d6902c2ebeea3f6bb54d7a7e0f8"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/power.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e20e36d2e9911c66bd4887452b90df0ad77bbe1bb18a9add9b1a2742806dfdf6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/schemas.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "2267f6009cf25eb0d2f6ef0d9ac6f0b95c2980d7bcd4a015a21f2a3de1920bc9"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/tart-runtime.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "a929d12f02e1d25fa5fe9bde3fa463d081dc23a637d4fba7fe7b82042b4b134b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/tart-transport.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "c4a409bd1bbd0e37ad518b4890c023d19a07339976f8143cbfbd9edc02e4973e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/test/vm-runtime-identity.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "913eee3e1ab567715689a32efd0c419672f95b2dff77fe101230b3975881358f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/contracts/tsconfig.json",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "c21b42253ae8d9de9c3459e731c35ff5dea9742cb5c6f777d78d05c5d7af660a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/README.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/examples/README.md",
+      "classification": "excluded",
+      "reason": "Non-executable project documentation; consulted where normative, excluded from code denominator"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/examples/consumer-import.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "119df52d62979e2baaf4159dea1a0b6b83a122de2ae43ad694448b877ca5727c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/examples/resumable-tenant.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "2292c53c8b2cf68ac38696a7f3b0d995b7d27e8bf6e007634d5fc5a93c27af54"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/examples/ssh-access-adapter.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "1f1a4150b695ea25e5e3f3d8405f3679247d91604b2c4a498235dde88f3b3368"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/package.json",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "15a4613d6d380dd975878884aad7a12be0776302ccf715f4574e8b2f6b8f7d0b"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/src/admin.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b852d0f7de3377a887a84f75335d925b0cd3c2e65f11ab3ade9965fa7739bdd6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/src/index.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "2848fe47ba6211a4d412d9a80bb3dbbdc24565e9b445f0c1ec896e0428bbf413"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/src/inventory.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "1efee131d2f7b3b284c4bfe1d8db9b3ea9cfb8f549658b514d08d71ee14768a6"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/src/management.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "71f640347b00105fb333461210ca58a7e60dc7357295481a1219709b28519ece"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/src/response.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "96b9bdeff4177c427edb1167b840b7972e3553722d1879daca46e00d078b5695"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/src/session.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b9140e1886a8ac66366c165044572298983fa1f86717ec2417a745c843323156"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/src/tickets.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "7c7e0fa675e57caaca89bdeae0989516586e9ab177d18adab6c170ef47105bdd"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/src/transport.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "a091c4672f190ec343fdd34ce19ff0288b0f53bd1599f15cf3b8c21d7b332a9c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/test/admin.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "6de3411dfecc33ddd17881f7e07fca37e8c4ed16bdc14c79d233ad3eabc330ce"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/test/client.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "f4d526584cb3ce155ea17b8081db770f33afe24aacb86e102d967d90b2b5aa7a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/test/console.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "4b49de6e8d475084b4d736716a982c3b171ca24f33464d4b976a6b600570a70a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/test/management.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "8edc9827d53b08ff476401af3b5c6ef4a1ccb5a9618fa7c0dcc81959080a9004"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/test/power.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "c306fa92eca462bbe11bce6e0985ca7765473a981709721d88e1da71463d1c43"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/test/response.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "9c33c0fb1d458892b50b8f8c5832fccf623e5c0e6203cd8df3c5d5d1c5956c42"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/test/review.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "0479ef328244087b4adffe6bb356f7ac29bcbc24dca7955e2a11de89d45f6d8c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/test/session.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "a6d2b15d1fee1d0870a48e3d9bfa32628ef80d58e5f7a501ae3fa75b80b104bc"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/test/ssh-access-adapter.test.ts",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "fe5df03a581a1e410310e7271e05b14ab008ef33dfc8fce32f0f41c04d9d894e"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "packages/sdk/tsconfig.json",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "91432a38d39780ce87fb319a681403fdcdce3959905870bf6a1fd29924b0b725"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "pnpm-lock.yaml",
+      "classification": "excluded",
+      "reason": "generated resolution lock; no dependency change; package inputs reviewed"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "pnpm-workspace.yaml",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "f60901e5d94261e10f6e6401e46ae17778b84333731310249154cc2438b929ea"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/clean-package-dist.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e59b8993ecfde20728faa047368d69477146f714288138bd6377d1efcde89e8a"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/dev.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "f0ffaa262556e0e9b2159eeefb9d0e4226ff556802c9fecaab36255224ebc460"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/package-provenance.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "b6ae20a8588565146aff5e1a60e0a5da1108f9d1b0265225c31fd3e99c004e3c"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/package-runtime.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "d601b5e11139e22f6aaed84ab7d3f95b58e3439a2827f992efa70b97ca10b1eb"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/package-runtime.test.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "fb72f8cb65c2c6312f7b73f7c17336342e935a1650df5ad677740533a0323c7f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/prepare-sdk-pair.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "e620e3e9fc2b479b54e7caf8be0743285295be1288d6491e17baf86c93f6b0a4"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/sdk-pair.test.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "f983d24f0c81dcaefc8c868d1cef2d7e779e59ce6f9839b7ff03321ab7f74d19"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/studio-acceptance-children.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "40713973c8bb7145e757f9ee988c15418c77e97abacb0b54db838f137079e4e1"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/studio-acceptance-children.test.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "f2bcad96ee5d18f1f568696c756d13a837beb5b13502881bfe29fbd9088dc2d2"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/studio-acceptance-resume.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "51f62cc5d127a761ada8576b5cc6673816c85b7a5fbdb6fa165a7845c5256c10"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/studio-acceptance-status.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "4cd1c1b85f95ab4e757e79c3bf3c9ec44a3fca888491eacf25403f8ee34a6fdc"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "scripts/studio-acceptance-status.test.mjs",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "eaf4bcbffd14b24f4bc1e5a5e57eb0a7ad9262fc4c73e10c6c339900717c886f"
+    },
+    {
+      "repo": "hitchlet",
+      "path": "tsconfig.base.json",
+      "classification": "in_scope",
+      "shard": "h-client",
+      "status": "source_review_complete",
+      "candidate_sha256": "fc3cd88fa4b3c403f92ab7bbe2be20e4d49a9630fe755a8b3c983051197348ee"
+    }
+  ]
+}

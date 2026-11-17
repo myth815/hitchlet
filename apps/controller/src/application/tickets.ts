@@ -220,9 +220,8 @@ export class TicketService {
         throw new Error("Storage profile source configuration is unavailable");
       if (
         !allowedModes.includes(item.mode) ||
-        !(item.authorizedSubpath === "."
-          ? p.kind === "smb" && allowedSubpaths.includes(".")
-          : safeSubpath(item.authorizedSubpath)) ||
+        (item.authorizedSubpath === "." &&
+          (p.kind !== "smb" || !allowedSubpaths.includes("."))) ||
         !allowedSubpaths.some(
           (prefix) =>
             item.authorizedSubpath === prefix ||
@@ -1117,14 +1116,6 @@ function permits(scope: unknown, id: unknown): boolean {
 function list<T extends string>(scope: unknown, fallback: readonly T[]): T[] {
   return Array.isArray(scope) ? (scope as T[]) : [...fallback];
 }
-function safeSubpath(value: string): boolean {
-  return (
-    value.length > 0 &&
-    !value.startsWith("/") &&
-    !value.split(/[\\/]/).some((p) => p === ".." || p === ".")
-  );
-}
-
 function canSafelyWake(candidate: Row, now: number): boolean {
   const machineUpdatedAt = safeInteger(candidate.machine_updated_at_ms);
   if (

@@ -910,7 +910,7 @@ describe("SQLite Ticket admission", () => {
     ).toMatch(/^[a-f0-9]{64}$/);
   });
   it("freezes exact storage revision and rejects paths or modes outside its allowlist", async () => {
-    const { service, storage } = await fixture();
+    const { sourceService: service, storage } = await fixture();
     const good = {
       ...request(),
       storage: [
@@ -948,6 +948,18 @@ describe("SQLite Ticket admission", () => {
         },
       ),
     ).rejects.toThrow(/authorization/);
+    await expect(
+      service.acquire(
+        "10000000-0000-4000-8000-000000000001",
+        "storage-traversal",
+        {
+          ...good,
+          storage: [
+            { ...good.storage[0], authorizedSubpath: "project-a/../escape" },
+          ],
+        },
+      ),
+    ).rejects.toThrow();
     await expect(
       service.acquire(
         "10000000-0000-4000-8000-000000000001",
@@ -3774,7 +3786,7 @@ it.each([
     await f.storage.run(
       "UPDATE storage_profiles SET current_revision_id='b0000000-0000-4000-8000-000000000003' WHERE id='b0000000-0000-4000-8000-000000000001'",
     );
-    const attempt = f.service.acquire(consumerId, "explicit-root", {
+    const attempt = f.sourceService.acquire(consumerId, "explicit-root", {
       ...request(),
       storage: [
         {

@@ -75,7 +75,6 @@ export function managementApiPaths() {
         "Read-only eligibility snapshot; never reserves capacity",
         S.FeasibilitySchema,
         S.AcquireRequestSchema,
-        [key],
       ),
     },
     "/v1/admin/overview": {

@@ -165,10 +165,8 @@ function runGuestBootstrap(input, overrides) {
   const hostFingerprint = fingerprint(decodePublicKey(hostPublicKey));
   const authorizedKey =
     request.clientPublicKey.split(/\s+/).slice(0, 2).join(" ") + "\n";
-  deps.mkdir(publicKeysDirectory, 0o755);
-  assertPublicDirectory(deps, publicKeysDirectory);
-  deps.mkdir(publicAllocationDirectory, 0o755);
-  assertPublicDirectory(deps, publicAllocationDirectory);
+  ensurePublicDirectory(deps, publicKeysDirectory);
+  ensurePublicDirectory(deps, publicAllocationDirectory);
   writeOwnedPublicKey(deps, authorizedKeysPath, authorizedKey);
 
   const sshdConfig = [
@@ -201,8 +199,7 @@ function runGuestBootstrap(input, overrides) {
   writeOwnedText(deps, expectedServicePath, service, 0o644);
   if (linux) {
     const runtimeDirectory = deps.sshRuntimeDirectory || "/run/sshd";
-    deps.mkdir(runtimeDirectory, 0o755);
-    assertPublicDirectory(deps, runtimeDirectory);
+    ensurePublicDirectory(deps, runtimeDirectory);
   }
   deps.run("/usr/sbin/sshd", ["-t", "-f", state.configPath]);
   ensureService(
@@ -379,6 +376,42 @@ function assertPublicDirectory(deps, directory) {
     (facts.mode & 0o777) !== 0o755
   )
     fail("guest_authorized_keys_directory_invalid");
+}
+
+function ensurePublicDirectory(deps, directory) {
+  if (deps.lstat(directory)) {
+    assertPublicDirectory(deps, directory);
+    return;
+  }
+  try {
+    // Exclusive creation distinguishes a directory created here from a path
+    // that another actor established. Never chmod the latter into compliance.
+    deps.mkdirExclusive(directory, 0o755);
+  } catch (error) {
+    if (!error || error.code !== "EEXIST") throw error;
+    assertPublicDirectory(deps, directory);
+    return;
+  }
+  const created = deps.lstat(directory);
+  if (
+    !created ||
+    !created.isDirectory ||
+    created.isSymbolicLink ||
+    created.uid !== 0 ||
+    created.dev === undefined ||
+    created.ino === undefined
+  )
+    fail("guest_authorized_keys_directory_invalid");
+  deps.chmod(directory, 0o755);
+  const after = deps.lstat(directory);
+  if (
+    !after ||
+    after.dev !== created.dev ||
+    after.ino !== created.ino ||
+    after.uid !== created.uid
+  )
+    fail("guest_authorized_keys_directory_invalid");
+  assertPublicDirectory(deps, directory);
 }
 
 function writeOwnedPublicKey(deps, file, content) {
@@ -576,6 +609,8 @@ function defaultDependencies() {
         const value = fs.lstatSync(file);
         return {
           uid: value.uid,
+          dev: value.dev,
+          ino: value.ino,
           mode: value.mode,
           isDirectory: value.isDirectory(),
           isFile: value.isFile(),
@@ -588,12 +623,14 @@ function defaultDependencies() {
     readText: (file) => fs.readFileSync(file, "utf8"),
     mkdir: (directory, mode) =>
       fs.mkdirSync(directory, { recursive: true, mode: mode }),
+    mkdirExclusive: (directory, mode) => fs.mkdirSync(directory, { mode }),
     chmod: (file, mode) => fs.chmodSync(file, mode),
     writeAtomic: (file, content, mode) => {
       const temporary = file + "." + crypto.randomUUID() + ".tmp";
       const fd = fs.openSync(temporary, "wx", mode);
       try {
         fs.writeFileSync(fd, content);
+        fs.fchmodSync(fd, mode);
         fs.fsyncSync(fd);
       } finally {
         fs.closeSync(fd);

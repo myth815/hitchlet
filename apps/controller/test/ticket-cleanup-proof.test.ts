@@ -215,6 +215,37 @@ function updateEvidence(f: Fixture) {
 }
 
 describe("owner-bound immutable cleanup proof", () => {
+  it.each([
+    ['{"code":"lease_or_authorization_changed"}', true],
+    ['{"code":"decision_deadline_expired"}', true],
+    [
+      '{"code":"lease_or_authorization_changed","createEffects":[{"state":"unknown"}]}',
+      false,
+    ],
+  ])(
+    "handles a rejected renewal and preserves unknown-create protection",
+    async (result, allowed) => {
+      const f = seed();
+      f.insert("operations", {
+        id: "rejected-renewal",
+        allocation_id: ids.allocation,
+        installation_id: ids.installation,
+        generation: 1,
+        control_version: 1,
+        runtime_identity_id: ids.runtime,
+        connection_revision_id: ids.revision,
+        kind: "lease.renew",
+        state: "failed",
+        created_at_ms: 2000,
+        updated_at_ms: 2001,
+        result_json: result,
+      });
+      const pending = read(reader(f).service);
+      if (allowed) await expect(pending).resolves.not.toBeNull();
+      else await expect(pending).rejects.toThrow();
+    },
+  );
+
   it("uses the singleton installation only when the original operation has no installation binding", async () => {
     const f = seed();
     f.db

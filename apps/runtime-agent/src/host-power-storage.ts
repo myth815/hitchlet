@@ -1,4 +1,4 @@
-import { open, mkdir, rename, unlink } from "node:fs/promises";
+import { open, mkdir, rename, unlink, lstat } from "node:fs/promises";
 import { dirname } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -34,12 +34,62 @@ export async function acquirePowerLock(journalFile: string, bootId: string) {
   await mkdir(dirname(journalFile), { recursive: true, mode: 0o700 });
   const path = `${journalFile}.${bootId}.lock`,
     handle = await open(path, "wx", 0o600);
-  await handle.writeFile(JSON.stringify({ bootId, pid: process.pid }));
-  await handle.sync();
+  let createdFile: Awaited<ReturnType<typeof handle.stat>>;
+  try {
+    createdFile = await handle.stat({ bigint: true });
+  } catch (error) {
+    const closeError = await handle.close().then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    if (closeError !== undefined)
+      throw new AggregateError([error, closeError], errorMessage(error), {
+        cause: error,
+      });
+    throw error;
+  }
+  try {
+    await handle.writeFile(JSON.stringify({ bootId, pid: process.pid }));
+    await handle.sync();
+  } catch (error) {
+    // This invocation created the exclusive file. If its owner record could
+    // not be persisted, release only that incomplete lock; never scavenge an
+    // existing lock whose owner or OS-action outcome is unknown.
+    const cleanupErrors: unknown[] = [];
+    await handle.close().catch((failure: unknown) => {
+      cleanupErrors.push(failure);
+    });
+    try {
+      const current = await lstat(path, { bigint: true });
+      if (
+        current.isFile() &&
+        current.dev === createdFile.dev &&
+        current.ino === createdFile.ino
+      )
+        await unlink(path);
+      else
+        cleanupErrors.push(
+          new Error("Power lock path changed during creation"),
+        );
+    } catch (failure) {
+      if ((failure as NodeJS.ErrnoException).code !== "ENOENT")
+        cleanupErrors.push(failure);
+    }
+    if (cleanupErrors.length)
+      throw new AggregateError([error, ...cleanupErrors], errorMessage(error), {
+        cause: error,
+      });
+    throw error;
+  }
   return async () => {
     await handle.close();
     await unlink(path);
   };
+}
+function errorMessage(error: unknown): string {
+  return error instanceof Error
+    ? error.message
+    : "Power lock persistence failed";
 }
 export async function savePowerJournal(path: string, j: PowerJournal) {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });

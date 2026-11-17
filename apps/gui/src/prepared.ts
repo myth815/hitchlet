@@ -47,15 +47,13 @@ export function readPrepared(consumerId: string): readonly SavedCommand[] {
       sessionStorage.getItem(key(consumerId)) ?? "[]",
     );
     if (!Array.isArray(parsed)) return [];
-    return parsed
-      .filter(
-        (item): item is SavedCommand =>
-          typeof item === "object" &&
-          item !== null &&
-          typeof (item as Partial<SavedCommand>).savedAt === "string" &&
-          "command" in item,
-      )
-      .slice(0, MAX_COMMANDS);
+    return parsed.filter(
+      (item): item is SavedCommand =>
+        typeof item === "object" &&
+        item !== null &&
+        typeof (item as Partial<SavedCommand>).savedAt === "string" &&
+        "command" in item,
+    );
   } catch {
     return [];
   }

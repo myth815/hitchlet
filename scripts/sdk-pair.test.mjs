@@ -25,6 +25,7 @@ import {
 function fixture() {
   const root = mkdtempSync(resolve(tmpdir(), "hitchlet-sdk-pair-"));
   writeFileSync(resolve(root, "package.json"), '{"name":"fixture"}');
+  writeFileSync(resolve(root, "pnpm-workspace.yaml"), "packages: []\n");
   writeFileSync(resolve(root, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n");
   writeFileSync(resolve(root, "tsconfig.base.json"), "{}\n");
   for (const [name, version, dependencies] of [
@@ -91,6 +92,19 @@ test("changed source invalidates recorded build provenance", () => {
     writeFileSync(
       resolve(root, PACKAGE_DIRS["@hitchlet/contracts"], "src", "index.ts"),
       "export const changed = true;\n",
+    );
+    assert.throws(() => validateBuild("@hitchlet/contracts", root), /stale/);
+  } finally {
+    cleanup();
+  }
+});
+
+test("changed workspace membership invalidates recorded build provenance", () => {
+  const { root, cleanup } = fixture();
+  try {
+    writeFileSync(
+      resolve(root, "pnpm-workspace.yaml"),
+      "packages:\n  - apps/*\n",
     );
     assert.throws(() => validateBuild("@hitchlet/contracts", root), /stale/);
   } finally {

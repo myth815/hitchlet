@@ -41,6 +41,7 @@ export function inputHashes(packageName, repoRoot = REPO_ROOT) {
     resolve(packageRoot, "package.json"),
     resolve(packageRoot, "tsconfig.json"),
     resolve(repoRoot, "package.json"),
+    resolve(repoRoot, "pnpm-workspace.yaml"),
     resolve(repoRoot, "pnpm-lock.yaml"),
     resolve(repoRoot, "tsconfig.base.json"),
   ];

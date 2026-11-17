@@ -1,8 +1,16 @@
 import { describe, it, expect, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { ChildProcess as WatchChild } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import {
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import { basename, join } from "node:path";
 import { tmpdir } from "node:os";
 import {
   NativePowerExecutor,
@@ -494,6 +502,61 @@ describe("native normal power safety", () => {
       await releaseNew();
       await release();
     } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  it("removes only its newly created lock when persisting the owner record fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "power-lock-write-failure-")),
+      file = join(dir, "journal"),
+      lock = `${file}.${bootId}.lock`,
+      probe = await open(join(dir, "probe"), "w");
+    const sync = vi
+      .spyOn(Object.getPrototypeOf(probe), "sync")
+      .mockRejectedValueOnce(new Error("simulated_lock_sync_failure"));
+    await probe.close();
+    try {
+      await expect(acquirePowerLock(file, bootId)).rejects.toThrow(
+        "simulated_lock_sync_failure",
+      );
+      expect(await readdir(dir)).not.toContain(basename(lock));
+      sync.mockRestore();
+      const release = await acquirePowerLock(file, bootId);
+      await release();
+    } finally {
+      sync.mockRestore();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+  it("preserves a replacement lock path after owner-record persistence fails", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "power-lock-replacement-")),
+      file = join(dir, "journal"),
+      lock = `${file}.${bootId}.lock`,
+      displaced = `${lock}.displaced`,
+      probe = await open(join(dir, "probe"), "w");
+    const sync = vi
+      .spyOn(Object.getPrototypeOf(probe), "sync")
+      .mockImplementationOnce(async function (
+        this: import("node:fs/promises").FileHandle,
+      ) {
+        await rename(lock, displaced);
+        await writeFile(lock, "replacement owner");
+        throw new Error("simulated_lock_sync_failure");
+      });
+    await probe.close();
+    try {
+      await expect(acquirePowerLock(file, bootId)).rejects.toMatchObject({
+        cause: expect.objectContaining({
+          message: "simulated_lock_sync_failure",
+        }),
+        errors: expect.arrayContaining([
+          expect.objectContaining({
+            message: "Power lock path changed during creation",
+          }),
+        ]),
+      });
+      expect(await readFile(lock, "utf8")).toBe("replacement owner");
+    } finally {
+      sync.mockRestore();
       await rm(dir, { recursive: true, force: true });
     }
   });

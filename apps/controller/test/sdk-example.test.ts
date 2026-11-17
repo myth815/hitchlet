@@ -373,7 +373,7 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
       class Client extends EventEmitter {
         constructor(){super();owned=this;}
         connect(options){this.options=options;queueMicrotask(()=>{if(options.hostVerifier(Buffer.from('synthetic-server-public-key-blob')))this.emit('ready');else this.emit('error',Error('unverified'));});return this;}
-        exec(_command,callback){const stream=new EventEmitter();stream.stderr=new EventEmitter();stream.destroy=()=>stream;callback(null,stream);queueMicrotask(()=>{stream.emit('data',Buffer.from('workspace\\n1000\\n1000\\nv24.22.2\\n'));stream.emit('close',0);});return this;}
+        exec(_command,callback){const stream=new EventEmitter();stream.stderr=new EventEmitter();stream.destroy=()=>stream;callback(null,stream);queueMicrotask(()=>{stream.emit('data',Buffer.from('workspace\\n1000\\n1000\\n'));stream.emit('close',0);});return this;}
         end(){this.emit('error',Error(this.options.privateKey));return this;}
         destroy(){this.destroyed=true;return this;}
       }
@@ -381,13 +381,11 @@ it("recovers public SDK CLI processes after accepted writes lose responses, with
     `,
       { mode: 0o600 },
     );
-    expect(
-      (
-        await cli(["access-with-adapter", "--adapter", adapter], {
-          HITCHLET_DEMO_MODE: "",
-        })
-      ).code,
-    ).toBe(0);
+    const referenceAdapterResult = await cli(
+      ["access-with-adapter", "--adapter", adapter],
+      { HITCHLET_DEMO_MODE: "" },
+    );
+    expect(referenceAdapterResult.code, referenceAdapterResult.stderr).toBe(0);
     syntheticHostKey = false;
 
     pauseRenewals = true;

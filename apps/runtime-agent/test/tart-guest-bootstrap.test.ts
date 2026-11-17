@@ -11,6 +11,7 @@ import {
   chmodSync,
   openSync,
   writeSync,
+  fchmodSync,
   fsyncSync,
   closeSync,
   renameSync,
@@ -27,63 +28,71 @@ afterEach(async () => {
     await rm(root, { recursive: true, force: true });
 });
 
-it("creates the fixed guest SSH service once and reuses the same persisted receipt for the nonce", async () => {
-  const root = await makeRoot();
-  const calls: Array<{ command: string; args: string[] }> = [];
-  let loaded = false;
-  const helper = await loadHelper();
-  const deps = dependencies(
-    root,
-    calls,
-    () => loaded,
-    (next) => {
-      loaded = next;
-    },
-  );
-  const request = bootstrapRequest();
+function withUmask(mask: number, action: () => Promise<void>): Promise<void> {
+  const previous = process.umask(mask);
+  return action().finally(() => process.umask(previous));
+}
 
-  const first = helper.runGuestBootstrap(request, deps);
-  const privateKey = readFileSync(find(root, "ssh_host_ed25519_key"), "utf8");
-  const second = helper.runGuestBootstrap(request, deps);
-  expect(second).toEqual(first);
-  expect(
-    calls.filter((call) => call.command === "/usr/bin/ssh-keygen"),
-  ).toHaveLength(1);
-  expect(first).toMatchObject({
-    status: "applied",
-    nonce: request.nonce,
-    account: "admin",
-    hostPublicKey,
-    hostKeyFingerprint: fingerprint(hostPublicKey),
-  });
-  const authorizedKeys = join(
-    root,
-    "PublicAuthorizedKeys",
-    ownerHash(),
-    "authorized_keys",
-  );
-  expect(readFileSync(authorizedKeys, "utf8")).toBe(
-    `${clientPublicKey.split(" ").slice(0, 2).join(" ")}\n`,
-  );
-  expect(lstatSync(authorizedKeys).mode & 0o777).toBe(0o644);
-  expect(lstatSync(dirname(authorizedKeys)).mode & 0o777).toBe(0o755);
-  expect(lstatSync(dirname(dirname(authorizedKeys))).mode & 0o777).toBe(0o755);
-  expect(readFileSync(find(root, "sshd_config"), "utf8")).toMatch(
-    /PasswordAuthentication no/,
-  );
-  const sshdConfig = readFileSync(find(root, "sshd_config"), "utf8");
-  expect(sshdConfig).toContain("Subsystem sftp internal-sftp");
-  expect(sshdConfig).not.toContain("ForceCommand");
-  expect(sshdConfig).toContain(`AuthorizedKeysFile ${authorizedKeys}`);
-  expect(lstatSync(find(root, "ssh_host_ed25519_key")).mode & 0o777).toBe(
-    0o600,
-  );
-  expect(
-    lstatSync(dirname(find(root, "ssh_host_ed25519_key"))).mode & 0o777,
-  ).toBe(0o700);
-  expect(privateKey).not.toBe(JSON.stringify(first));
-  expect(first).not.toHaveProperty("hostPrivateKey");
-});
+it("creates the fixed guest SSH service once and reuses the same persisted receipt for the nonce", () =>
+  withUmask(0o077, async () => {
+    const root = await makeRoot();
+    const calls: Array<{ command: string; args: string[] }> = [];
+    let loaded = false;
+    const helper = await loadHelper();
+    const deps = dependencies(
+      root,
+      calls,
+      () => loaded,
+      (next) => {
+        loaded = next;
+      },
+    );
+    const request = bootstrapRequest();
+
+    const first = helper.runGuestBootstrap(request, deps);
+    const privateKey = readFileSync(find(root, "ssh_host_ed25519_key"), "utf8");
+    const second = helper.runGuestBootstrap(request, deps);
+    expect(second).toEqual(first);
+    expect(
+      calls.filter((call) => call.command === "/usr/bin/ssh-keygen"),
+    ).toHaveLength(1);
+    expect(first).toMatchObject({
+      status: "applied",
+      nonce: request.nonce,
+      account: "admin",
+      hostPublicKey,
+      hostKeyFingerprint: fingerprint(hostPublicKey),
+    });
+    const authorizedKeys = join(
+      root,
+      "PublicAuthorizedKeys",
+      ownerHash(),
+      "authorized_keys",
+    );
+    expect(readFileSync(authorizedKeys, "utf8")).toBe(
+      `${clientPublicKey.split(" ").slice(0, 2).join(" ")}\n`,
+    );
+    expect(lstatSync(authorizedKeys).mode & 0o777).toBe(0o644);
+    expect(lstatSync(dirname(authorizedKeys)).mode & 0o777).toBe(0o755);
+    expect(lstatSync(dirname(dirname(authorizedKeys))).mode & 0o777).toBe(
+      0o755,
+    );
+    expect(readFileSync(find(root, "sshd_config"), "utf8")).toMatch(
+      /PasswordAuthentication no/,
+    );
+    const sshdConfig = readFileSync(find(root, "sshd_config"), "utf8");
+    expect(sshdConfig).toContain("Subsystem sftp internal-sftp");
+    expect(sshdConfig).not.toContain("ForceCommand");
+    expect(sshdConfig).toContain(`AuthorizedKeysFile ${authorizedKeys}`);
+    expect(lstatSync(find(root, "ssh_host_ed25519_key")).mode & 0o777).toBe(
+      0o600,
+    );
+    expect(
+      lstatSync(dirname(find(root, "ssh_host_ed25519_key"))).mode & 0o777,
+    ).toBe(0o700);
+    expect(privateKey).not.toBe(JSON.stringify(first));
+    expect(first).not.toHaveProperty("hostPrivateKey");
+  }));
 
 it("fails closed on unprepared, non-root, conflicting nonce, or occupied SSH port without replacing service files", async () => {
   const root = await makeRoot();
@@ -119,6 +128,25 @@ it("fails closed on unprepared, non-root, conflicting nonce, or occupied SSH por
   );
 });
 
+it("does not widen an existing public authorized-keys directory with the wrong mode", async () => {
+  const root = await makeRoot();
+  const publicKeysRoot = join(root, "PublicAuthorizedKeys");
+  mkdirSync(publicKeysRoot, { mode: 0o700 });
+  chmodSync(publicKeysRoot, 0o700);
+  const helper = await loadHelper();
+  const deps = dependencies(
+    root,
+    [],
+    () => false,
+    () => {},
+  );
+
+  expect(() => helper.runGuestBootstrap(bootstrapRequest(), deps)).toThrow(
+    "guest_authorized_keys_directory_invalid",
+  );
+  expect(lstatSync(publicKeysRoot).mode & 0o777).toBe(0o700);
+});
+
 it("requires an explicit prepared-template marker before applying SSH changes", async () => {
   const root = await mkdtemp(
     join(tmpdir(), "hitchlet-guest-bootstrap-unprepared-"),
@@ -136,58 +164,59 @@ it("requires an explicit prepared-template marker before applying SSH changes", 
   ).toThrow("guest_template_not_prepared");
 });
 
-it("initializes Linux SSH through one owned systemd unit and recovers its original receipt after a guest service restart", async () => {
-  const root = await makeRoot("linux");
-  const calls: Array<{ command: string; args: string[] }> = [];
-  let loaded = false;
-  const deps = dependencies(
-    root,
-    calls,
-    () => loaded,
-    (next) => {
-      loaded = next;
-    },
-    false,
-    "linux",
-  );
-  const helper = await loadHelper();
-  const request = bootstrapRequest();
-  const first = helper.runGuestBootstrap(request, deps);
-  expect(helper.runGuestBootstrap(request, deps)).toEqual(first);
-  loaded = false;
-  expect(helper.runGuestBootstrap(request, deps)).toEqual(first);
-  const unit = "hitchlet-sshd-" + ownerHash().slice(0, 24) + ".service";
-  expect(readFileSync(join(root, "Systemd", unit), "utf8")).toContain(
-    "ExecStart=/usr/sbin/sshd -D -e -f " + find(root, "sshd_config"),
-  );
-  expect(
-    calls.filter((call) => call.command === "/usr/bin/ssh-keygen"),
-  ).toHaveLength(1);
-  expect(
-    calls
-      .filter(
-        (call) =>
-          call.command === "/usr/bin/systemctl" && call.args[0] === "enable",
-      )
-      .map((call) => call.args),
-  ).toEqual([
-    ["enable", "--now", unit],
-    ["enable", "--now", unit],
-  ]);
-  expect(calls.some((call) => call.command === "/bin/launchctl")).toBe(false);
-  expect(first).toMatchObject({
-    status: "applied",
-    account: "admin",
-    nonce: request.nonce,
-    hostKeyFingerprint: fingerprint(hostPublicKey),
-  });
-  expect(() =>
-    helper.runGuestBootstrap(
-      { ...request, nonce: "different-nonce-0123456789" },
-      deps,
-    ),
-  ).toThrow("guest_allocation_already_bootstrapped");
-});
+it("initializes Linux SSH through one owned systemd unit and recovers its original receipt after a guest service restart", () =>
+  withUmask(0o077, async () => {
+    const root = await makeRoot("linux");
+    const calls: Array<{ command: string; args: string[] }> = [];
+    let loaded = false;
+    const deps = dependencies(
+      root,
+      calls,
+      () => loaded,
+      (next) => {
+        loaded = next;
+      },
+      false,
+      "linux",
+    );
+    const helper = await loadHelper();
+    const request = bootstrapRequest();
+    const first = helper.runGuestBootstrap(request, deps);
+    expect(helper.runGuestBootstrap(request, deps)).toEqual(first);
+    loaded = false;
+    expect(helper.runGuestBootstrap(request, deps)).toEqual(first);
+    const unit = "hitchlet-sshd-" + ownerHash().slice(0, 24) + ".service";
+    expect(readFileSync(join(root, "Systemd", unit), "utf8")).toContain(
+      "ExecStart=/usr/sbin/sshd -D -e -f " + find(root, "sshd_config"),
+    );
+    expect(
+      calls.filter((call) => call.command === "/usr/bin/ssh-keygen"),
+    ).toHaveLength(1);
+    expect(
+      calls
+        .filter(
+          (call) =>
+            call.command === "/usr/bin/systemctl" && call.args[0] === "enable",
+        )
+        .map((call) => call.args),
+    ).toEqual([
+      ["enable", "--now", unit],
+      ["enable", "--now", unit],
+    ]);
+    expect(calls.some((call) => call.command === "/bin/launchctl")).toBe(false);
+    expect(first).toMatchObject({
+      status: "applied",
+      account: "admin",
+      nonce: request.nonce,
+      hostKeyFingerprint: fingerprint(hostPublicKey),
+    });
+    expect(() =>
+      helper.runGuestBootstrap(
+        { ...request, nonce: "different-nonce-0123456789" },
+        deps,
+      ),
+    ).toThrow("guest_allocation_already_bootstrapped");
+  }));
 
 it("keeps Linux bootstrap unknown when SSH is occupied or its port observation fails", async () => {
   const root = await makeRoot("linux");
@@ -304,6 +333,8 @@ function dependencies(
       const value = lstatSync(file);
       return {
         uid: 0,
+        dev: value.dev,
+        ino: value.ino,
         mode: value.mode,
         isDirectory: value.isDirectory(),
         isFile: value.isFile(),
@@ -319,6 +350,7 @@ function dependencies(
     const fd = openSync(temp, "wx", mode);
     try {
       writeSync(fd, content);
+      fchmodSync(fd, mode);
       fsyncSync(fd);
     } finally {
       closeSync(fd);
@@ -354,6 +386,7 @@ function dependencies(
     readText: (file: string) => readFileSync(file, "utf8"),
     mkdir: (dir: string, mode: number) =>
       mkdirSync(dir, { recursive: true, mode }),
+    mkdirExclusive: (dir: string, mode: number) => mkdirSync(dir, { mode }),
     chmod: (file: string, mode: number) => chmodSync(file, mode),
     writeAtomic,
     tryRun: result,

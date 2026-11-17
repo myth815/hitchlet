@@ -367,11 +367,13 @@ export class TicketCommands {
           idempotencyKey: command.idempotencyKey,
         },
       });
+    let renewalResponseStatus: number | null = null;
     const submission = await this.http.request(
       `/v1/tickets/${encodeURIComponent(command.ticketId)}/renew`,
       "POST",
       command.request,
-      (value) => {
+      (value, response) => {
+        renewalResponseStatus = response.status;
         try {
           return {
             kind: "receipt" as const,
@@ -398,6 +400,8 @@ export class TicketCommands {
       throw new ComputeClientError({
         code: outcome.reasonCode,
         message: "The original renewal proposal was rejected.",
+        statusCode: renewalResponseStatus,
+        operationOutcome: "rejected",
         recovery: {
           command,
           ticketId: command.ticketId,
@@ -415,7 +419,10 @@ export class TicketCommands {
         `/v1/tickets/${encodeURIComponent(command.ticketId)}/renewals/${encodeURIComponent(renewal.id)}`,
         "GET",
         undefined,
-        (v) => readResponse(LeaseRenewalViewSchema, v),
+        (v, response) => {
+          renewalResponseStatus = response.status;
+          return readResponse(LeaseRenewalViewSchema, v);
+        },
         {
           ...this.context(command),
           renewalId: renewal.id,
@@ -432,6 +439,8 @@ export class TicketCommands {
       throw new ComputeClientError({
         code: renewal.reasonCode ?? "RENEWAL_REJECTED",
         message: "The original renewal proposal was rejected.",
+        statusCode: renewalResponseStatus,
+        operationOutcome: "rejected",
         recovery: {
           command,
           ticketId: command.ticketId,

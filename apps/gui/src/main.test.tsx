@@ -140,6 +140,9 @@ function harness(
     renewalPending?: TicketView["renewalPending"];
     accessFingerprint?: string | null;
     recoveryState?: "ready" | "recovering" | "unavailable";
+    malformedReleaseResponse?: boolean;
+    rejectedRenewal?: boolean;
+    renewalHttpStatus?: number;
   } = {},
 ) {
   let authPrincipal = options.authPrincipal ?? principal;
@@ -411,6 +414,23 @@ function harness(
         202,
       );
     }
+    if (url.pathname.includes("/renewals/"))
+      return response(
+        {
+          id: "00000000-0000-4000-8000-000000000008",
+          leaseId: ids.lease,
+          proposedVersion: 2,
+          proposedExpiresAt: "2026-10-19T02:00:00.000Z",
+          isInitialClaim: true,
+          decisionDeadline: "2026-12-20T00:01:00.000Z",
+          createdAt: at,
+          updatedAt: at,
+          state: "rejected",
+          reasonCode: "quota_changed",
+          confirmedReceipt: null,
+        },
+        200,
+      );
     if (
       url.pathname === `/v1/tickets/${ids.ticket}` &&
       init?.method !== "POST"
@@ -420,6 +440,41 @@ function harness(
       return response(currentTicket);
     }
     if (url.pathname.endsWith("/renew") && init?.method === "POST") {
+      if (options.renewalHttpStatus)
+        return response(
+          {
+            error: {
+              code: "forbidden",
+              message: "forbidden",
+              details: {},
+              retryable: false,
+              requestId: ids.ticket,
+            },
+          },
+          options.renewalHttpStatus,
+        );
+      if (options.rejectedRenewal)
+        return response(
+          {
+            outcome: "pending",
+            renewal: {
+              id: "00000000-0000-4000-8000-000000000008",
+              leaseId: ids.lease,
+              proposedVersion: 2,
+              proposedExpiresAt: "2026-10-19T02:00:00.000Z",
+              isInitialClaim: true,
+              decisionDeadline: "2026-12-20T00:01:00.000Z",
+              createdAt: at,
+              updatedAt: at,
+              state: "pending",
+              reasonCode: null,
+              confirmedReceipt: null,
+            },
+            location: `/v1/tickets/${ids.ticket}/renewals/00000000-0000-4000-8000-000000000008`,
+            lastConfirmedExpiresAt: at,
+          },
+          202,
+        );
       currentTicket = ticket("ready", at);
       return response({
         renewalId: "00000000-0000-4000-8000-000000000008",
@@ -462,6 +517,11 @@ function harness(
         generation: 1,
       });
       currentTicket = ticket("releasing", at);
+      if (options.malformedReleaseResponse)
+        return new Response("{", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
       return response(currentTicket);
     }
     if (url.pathname.endsWith("/cancel") && init?.method === "POST") {
@@ -878,6 +938,110 @@ describe("consumer console", () => {
       ),
     ).toEqual(saved);
     expect(element.textContent).toContain("待恢复操作已达 8 条上限");
+  });
+
+  it("preserves saved recovery commands beyond the current UI cap when one is resolved", async () => {
+    const commands = Array.from({ length: 9 }, (_, index) => ({
+      command: {
+        schemaVersion: 1,
+        kind: "acquire",
+        idempotencyKey: `00000000-0000-4000-8000-${String(index + 1).padStart(12, "0")}`,
+        request: {
+          image: { versionId: ids.image },
+          resources: amounts,
+          networkProfileId: ids.network,
+        },
+      },
+      savedAt: at,
+    }));
+    const h = harness();
+    sessionStorage.setItem(
+      `hitchlet.prepared.v1.${ids.consumer}`,
+      JSON.stringify(commands),
+    );
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "token");
+    await submit(element, ".login-card form");
+    expect(element.textContent).toContain("待恢复操作");
+    await click(element, "恢复原操作");
+
+    const remaining = JSON.parse(
+      sessionStorage.getItem(`hitchlet.prepared.v1.${ids.consumer}`) ?? "[]",
+    );
+    expect(remaining).toHaveLength(8);
+    expect(
+      remaining.map(
+        (item: { command: { idempotencyKey: string } }) =>
+          item.command.idempotencyKey,
+      ),
+    ).toContain(commands[8]!.command.idempotencyKey);
+  });
+
+  it("keeps the original write command when a successful response is unreadable", async () => {
+    const h = harness({ initialTicket: true, malformedReleaseResponse: true });
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "token");
+    await submit(element, ".login-card form");
+    await click(element, "环境就绪");
+    const acknowledgement = [
+      ...element.querySelectorAll("input[type=checkbox]"),
+    ].find((input) =>
+      input.closest("label")?.textContent?.includes("同意删除这个临时环境"),
+    ) as HTMLInputElement;
+    await act(async () => acknowledgement.click());
+    await click(element, "确认归还并删除");
+
+    const saved = JSON.parse(
+      sessionStorage.getItem(`hitchlet.prepared.v1.${ids.consumer}`) ?? "[]",
+    );
+    expect(saved).toHaveLength(1);
+    expect(saved[0].command).toMatchObject({
+      kind: "release",
+      ticketId: ids.ticket,
+      request: { reclaimable: true, generation: 1 },
+    });
+    expect(element.textContent).toContain("INVALID_RESPONSE");
+    expect(
+      h.calls.filter((item) => item.url.endsWith("/release")),
+    ).toHaveLength(1);
+  });
+
+  it("clears a prepared renewal only after an explicit rejected poll result", async () => {
+    const h = harness({ initialTicket: true, rejectedRenewal: true });
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "token");
+    await submit(element, ".login-card form");
+    await click(element, "环境就绪");
+    await click(element, "首次接用 / Claim");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 600)));
+
+    expect(element.textContent).toContain(
+      "The original renewal proposal was rejected.",
+    );
+    expect(
+      JSON.parse(
+        sessionStorage.getItem(`hitchlet.prepared.v1.${ids.consumer}`) ?? "[]",
+      ),
+    ).toEqual([]);
+    expect(h.calls.filter((item) => item.url.endsWith("/renew"))).toHaveLength(
+      1,
+    );
+  });
+
+  it("retains a prepared renewal after an HTTP refusal that cannot settle an earlier attempt", async () => {
+    const h = harness({ initialTicket: true, renewalHttpStatus: 403 });
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "token");
+    await submit(element, ".login-card form");
+    await click(element, "环境就绪");
+    await click(element, "首次接用 / Claim");
+
+    const saved = JSON.parse(
+      sessionStorage.getItem(`hitchlet.prepared.v1.${ids.consumer}`) ?? "[]",
+    );
+    expect(saved).toHaveLength(1);
+    expect(saved[0].command.kind).toBe("renew");
+    expect(element.textContent).toContain("forbidden");
   });
 
   it("requires one clear release acknowledgement, exposes access briefly and waits for released", async () => {

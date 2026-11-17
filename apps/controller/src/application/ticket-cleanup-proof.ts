@@ -99,6 +99,8 @@ function identityWithoutControl(
 
 // One SQLite statement/read snapshot. No arbitrary SQL, broad account, latest
 // operation guess, secret/Access fields, or raw operation-result projection.
+// The two code-only rejected renewal results are local decisions, not provider
+// effects. Any additional result metadata remains unresolved.
 export const TICKET_CLEANUP_PROOF_SQL = `SELECT
  t.id AS ticketId,t.consumer_id AS consumerId,t.phase AS ticketPhase,t.cleanup_status AS ticketCleanup,
  l.id AS leaseId,l.generation AS generation,l.state AS leaseState,l.revoked_at_ms AS revokedAtMs,
@@ -135,7 +137,7 @@ export const TICKET_CLEANUP_PROOF_SQL = `SELECT
  (SELECT count(*) FROM capacity_claims c WHERE c.allocation_id=a.id) AS claimCount,
  (SELECT count(*) FROM capacity_claims c WHERE c.allocation_id=a.id AND c.state<>'released') AS unreleasedClaims,
  (SELECT count(*) FROM operations p WHERE p.allocation_id=a.id AND p.generation=l.generation
-   AND (p.state IN ('pending','running','unknown','failed') OR EXISTS(SELECT 1
+   AND (p.state IN ('pending','running','unknown') OR (p.state='failed' AND NOT (p.kind='lease.renew' AND COALESCE(json(p.result_json),'') IN ('{"code":"lease_or_authorization_changed"}','{"code":"decision_deadline_expired"}'))) OR EXISTS(SELECT 1
      FROM json_each(COALESCE(p.result_json,'{}'),'$.createEffects') e WHERE json_extract(e.value,'$.state')='unknown'))) AS unresolvedOperations
  FROM tickets t JOIN leases l ON l.ticket_id=t.id JOIN allocations a ON a.id=l.allocation_id AND a.ticket_id=t.id AND a.purpose='tenant'
  JOIN resolved_provision_contracts r ON r.id=a.resolved_provision_contract_id

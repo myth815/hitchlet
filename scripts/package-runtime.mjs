@@ -41,6 +41,7 @@ async function sourceMap() {
       "packages/contracts/package.json",
       "packages/contracts/tsconfig.json",
       "package.json",
+      "pnpm-workspace.yaml",
       "tsconfig.base.json",
       "pnpm-lock.yaml",
     ].map((p) => join(REPO, p)),
