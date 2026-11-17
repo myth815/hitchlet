@@ -3,8 +3,13 @@ import type { OwnedResource, ProvisionPlan } from "../providers/port.js";
 
 /** Manifest identity belongs to one allocation generation; its digest describes the actual owned inventory. */
 export function resourceManifest(
-  plan: ProvisionPlan,
-  objects: readonly OwnedResource[],
+  plan: Pick<ProvisionPlan, "identity"> & {
+    resolved: Pick<ProvisionPlan["resolved"], "contractHash">;
+  },
+  objects: readonly Pick<
+    OwnedResource,
+    "id" | "kind" | "ownership" | "identity" | "contractHash"
+  >[],
 ) {
   const digest = (value: unknown) =>
     createHash("sha256").update(JSON.stringify(value)).digest("hex");

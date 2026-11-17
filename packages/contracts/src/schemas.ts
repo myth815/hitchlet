@@ -1,4 +1,14 @@
+import {
+  ReadyInventoryQuerySchema,
+  ReadyInventoryHttpQuerySchema,
+  TicketReadyInventorySchema,
+} from "./ready-inventory.js";
 import { z } from "zod";
+import {
+  CleanupProofQuerySchema,
+  CleanupProofHttpQuerySchema,
+  TicketCleanupProofSchema,
+} from "./cleanup-proof.js";
 import type {
   AcceleratorRequirement,
   ApiErrorResponse,
@@ -757,6 +767,12 @@ export const PreparedTicketCommandSchema: z.ZodType<PreparedTicketCommand> =
 
 // Zod 4 exposes native JSON Schema conversion for the registered public schemas.
 export const PublicSchemas = {
+  ReadyInventoryQuery: ReadyInventoryQuerySchema,
+  ReadyInventoryHttpQuery: ReadyInventoryHttpQuerySchema,
+  TicketReadyInventory: TicketReadyInventorySchema,
+  CleanupProofQuery: CleanupProofQuerySchema,
+  CleanupProofHttpQuery: CleanupProofHttpQuerySchema,
+  TicketCleanupProof: TicketCleanupProofSchema,
   AuthenticatedPrincipal: AuthenticatedPrincipalSchema,
   AcquireRequest: AcquireRequestSchema,
   ResourceAmounts: ResourceAmountsSchema,

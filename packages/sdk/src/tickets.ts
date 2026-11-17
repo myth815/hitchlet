@@ -6,7 +6,11 @@ import {
   type ConsoleCommand,
 } from "@hitchlet/contracts";
 import {
+  ReadyInventoryQuerySchema,
+  TicketReadyInventorySchema,
   AcquireRequestSchema,
+  CleanupProofQuerySchema,
+  TicketCleanupProofSchema,
   AcquireReceiptSchema,
   AccessGrantSchema,
   CancelRequestSchema,
@@ -23,8 +27,12 @@ import {
   TicketViewSchema,
 } from "@hitchlet/contracts";
 import type {
+  ReadyInventoryQuery,
+  TicketReadyInventory,
   AccessGrant,
   AcquireRequest,
+  CleanupProofQuery,
+  TicketCleanupProof,
   AcquireReceipt,
   ClientRenewRequest,
   ClientWriteOptions,
@@ -505,12 +513,65 @@ export class TicketCommands {
     return (await this.send(command)) as AcquireReceipt;
   }
 
+  /** Own active lease only; no command key, lifecycle mutation or native side effect. */
+  async readyInventory(
+    ticketId: Id,
+    query: ReadyInventoryQuery,
+  ): Promise<TicketReadyInventory> {
+    const input = readRequest(ReadyInventoryQuerySchema, query);
+    return this.http.request(
+      `/v1/tickets/${encodeURIComponent(ticketId)}/ready-inventory${queryString({ leaseId: input.leaseId, generation: input.generation, ...input.expected })}`,
+      "GET",
+      undefined,
+      (value) => {
+        const result = readResponse(TicketReadyInventorySchema, value);
+        const matches = {
+          allocationId: result.allocationId,
+          controlVersion: result.controlVersion,
+          manifestId: result.manifest.id,
+          manifestHash: result.manifest.hash,
+        };
+        if (
+          result.ticketId !== ticketId ||
+          result.leaseId !== input.leaseId ||
+          result.generation !== input.generation ||
+          Object.entries(input.expected ?? {}).some(
+            ([key, value]) => matches[key as keyof typeof matches] !== value,
+          )
+        )
+          throw new ComputeClientError({
+            code: "INVALID_RESPONSE",
+            message:
+              "Ready inventory does not match the requested ticket, lease, generation or expected manifest.",
+          });
+        return result;
+      },
+      { ticketId },
+    );
+  }
+
   async get(ticketId: Id): Promise<TicketView> {
     return this.http.request(
       `/v1/tickets/${encodeURIComponent(ticketId)}`,
       "GET",
       undefined,
       (v) => readResponse(TicketViewSchema, v),
+      { ticketId },
+    );
+  }
+
+  /** Read only the authenticated owner's completed cleanup evidence. Not a
+   * release, retry, stop acknowledgement or a whole-scope write-safety proof. */
+  async cleanupProof(
+    ticketId: Id,
+    query: CleanupProofQuery,
+  ): Promise<TicketCleanupProof> {
+    const input = readRequest(CleanupProofQuerySchema, query);
+    return this.http.request(
+      `/v1/tickets/${encodeURIComponent(ticketId)}/cleanup-proof${queryString({ leaseId: input.leaseId, generation: input.generation, ...input.expected })}`,
+      "GET",
+      undefined,
+      (value) => readResponse(TicketCleanupProofSchema, value),
       { ticketId },
     );
   }

@@ -1,4 +1,18 @@
+export {
+  ReadyInventoryQuerySchema,
+  ReadyInventoryHttpQuerySchema,
+  TicketReadyInventorySchema,
+} from "./ready-inventory.js";
 export { HealthResponseSchema } from "./health.js";
+export {
+  CleanupProofQuerySchema,
+  CleanupProofHttpQuerySchema,
+  TicketCleanupProofSchema,
+  CleanupProofIdentitySchema,
+  CleanupProofRuntimeSchema,
+  CleanupProofObjectSchema,
+  CleanupProofReceiptSchema,
+} from "./cleanup-proof.js";
 export type { HealthResponse } from "./health.js";
 export type * from "./public.js";
 export {

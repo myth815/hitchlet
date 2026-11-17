@@ -454,6 +454,61 @@ export function openApiDocument() {
           },
         }),
       },
+      "/v1/tickets/{ticketId}/ready-inventory": {
+        get: operation(
+          "Read own persisted ready inventory",
+          "200",
+          "TicketReadyInventory",
+          {
+            description:
+              "Same active lease/generation, complete persisted ready manifest. No fresh native inspection or lifecycle effect.",
+            parameters: [
+              parameter("ticketId", "path", { type: "string", format: "uuid" }),
+              parameter("leaseId", "query", { type: "string", format: "uuid" }),
+              parameter("generation", "query", { type: "integer", minimum: 1 }),
+              ...["allocationId", "manifestId", "manifestHash"].map((name) =>
+                parameter(name, "query", { type: "string" }, false),
+              ),
+              parameter(
+                "controlVersion",
+                "query",
+                { type: "integer", minimum: 1 },
+                false,
+              ),
+            ],
+          },
+        ),
+      },
+      "/v1/tickets/{ticketId}/cleanup-proof": {
+        get: operation(
+          "Read own completed cleanup proof",
+          "200",
+          "TicketCleanupProof",
+          {
+            description:
+              "Read-only tickets:read query. Actual lease/generation required; no lifecycle effect or Admin scope. Incomplete evidence is not a proof.",
+            parameters: [
+              parameter("ticketId", "path", { type: "string", format: "uuid" }),
+              parameter("leaseId", "query", { type: "string", format: "uuid" }),
+              parameter("generation", "query", { type: "integer", minimum: 1 }),
+              ...[
+                "allocationId",
+                "cleanupOperationId",
+                "manifestId",
+                "manifestHash",
+              ].map((name) =>
+                parameter(name, "query", { type: "string" }, false),
+              ),
+              parameter(
+                "cleanupControlVersion",
+                "query",
+                { type: "integer", minimum: 1 },
+                false,
+              ),
+            ],
+          },
+        ),
+      },
       "/v1/tickets/{ticketId}/release": {
         post: operation("Release a ticket", "202", "TicketView", {
           parameters: [

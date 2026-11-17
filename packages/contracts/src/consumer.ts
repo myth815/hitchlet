@@ -666,6 +666,17 @@ export interface ComputeClientError extends Error {
 
 /** 已绑定消费者认证的 SDK。隐藏 Actor、服务端追踪与手工 CAS；不自动执行业务或销毁环境。 */
 export interface TicketClient {
+  /** Complete persisted ready manifest for the current own lease. */
+  readyInventory(
+    ticketId: Id,
+    query: import("./ready-inventory.js").ReadyInventoryQuery,
+  ): Promise<import("./ready-inventory.js").TicketReadyInventory>;
+  /** Owner-scoped, read-only cleanup proof. */
+  cleanupProof(
+    ticketId: Id,
+    query: import("./cleanup-proof.js").CleanupProofQuery,
+  ): Promise<import("./cleanup-proof.js").TicketCleanupProof>;
+
   /** Persist commandId before input. A repeated ID never replays unknown native input. */
   console(
     ticketId: Id,

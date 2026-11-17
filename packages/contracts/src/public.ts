@@ -1,4 +1,9 @@
+export type {
+  ReadyInventoryQuery,
+  TicketReadyInventory,
+} from "./ready-inventory.js";
 /** Stable consumer/GUI allowlist. Internal domain, provider and agent contracts stay private. */
+export type { CleanupProofQuery, TicketCleanupProof } from "./cleanup-proof.js";
 export type {
   EventCursor,
   LeaseState,

@@ -1,3 +1,5 @@
+import { TicketReadyInventoryReader } from "./application/ticket-ready-inventory.js";
+import { registerReadyInventoryRoute } from "./http/ready-inventory-route.js";
 import { configuredExecutionModes } from "./providers/execution-registry.js";
 import { readFile, stat } from "node:fs/promises";
 import { PowerExecutionService } from "./application/power-execution.js";
@@ -80,6 +82,8 @@ import {
   ConsoleCommandSchema,
 } from "@hitchlet/contracts";
 import { AccessService } from "./application/access.js";
+import { TicketCleanupProofReader } from "./application/ticket-cleanup-proof.js";
+import { registerCleanupProofRoute } from "./http/cleanup-proof-route.js";
 import { ApplicationError } from "./application/errors.js";
 import { AdminService } from "./application/admin.js";
 import { ManagementService } from "./application/management.js";
@@ -1473,6 +1477,16 @@ export async function buildApp(
           `${request.method} ${request.routeOptions.url}`,
         ),
       );
+    registerReadyInventoryRoute(
+      app,
+      identify,
+      new TicketReadyInventoryReader(runtime.storage),
+    );
+    registerCleanupProofRoute(
+      app,
+      identify,
+      new TicketCleanupProofReader(runtime.storage),
+    );
     app.post("/v1/auth/session", async (request, reply) => {
       const ip = request.ip;
       const now = Date.now();
