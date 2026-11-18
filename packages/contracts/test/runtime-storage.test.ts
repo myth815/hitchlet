@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   runtimeStorageMountSchema,
   storageRootSchema,
+  workspaceMountFactSchema,
 } from "../src/runtime-storage.js";
 
 const root = {
@@ -68,6 +69,36 @@ describe("deployment-owned ext4 submount allowance", () => {
     expect(
       runtimeStorageMountSchema.safeParse({ ...mount, authorizedSubpath: "." })
         .success,
+    ).toBe(false);
+  });
+});
+
+describe("maintenance workspace mount record", () => {
+  const record = {
+    version: 1,
+    mountPoint: "/approved/mounts/turbocli-mount-example",
+    mountSource: "/dev/loop7",
+    filesystem: "ext4",
+    hostMountId: "73",
+    mountDevice: "7:7",
+    backingFile: "/separate-nfs/workspaces/example.ext4",
+    backingDevice: "55",
+    backingInode: "99",
+  };
+
+  it("accepts the version 1 producer shape without turning the record into a grant", () => {
+    expect(workspaceMountFactSchema.parse(record)).toEqual(record);
+    expect(
+      workspaceMountFactSchema.safeParse({ ...record, leaseId: "lease" })
+        .success,
+    ).toBe(false);
+  });
+
+  it("requires backing identity and a known producer version", () => {
+    const { backingInode: _, ...incomplete } = record;
+    expect(workspaceMountFactSchema.safeParse(incomplete).success).toBe(false);
+    expect(
+      workspaceMountFactSchema.safeParse({ ...record, version: 2 }).success,
     ).toBe(false);
   });
 });

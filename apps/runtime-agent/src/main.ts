@@ -71,6 +71,7 @@ async function start(): Promise<void> {
       undefined,
       undefined,
       () => journal.epoch,
+      process.env.TURBOCLI_WORKSPACE_MOUNT_FACTS_DIRECTORY,
     ),
   );
   const address = await listenRuntimeServer(server, parsed.host, parsed.port);

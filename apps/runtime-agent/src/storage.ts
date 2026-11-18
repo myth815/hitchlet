@@ -1,16 +1,18 @@
 import { lstat, readFile, realpath, statfs } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { join, relative, resolve } from "node:path";
 import {
   runtimeStorageRequestSchema,
   runtimeStorageResultSchema,
   storageRootSchema,
+  workspaceMountFactSchema,
   type RuntimeStorageRequest,
   type RuntimeStorageResult,
   type StorageRoot,
 } from "@hitchlet/contracts/internal";
 import { hash } from "./canonical.js";
 
-/** Read-only fixed facts. Deployment roots and mount credentials are administrator
+/** Read-only host facts. Deployment roots and mount credentials are administrator
  * controlled; requests cannot mount/unmount, create directories, or run commands. */
 export class RuntimeStorageFacts {
   private readonly roots: StorageRoot[];
@@ -33,6 +35,7 @@ export class RuntimeStorageFacts {
     private readonly hostMountInfo = () =>
       readFile("/proc/1/mountinfo", "utf8"),
     private readonly controllerEpoch = () => 0,
+    private readonly workspaceMountFactsDirectory?: string,
   ) {
     this.roots = roots.map((r) => storageRootSchema.parse(r));
   }
@@ -122,6 +125,9 @@ export class RuntimeStorageFacts {
         throw new Error("Storage filesystem protocol mismatch");
       await assertProtectedAncestors(sourceReal);
       const hostMount = assertHostMapping(info, hostInfo, sourceReal);
+      const workspaceMount = usesSubmount
+        ? await this.readWorkspaceMountFact(hostMount)
+        : undefined;
       const facts = await lstat(sourceReal, { bigint: true });
       mounts.push({
         grantId: mount.grantId,
@@ -141,6 +147,7 @@ export class RuntimeStorageFacts {
             source: hostMount.source,
             fs: hostMount.fs,
           },
+          ...(workspaceMount === undefined ? {} : { workspaceMount }),
         }),
       });
     }
@@ -172,6 +179,73 @@ export class RuntimeStorageFacts {
       },
       mounts,
     });
+  }
+
+  private async readWorkspaceMountFact(
+    mount: ReturnType<typeof parseMountInfo>[number],
+  ) {
+    const directory = this.workspaceMountFactsDirectory;
+    if (!directory || (await realpath(directory)) !== directory)
+      throw new Error(
+        "Workspace mount facts directory is not configured or stable",
+      );
+    await assertProtectedAncestors(directory);
+    const directoryFacts = await lstat(directory, { bigint: true });
+    if (
+      !directoryFacts.isDirectory() ||
+      directoryFacts.uid !== 0n ||
+      (directoryFacts.mode & 0o777n) !== 0o700n
+    )
+      throw new Error("Workspace mount facts directory is not root-owned 0700");
+    // Matches the maintenance producer's raw UTF-8 mount-point filename.
+    const file = join(
+      directory,
+      createHash("sha256").update(mount.point, "utf8").digest("hex") + ".json",
+    );
+    const before = await lstat(file, { bigint: true });
+    if (
+      !before.isFile() ||
+      before.uid !== 0n ||
+      (before.mode & 0o777n) !== 0o600n
+    )
+      throw new Error("Workspace mount fact is not a root-owned 0600 file");
+    const record = workspaceMountFactSchema.parse(
+      JSON.parse(await readFile(file, "utf8")),
+    );
+    if (
+      record.mountPoint !== mount.point ||
+      record.mountSource !== mount.source ||
+      record.filesystem !== mount.fs ||
+      record.hostMountId !== mount.id ||
+      record.mountDevice !== mount.device
+    )
+      throw new Error(
+        "Workspace mount fact does not match the current host mount",
+      );
+    // The backing image may live on a separate approved NFS filesystem. Read
+    // metadata through the same Host bind, never image bytes or a second mount.
+    const backing = await lstat(record.backingFile, { bigint: true });
+    if (
+      !backing.isFile() ||
+      (await realpath(record.backingFile)) !== record.backingFile ||
+      String(backing.dev) !== record.backingDevice ||
+      String(backing.ino) !== record.backingInode
+    )
+      throw new Error("Workspace backing image is absent or replaced");
+    const [after, backingAfter] = await Promise.all([
+      lstat(file, { bigint: true }),
+      lstat(record.backingFile, { bigint: true }),
+    ]);
+    if (
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      backingAfter.dev !== backing.dev ||
+      backingAfter.ino !== backing.ino
+    )
+      throw new Error(
+        "Workspace mount fact or backing image changed during inspection",
+      );
+    return record;
   }
 }
 function inside(root: string, path: string) {

@@ -6,6 +6,20 @@ const absolute = z
     (v) =>
       !v.includes("\0") && !v.split("/").some((p) => p === ".." || p === "."),
   );
+/** Maintenance-produced host observations, not storage grants or leases. */
+export const workspaceMountFactSchema = z
+  .object({
+    version: z.literal(1),
+    mountPoint: absolute,
+    mountSource: z.string().min(1),
+    filesystem: z.literal("ext4"),
+    hostMountId: z.string().min(1),
+    mountDevice: z.string().min(1),
+    backingFile: absolute,
+    backingDevice: z.string().min(1),
+    backingInode: z.string().min(1),
+  })
+  .strict();
 export const storageRootSchema = z
   .object({
     sourceRef: absolute,
@@ -13,7 +27,7 @@ export const storageRootSchema = z
     secretVersionRef: z.string().nullable(),
     mountPoint: absolute,
     mountSource: z.string().min(1),
-    // Deployment-owned subtree whose sources require a live, host-matched ext4 submount.
+    // Deployment-owned subtree requiring a live ext4 submount and maintenance record.
     localSubmountPrefix: z
       .string()
       .min(1)

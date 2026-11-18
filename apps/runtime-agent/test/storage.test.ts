@@ -1,16 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   chmod,
+  lstat,
   mkdtemp,
   mkdir,
   realpath,
   rename,
   rm,
   symlink,
+  unlink,
+  writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { RuntimeStorageFacts, parseMountInfo } from "../src/storage.js";
 import {
   runtimeStorageRequestSchema,
@@ -22,6 +25,7 @@ import {
 // Host ownership separately. Production ownership checks remain unchanged.
 const hostOwnership = vi.hoisted(() => ({
   roots: new Set<string>(),
+  nonRoot: new Set<string>(),
   tenant: false,
 }));
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -30,6 +34,8 @@ vi.mock("node:fs/promises", async (importOriginal) => {
     ...actual,
     lstat: vi.fn(async (...args: Parameters<typeof actual.lstat>) => {
       const facts = await actual.lstat(...args);
+      const tenant =
+        hostOwnership.tenant || hostOwnership.nonRoot.has(String(args[0]));
       if (
         typeof args[0] === "string" &&
         [...hostOwnership.roots].some(
@@ -39,10 +45,10 @@ vi.mock("node:fs/promises", async (importOriginal) => {
         Object.defineProperty(facts, "uid", {
           value:
             typeof facts.uid === "bigint"
-              ? hostOwnership.tenant
+              ? tenant
                 ? 1000n
                 : 0n
-              : hostOwnership.tenant
+              : tenant
                 ? 1000
                 : 0,
         });
@@ -57,6 +63,7 @@ afterEach(async () => {
   for (const dir of dirs.splice(0))
     await rm(dir, { recursive: true, force: true });
   hostOwnership.roots.clear();
+  hostOwnership.nonRoot.clear();
   hostOwnership.tenant = false;
 });
 async function fixture(protocol: "local" | "nfs" | "smb" = "local") {
@@ -343,13 +350,39 @@ it.each(["local", "nfs"] as const)(
   },
 );
 
-async function submountFixture(enabled = true) {
+async function submountFixture(enabled = true, configureFacts = true) {
   const f = await fixture();
   const borrowed = join(f.root, "mounts", "borrow"),
     project = join(borrowed, "project"),
     home = join(borrowed, "home");
   await mkdir(project, { recursive: true });
   await mkdir(home);
+  const factsDirectory = join(f.dir, "mount-facts"),
+    backingFile = join(f.dir, "backing", "workspace.ext4"),
+    factFile = join(
+      factsDirectory,
+      createHash("sha256").update(borrowed, "utf8").digest("hex") + ".json",
+    );
+  await mkdir(factsDirectory, { mode: 0o700 });
+  await mkdir(join(f.dir, "backing"));
+  await writeFile(backingFile, "synthetic image, never mounted");
+  const backing = await lstat(backingFile, { bigint: true });
+  const record = {
+    version: 1,
+    mountPoint: borrowed,
+    mountSource: "/dev/loop1",
+    filesystem: "ext4",
+    hostMountId: "2",
+    mountDevice: "7:1",
+    backingFile,
+    backingDevice: String(backing.dev),
+    backingInode: String(backing.ino),
+  };
+  const publish = async (value: unknown = record) => {
+    await writeFile(factFile + ".tmp", JSON.stringify(value), { mode: 0o600 });
+    await rename(factFile + ".tmp", factFile);
+  };
+  await publish();
   const child = `2 1 7:1 / ${borrowed} rw - ext4 /dev/loop1 rw\n`;
   let self = f.base + child,
     host = self;
@@ -367,6 +400,8 @@ async function submountFixture(enabled = true) {
     async () => self,
     Date.now,
     async () => host,
+    undefined,
+    configureFacts ? factsDirectory : undefined,
   );
   const request = () => ({
     ...f.request(),
@@ -394,6 +429,11 @@ async function submountFixture(enabled = true) {
     borrowed,
     project,
     home,
+    record,
+    publish,
+    factFile,
+    factsDirectory,
+    backingFile,
     setSelf: (value: string) => {
       self = value;
     },
@@ -493,6 +533,7 @@ describe("approved local ext4 submounts", () => {
     f.setSelf(f.base + f.child.replace(/^2 /, "99 "));
     expect((await f.worker.inspect(f.request())).mounts).toEqual(first.mounts);
     f.setHost(f.base + f.child.replace(/^2 /, "88 "));
+    await f.publish({ ...f.record, hostMountId: "88" });
     const remounted = await f.worker.inspect(f.request());
     expect(remounted.mounts[0]?.sourceValidationEvidenceId).not.toBe(
       first.mounts[0]?.sourceValidationEvidenceId,
@@ -510,6 +551,118 @@ describe("approved local ext4 submounts", () => {
     await chmod(f.borrowed, 0o777);
     await expect(f.worker.inspect(f.request())).rejects.toThrow(
       "Tenant-writable",
+    );
+  });
+});
+
+describe("workspace mount fact consumer", () => {
+  it("consumes the producer filename and record with a backing image outside the local profile root", async () => {
+    const f = await submountFixture();
+    expect(f.backingFile.startsWith(f.root + "/")).toBe(false);
+    expect((await f.worker.inspect(f.request())).mounts).toHaveLength(2);
+  });
+
+  it("requires deployment injection of the existing producer directory", async () => {
+    const f = await submountFixture(true, false);
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "not configured",
+    );
+  });
+
+  it("rejects a withdrawn producer record even while the mount remains visible", async () => {
+    const f = await submountFixture();
+    await f.worker.inspect(f.request());
+    await unlink(f.factFile);
+    await expect(f.worker.inspect(f.request())).rejects.toThrow("ENOENT");
+  });
+
+  it.each([
+    ["mountPoint", "/another/mount"],
+    ["mountSource", "/dev/loop2"],
+    ["hostMountId", "3"],
+    ["mountDevice", "7:2"],
+  ])("rejects stale producer %s", async (field, value) => {
+    const f = await submountFixture();
+    await f.publish({ ...f.record, [field]: value });
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "current host mount",
+    );
+  });
+
+  it.each([{ version: 2 }, { filesystem: "nfs4" }, { grantId: "not-a-grant" }])(
+    "rejects unsupported or non-producer fields %j",
+    async (change) => {
+      const f = await submountFixture();
+      await f.publish({ ...f.record, ...change });
+      await expect(f.worker.inspect(f.request())).rejects.toThrow();
+    },
+  );
+
+  it.each(["backingDevice", "backingInode"])(
+    "checks the actual backing image %s",
+    async (field) => {
+      const f = await submountFixture();
+      await f.publish({ ...f.record, [field]: "different" });
+      await expect(f.worker.inspect(f.request())).rejects.toThrow(
+        "backing image",
+      );
+    },
+  );
+
+  it("detects backing replacement and changes frozen evidence only after the producer attests it", async () => {
+    const f = await submountFixture(),
+      first = await f.worker.inspect(f.request());
+    await rename(f.backingFile, f.backingFile + ".old");
+    await writeFile(f.backingFile, "replacement synthetic image");
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "backing image",
+    );
+    const next = await lstat(f.backingFile, { bigint: true });
+    await f.publish({
+      ...f.record,
+      backingDevice: String(next.dev),
+      backingInode: String(next.ino),
+    });
+    expect(
+      (await f.worker.inspect(f.request())).mounts[0]
+        ?.sourceValidationEvidenceId,
+    ).not.toBe(first.mounts[0]?.sourceValidationEvidenceId);
+  });
+
+  it("requires the actual backing path to be visible without accepting a symlink alias", async () => {
+    const f = await submountFixture();
+    await rename(f.backingFile, f.backingFile + ".elsewhere");
+    await expect(f.worker.inspect(f.request())).rejects.toThrow("ENOENT");
+    await symlink(f.backingFile + ".elsewhere", f.backingFile);
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "backing image",
+    );
+  });
+
+  it.each(["factsDirectory", "factFile"] as const)(
+    "preserves producer permissions for %s",
+    async (field) => {
+      const f = await submountFixture();
+      await chmod(f[field], field === "factsDirectory" ? 0o755 : 0o644);
+      await expect(f.worker.inspect(f.request())).rejects.toThrow("root-owned");
+    },
+  );
+
+  it.each(["factsDirectory", "factFile"] as const)(
+    "requires maintenance ownership of %s",
+    async (field) => {
+      const f = await submountFixture();
+      hostOwnership.nonRoot.add(f[field]);
+      await expect(f.worker.inspect(f.request())).rejects.toThrow("root-owned");
+    },
+  );
+
+  it("does not read a fact through a symlink even when its content is otherwise valid", async () => {
+    const f = await submountFixture();
+    await rename(f.factFile, f.factFile + ".other");
+    await symlink(f.factFile + ".other", f.factFile);
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "root-owned 0600 file",
     );
   });
 });
