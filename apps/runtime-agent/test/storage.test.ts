@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { chmod, mkdtemp, mkdir, realpath, rm, symlink } from "node:fs/promises";
+import {
+  chmod,
+  mkdtemp,
+  mkdir,
+  realpath,
+  rename,
+  rm,
+  symlink,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
@@ -334,3 +342,174 @@ it.each(["local", "nfs"] as const)(
     ).rejects.toThrow("SMB root");
   },
 );
+
+async function submountFixture(enabled = true) {
+  const f = await fixture();
+  const borrowed = join(f.root, "mounts", "borrow"),
+    project = join(borrowed, "project"),
+    home = join(borrowed, "home");
+  await mkdir(project, { recursive: true });
+  await mkdir(home);
+  const child = `2 1 7:1 / ${borrowed} rw - ext4 /dev/loop1 rw\n`;
+  let self = f.base + child,
+    host = self;
+  const worker = new RuntimeStorageFacts(
+    {
+      installationId: "installation",
+      runtimeIdentityId: "runtime",
+      nativeEngineId: "engine",
+    },
+    [{ ...f.spec, ...(enabled ? { localSubmountPrefix: "mounts" } : {}) }],
+    {
+      assertEngine: async () => "engine",
+      imageStoreRoot: async () => f.imageRoot,
+    },
+    async () => self,
+    Date.now,
+    async () => host,
+  );
+  const request = () => ({
+    ...f.request(),
+    mounts: [
+      {
+        ...f.request().mounts[0]!,
+        authorizedSubpath: "mounts/borrow/project",
+        target: "/work",
+        mode: "read_write" as const,
+      },
+      {
+        ...f.request().mounts[0]!,
+        grantId: "home-grant",
+        authorizedSubpath: "mounts/borrow/home",
+        target: "/persist/home",
+        mode: "read_write" as const,
+      },
+    ],
+  });
+  return {
+    ...f,
+    worker,
+    request,
+    child,
+    borrowed,
+    project,
+    home,
+    setSelf: (value: string) => {
+      self = value;
+    },
+    setHost: (value: string) => {
+      host = value;
+    },
+  };
+}
+
+describe("approved local ext4 submounts", () => {
+  it("resolves both named project and home through the existing request and evidence contract", async () => {
+    const f = await submountFixture(),
+      first = await f.worker.inspect(f.request());
+    expect(first.mounts.map((mount) => mount.resolvedSourceRef)).toEqual([
+      f.project,
+      f.home,
+    ]);
+    expect((await f.worker.inspect(f.request())).mounts).toEqual(first.mounts);
+  });
+
+  it("keeps a fixed parent root from authorizing dynamic children by default", async () => {
+    const f = await submountFixture(false);
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "absent or replaced",
+    );
+  });
+
+  it("refuses the parent-directory fallback when the required submount disappears", async () => {
+    const f = await submountFixture();
+    f.setSelf(f.base);
+    f.setHost(f.base);
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "ext4 submount",
+    );
+  });
+
+  it("still requires the configured parent mount identity", async () => {
+    const f = await submountFixture();
+    f.setSelf(f.base.replace("/dev/test", "/dev/replaced") + f.child);
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "Approved storage mount",
+    );
+  });
+
+  it.each(["nfs4", "tmpfs"])(
+    "does not accept a %s child as ext4",
+    async (fs) => {
+      const f = await submountFixture();
+      f.setSelf(f.base + f.child.replace("ext4", fs));
+      await expect(f.worker.inspect(f.request())).rejects.toThrow(
+        "ext4 submount",
+      );
+    },
+  );
+
+  it("does not authorize a mounted directory outside the configured subtree", async () => {
+    const f = await submountFixture();
+    f.setSelf(f.base + `3 1 7:2 / ${f.root}/input rw - ext4 /dev/loop2 rw\n`);
+    const original = f.request();
+    await expect(
+      f.worker.inspect({
+        ...original,
+        mounts: [{ ...original.mounts[0]!, authorizedSubpath: "input" }],
+      }),
+    ).rejects.toThrow("Approved storage mount");
+  });
+
+  it.each([
+    ["7:1", "1:2"],
+    ["7:1 / ", "7:1 /another-directory "],
+  ])(
+    "rejects a parent-device or directory bind alias (%s)",
+    async (from, to) => {
+      const f = await submountFixture();
+      const aliased = f.base + f.child.replace(from, to);
+      f.setSelf(aliased);
+      f.setHost(aliased);
+      await expect(f.worker.inspect(f.request())).rejects.toThrow(
+        "ext4 submount",
+      );
+    },
+  );
+
+  it.each([
+    ["7:1", "7:2"],
+    ["/dev/loop1", "/dev/loop2"],
+    ["7:1 / ", "7:1 /wrong-bind-root "],
+  ])("rejects a different host mapping (%s)", async (from, to) => {
+    const f = await submountFixture();
+    f.setHost(f.base + f.child.replace(from, to));
+    await expect(f.worker.inspect(f.request())).rejects.toThrow("daemon host");
+  });
+
+  it("retains host mount and real inode identity in the frozen evidence", async () => {
+    const f = await submountFixture(),
+      first = await f.worker.inspect(f.request());
+    f.setSelf(f.base + f.child.replace(/^2 /, "99 "));
+    expect((await f.worker.inspect(f.request())).mounts).toEqual(first.mounts);
+    f.setHost(f.base + f.child.replace(/^2 /, "88 "));
+    const remounted = await f.worker.inspect(f.request());
+    expect(remounted.mounts[0]?.sourceValidationEvidenceId).not.toBe(
+      first.mounts[0]?.sourceValidationEvidenceId,
+    );
+    await rename(f.project, join(f.borrowed, "old-project"));
+    await mkdir(f.project);
+    expect(
+      (await f.worker.inspect(f.request())).mounts[0]
+        ?.sourceValidationEvidenceId,
+    ).not.toBe(remounted.mounts[0]?.sourceValidationEvidenceId);
+  });
+
+  it("keeps the existing tenant-writable-ancestor refusal", async () => {
+    const f = await submountFixture();
+    await chmod(f.borrowed, 0o777);
+    await expect(f.worker.inspect(f.request())).rejects.toThrow(
+      "Tenant-writable",
+    );
+  });
+});

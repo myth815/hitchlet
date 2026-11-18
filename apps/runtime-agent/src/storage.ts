@@ -80,15 +80,30 @@ export class RuntimeStorageFacts {
         if (facts.isSymbolicLink() || !facts.isDirectory())
           throw new Error("Storage source is not a stable directory");
       }
-      const active = info
-        .filter((m) => inside(m.point, source))
-        .sort((a, b) => b.point.length - a.point.length)[0];
+      const active = selectMount(info, sourceReal);
+      const submountPrefix =
+        root.localSubmountPrefix === undefined
+          ? null
+          : resolve(rootReal, root.localSubmountPrefix);
+      const usesSubmount =
+        submountPrefix !== null && inside(submountPrefix, sourceReal);
+      // A dynamic child does not replace the configured parent's trust anchor.
+      const configured = usesSubmount ? selectMount(info, rootReal) : active;
       if (
-        !active ||
-        active.point !== root.mountPoint ||
-        active.source !== root.mountSource
+        !configured ||
+        configured.point !== root.mountPoint ||
+        configured.source !== root.mountSource
       )
         throw new Error("Approved storage mount is absent or replaced");
+      if (
+        !active ||
+        (usesSubmount &&
+          (active.fs !== "ext4" ||
+            active.root !== "/" ||
+            active.device === configured.device ||
+            !inside(submountPrefix!, active.point)))
+      )
+        throw new Error("Approved ext4 submount is absent or replaced");
       if (
         root.protocol === "nfs"
           ? !["nfs", "nfs4"].includes(active.fs)
@@ -132,9 +147,7 @@ export class RuntimeStorageFacts {
     const imageRoot = await this.engine.imageStoreRoot();
     if ((await realpath(imageRoot)) !== imageRoot)
       throw new Error("Image store path is not stable");
-    const imageMount = info
-      .filter((m) => inside(m.point, imageRoot))
-      .sort((a, b) => b.point.length - a.point.length)[0];
+    const imageMount = selectMount(info, imageRoot);
     if (!imageMount || ["overlay", "tmpfs"].includes(imageMount.fs))
       throw new Error(
         "Host Docker image store filesystem is not visible to Agent",
@@ -195,17 +208,19 @@ export function parseMountInfo(text: string) {
     });
 }
 
+function selectMount(rows: ReturnType<typeof parseMountInfo>, path: string) {
+  return rows
+    .filter((m) => inside(m.point, path))
+    .sort((a, b) => b.point.length - a.point.length)[0];
+}
+
 function assertHostMapping(
   self: ReturnType<typeof parseMountInfo>,
   host: ReturnType<typeof parseMountInfo>,
   path: string,
 ) {
-  const select = (rows: typeof self) =>
-    rows
-      .filter((m) => inside(m.point, path))
-      .sort((a, b) => b.point.length - a.point.length)[0];
-  const a = select(self),
-    b = select(host);
+  const a = selectMount(self, path),
+    b = selectMount(host, path);
   if (
     !a ||
     !b ||

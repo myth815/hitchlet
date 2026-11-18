@@ -13,8 +13,27 @@ export const storageRootSchema = z
     secretVersionRef: z.string().nullable(),
     mountPoint: absolute,
     mountSource: z.string().min(1),
+    // Deployment-owned subtree whose sources require a live, host-matched ext4 submount.
+    localSubmountPrefix: z
+      .string()
+      .min(1)
+      .refine(
+        (v) =>
+          !v.startsWith("/") &&
+          !v.includes("\\") &&
+          !v.includes("\0") &&
+          v.split("/").every((p) => p !== ".." && p !== "." && p !== ""),
+      )
+      .optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (v) => v.localSubmountPrefix === undefined || v.protocol === "local",
+    {
+      message: "Ext4 submounts require a local storage root",
+      path: ["localSubmountPrefix"],
+    },
+  );
 export const runtimeStorageMountSchema = z
   .object({
     grantId: z.string().min(1),
