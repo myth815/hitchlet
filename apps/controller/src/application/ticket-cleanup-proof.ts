@@ -55,7 +55,8 @@ const Managed = z.object({
 const ManagedObject = z.discriminatedUnion("ownership", [
   Managed,
   Managed.extend({
-    kind: z.literal("storage_reference"),
+    // OperationWorker stores storage_reference as volume/reference in SQLite.
+    kind: z.literal("volume").transform(() => "storage_reference" as const),
     ownership: z.literal("reference"),
   }),
 ]);

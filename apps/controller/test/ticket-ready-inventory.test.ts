@@ -167,7 +167,7 @@ function seed(referenceCount = 0) {
       provider_id: o.id,
       allocation_id: ids.allocation,
       generation: 1,
-      kind: o.kind,
+      kind: o.kind === "storage_reference" ? "volume" : o.kind,
       ownership: o.ownership,
       observed_state: "present",
       ownership_json: JSON.stringify({ ...create, referenceKey: null }),
@@ -235,6 +235,7 @@ describe("ordinary same-lease persisted ready inventory", () => {
     "missing managed reference",
     "foreign reference identity",
     "foreign managed reference identity",
+    "unsupported managed reference kind",
     "owned object mislabeled as reference",
   ])("still rejects %s with storage references", async (kind) => {
     const f = seed(2);
@@ -254,6 +255,10 @@ describe("ordinary same-lease persisted ready inventory", () => {
     } else if (kind === "foreign managed reference identity")
       f.db.exec(
         "UPDATE managed_resources SET ownership_json=json_set(ownership_json,'$.generation',2) WHERE ownership='reference'",
+      );
+    else if (kind === "unsupported managed reference kind")
+      f.db.exec(
+        "UPDATE managed_resources SET kind='network_policy' WHERE ownership='reference'",
       );
     else Object.assign(f.ready.objects[0]!, { ownership: "reference" });
     updateReady(f);
