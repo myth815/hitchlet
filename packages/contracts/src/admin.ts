@@ -6,6 +6,7 @@ import {
 } from "./power-execution.js";
 import { z } from "zod";
 import { supportsContainerEntrypoint } from "./container-entrypoint.js";
+import { networkDestinationSchema } from "./network-destination.js";
 import {
   StorageRequestSchema,
   ResourceContractSchema,
@@ -56,18 +57,11 @@ const access = z
     readiness: z.string().min(1),
   })
   .strict();
-const egress = z
-  .object({
-    cidr: z.string().min(1),
-    protocol: z.enum(["tcp", "udp"]),
-    ports: z.array(z.number().int().min(1).max(65535)).min(1),
-  })
-  .strict();
 const networkPolicy = z
   .object({
     /** Applies to Tart only; Docker retains its enforced profile. */
     tartMode: z.enum(["trusted_nat", "isolated"]).optional(),
-    allowedEgress: z.array(egress),
+    allowedEgress: z.array(networkDestinationSchema),
     allowedIngressSourceCidrs: z.array(z.string().min(1)),
     ipv6: z.enum(["disabled", "verified_equivalent"]),
   })

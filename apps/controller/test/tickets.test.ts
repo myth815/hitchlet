@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import { TicketQueries } from "../dist/application/queries.js";
 import { SQLiteMachineNodeStore } from "../src/storage/machine-node-store.js";
+import { SQLiteProfileStore } from "../src/storage/profile-store.js";
 import { SQLiteOperationStore } from "../dist/storage/operation-store.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, rm, readdir, writeFile } from "node:fs/promises";
@@ -3008,19 +3009,24 @@ describe("Tart VM ticket ledger integration", () => {
       availability: "unsupported",
       reasons: expect.arrayContaining(["tart_contract_unsupported"]),
     });
-    const ticket = await service.acquire(consumerId, "tart-vm-lifecycle", {
+    const vmRequest = {
       image: { versionId: "20000000-0000-4000-8000-000000000003" },
-      kind: "vm",
-      guestOs: "macos",
+      kind: "vm" as const,
+      guestOs: "macos" as const,
       resources: {
         cpuMillis: 2000,
         memoryMiB: 2048,
         scratchMiB: 0,
-        isolation: "virtual_machine",
+        isolation: "virtual_machine" as const,
       },
       networkProfileId: "30000000-0000-4000-8000-000000000001",
       lease: { requestedSeconds: 900 },
-    });
+    };
+    const ticket = await service.acquire(
+      consumerId,
+      "tart-vm-lifecycle",
+      vmRequest,
+    );
     const projected = await new TicketQueries(storage, () => now).get(
       consumerId,
       ticket.ticketId,
@@ -3666,6 +3672,33 @@ describe("Tart VM ticket ledger integration", () => {
         "SELECT count(*) n FROM capacity_claims WHERE state<>'released'",
       ),
     ).toMatchObject({ n: 0n });
+    const profile = await storage.get<{ version: bigint }>(
+      "SELECT version FROM network_profiles WHERE id=?",
+      [vmRequest.networkProfileId],
+    );
+    await new SQLiteProfileStore(storage, () => clock).newProfileRevision(
+      "network",
+      vmRequest.networkProfileId,
+      Number(profile!.version),
+      {
+        config: {
+          allowedEgress: [
+            {
+              cidr: "203.0.113.10/32",
+              protocol: "tcp",
+              ports: [8443],
+              destinationScope: "host",
+            },
+          ],
+          allowedIngressSourceCidrs: [],
+          ipv6: "disabled",
+          ...(networkMode === "isolated" ? { tartMode: "isolated" } : {}),
+        },
+      },
+    );
+    await expect(
+      service.acquire(consumerId, "host-scope-is-not-a-vm-grant", vmRequest),
+    ).rejects.toMatchObject({ code: "environment_unsupported" });
   });
 });
 

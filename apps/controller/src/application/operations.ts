@@ -1,6 +1,7 @@
 import {
   resolvedStorageMountSchema,
   supportsContainerEntrypoint,
+  networkDestinationSchema,
 } from "@hitchlet/contracts/internal";
 import { admissionOpen } from "./maintenance.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
@@ -1120,29 +1121,7 @@ function numberList(value: unknown): number[] {
 function parseEgress(value: unknown): NetworkDestination[] {
   if (!Array.isArray(value))
     throw new Error("Persisted egress rules are invalid");
-  return value.map((item) => {
-    const rule = objectValue(item);
-    if (
-      typeof rule.cidr !== "string" ||
-      !rule.cidr ||
-      (rule.protocol !== "tcp" && rule.protocol !== "udp") ||
-      !Array.isArray(rule.ports) ||
-      rule.ports.length === 0 ||
-      rule.ports.some(
-        (port) =>
-          typeof port !== "number" ||
-          !Number.isInteger(port) ||
-          port < 1 ||
-          port > 65535,
-      )
-    )
-      throw new Error("Persisted egress rule is invalid");
-    return {
-      cidr: rule.cidr,
-      protocol: rule.protocol,
-      ports: rule.ports as number[],
-    };
-  });
+  return value.map((item) => networkDestinationSchema.parse(item));
 }
 function parseDenyRules(value: unknown): NetworkDenyRule[] {
   if (!Array.isArray(value))

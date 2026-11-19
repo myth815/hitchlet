@@ -2,6 +2,7 @@ import { hyperVTemplateProofMatches } from "./hyperv-facts.js";
 import {
   runtimeStorageMountSchema,
   supportsContainerEntrypoint,
+  networkDestinationSchema,
 } from "@hitchlet/contracts/internal";
 import { randomUUID } from "node:crypto";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
@@ -120,6 +121,16 @@ export class ImageValidationService {
         recipe,
       );
     const networkPolicy = object(network.policy_json, "network policy");
+    const declaredEgress = networkDestinationSchema
+      .array()
+      .parse(networkPolicy.allowedEgress);
+    if (
+      target.backend_kind !== "portainer" &&
+      declaredEgress.some((r) => r.destinationScope === "host")
+    )
+      throw new RangeError(
+        "Host-scoped egress is available only for Docker validation",
+      );
     const bindings = [];
     for (const [index, request] of input.storage.entries()) {
       if (!permitted("storageProfileIds", request.storageProfileId))
@@ -369,7 +380,7 @@ export class ImageValidationService {
             ? "isolated_vm"
             : "isolated_bridge",
         ipv6: trustedNat ? "not_enforced" : networkPolicy.ipv6,
-        allowedEgress: trustedNat ? [] : networkPolicy.allowedEgress,
+        allowedEgress: trustedNat ? [] : declaredEgress,
         allowedIngressSourceCidrs: trustedNat
           ? []
           : networkPolicy.allowedIngressSourceCidrs,

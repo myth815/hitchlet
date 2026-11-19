@@ -23,6 +23,7 @@ import { hashRuntimeNetworkRules } from "../src/providers/runtime-network-client
 import type {
   RuntimeNetworkCommand,
   RuntimeNetworkResult,
+  NetworkDestination,
 } from "@hitchlet/contracts/internal";
 
 vi.mock("../src/providers/ssh-readiness.js", () => ({
@@ -186,6 +187,7 @@ async function fixture(
   referenceCount: number,
   accessMode: "ssh" | "none" = "ssh",
   starts = true,
+  networkEgress: readonly NetworkDestination[] = [],
 ) {
   vi.clearAllMocks();
   const dir = await mkdtemp(join(tmpdir(), "hitchlet-proof-provider-"));
@@ -197,7 +199,7 @@ async function fixture(
   );
   const consumerId = stdout.match(/Consumer ID: (\S+)/)![1]!,
     versionId = stdout.match(/Image version: (\S+)/)![1]!,
-    networkId = stdout.match(/Network profile: (\S+)/)![1]!;
+    seedNetworkId = stdout.match(/Network profile: (\S+)/)![1]!;
   const storage = await openStorage(dir);
   cleanup.push(() => storage.close());
   const installation = (await storage.get<{ installation_id: string }>(
@@ -205,6 +207,18 @@ async function fixture(
   ))!;
   const now = Date.now(),
     clock = () => now;
+  const networkProfile = networkEgress.length
+    ? await new SQLiteProfileStore(storage, clock).createProfile("network", {
+        name: "synthetic explicit host endpoints",
+        config: {
+          allowedEgress: networkEgress,
+          allowedIngressSourceCidrs: [],
+          ipv6: "disabled",
+        },
+        authorizedConsumerIds: [consumerId],
+      })
+    : null;
+  const networkId = networkProfile?.id ?? seedNetworkId;
   const profile = await new SQLiteProfileStore(storage, clock).createProfile(
     "storage",
     {
@@ -225,6 +239,12 @@ async function fixture(
     "UPDATE nodes SET config_json=json_object('executionMode','portainer'),capabilities_json=json_set(capabilities_json,'$.verifiedStorageProfileRevisionIds',json(?))",
     [JSON.stringify([profile.revisionId])],
   );
+  // Synthetic node qualification for this newly created fixture revision only.
+  if (networkProfile)
+    await storage.run(
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.verifiedNetworkProfileRevisionIds',json(?))",
+      [JSON.stringify([networkProfile.revisionId])],
+    );
   await storage.run(
     "UPDATE system_maintenance SET runtime_disks_json=json_object((SELECT id FROM nodes),json(?)) WHERE singleton=1",
     [
@@ -389,6 +409,7 @@ async function fixture(
     getOrCreate,
     networkResult,
     networkId,
+    networkProfile,
   };
 }
 
@@ -528,6 +549,103 @@ it("does not mark an exited entrypoint ready and still reclaims its actual owned
   expect((await f.queries.get(f.consumerId, f.ready.id))!.phase).toBe(
     "released",
   );
+  expect(f.transport.deletes).toHaveLength(3);
+});
+
+it("freezes explicit host scope through Provider and cleanup despite a newer empty profile revision", async () => {
+  const endpoints: NetworkDestination[] = [
+    {
+      cidr: "203.0.113.10/32",
+      protocol: "tcp",
+      ports: [8443],
+      destinationScope: "host",
+    },
+    {
+      cidr: "203.0.113.11/32",
+      protocol: "tcp",
+      ports: [22],
+      destinationScope: "host",
+    },
+  ];
+  const f = await fixture(2, "none", true, endpoints);
+  const query = {
+    leaseId: f.ready.lease!.id,
+    generation: f.ready.lease!.generation,
+  };
+  expect(
+    await new TicketReadyInventoryReader(f.storage, f.clock).read(
+      f.consumerId,
+      f.ready.id,
+      query,
+    ),
+  ).toMatchObject({ completeness: "complete" });
+  const frozen = await f.storage.get<{ accepted_contract_json: string }>(
+    "SELECT accepted_contract_json FROM tickets WHERE id=?",
+    [f.ready.id],
+  );
+  const resolved = await f.storage.get<{
+    contract_hash: string;
+    network_binding_json: string;
+  }>(
+    "SELECT r.contract_hash,r.network_binding_json FROM resolved_provision_contracts r JOIN allocations a ON a.resolved_provision_contract_id=r.id WHERE a.ticket_id=?",
+    [f.ready.id],
+  );
+  expect(
+    JSON.parse(frozen!.accepted_contract_json).network.allowedEgress,
+  ).toEqual(endpoints);
+  expect(JSON.parse(resolved!.network_binding_json).allowedEgress).toEqual(
+    endpoints,
+  );
+  const ensure = f.networkResult.mock.calls.find(
+    ([c]) => c.kind === "network.ensure",
+  )![0];
+  expect(ensure.plan.egress).toEqual(endpoints);
+  expect(
+    hashRuntimeNetworkRules({
+      ...ensure.plan,
+      egress: endpoints.map(({ destinationScope: _, ...r }) => r),
+    }),
+  ).not.toBe(ensure.plan.expectedRulesetHash);
+  const leases = new LeaseService(f.storage, f.clock);
+  await leases.renew(f.consumerId, f.ready.id, "synthetic-host-claim", {
+    generation: query.generation,
+    expectedLeaseVersion: f.ready.lease!.version,
+  });
+  await leases.reconcilePending();
+  await new SQLiteProfileStore(f.storage, f.clock).newProfileRevision(
+    "network",
+    f.networkId,
+    f.networkProfile!.version,
+    {
+      config: {
+        allowedEgress: [],
+        allowedIngressSourceCidrs: [],
+        ipv6: "disabled",
+      },
+    },
+  );
+  await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+    expectedGeneration: query.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect(
+    f.networkResult.mock.calls.every(
+      ([c]) => JSON.stringify(c.plan.egress) === JSON.stringify(endpoints),
+    ),
+  ).toBe(true);
+  expect(
+    f.networkResult.mock.calls.some(([c]) => c.kind === "network.revoke"),
+  ).toBe(true);
+  expect(
+    f.networkResult.mock.calls.some(([c]) => c.kind === "network.remove"),
+  ).toBe(true);
+  expect(
+    await new TicketCleanupProofReader(f.storage, f.clock).read(
+      f.consumerId,
+      f.ready.id,
+      query,
+    ),
+  ).toMatchObject({ providerCleanup: "complete" });
   expect(f.transport.deletes).toHaveLength(3);
 });
 

@@ -2,6 +2,7 @@ import type { ResourceContract } from "@hitchlet/contracts";
 import type {
   ResolvedStorageMount,
   EffectiveResources,
+  NetworkDestination,
 } from "@hitchlet/contracts/internal";
 
 export type PortainerEvidence = Readonly<{
@@ -25,11 +26,7 @@ export type PortainerProbe = (input: {
 
 export type { EffectiveResources };
 
-export type NetworkDestination = Readonly<{
-  cidr: string;
-  protocol: "tcp" | "udp";
-  ports: readonly number[];
-}>;
+export type { NetworkDestination };
 export type NetworkDenyRule =
   | Readonly<{ cidr: string; protocol: "any"; ports: "any" }>
   | Readonly<{

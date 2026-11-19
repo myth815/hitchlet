@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { networkDestinationSchema } from "./network-destination.js";
 
 const id = z.string().min(1).max(200);
 const sha256 = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -12,13 +13,6 @@ const networkRule = z
     cidr,
     protocol: z.enum(["any", "tcp", "udp"]),
     ports,
-  })
-  .strict();
-const destination = z
-  .object({
-    cidr,
-    protocol: z.enum(["tcp", "udp"]),
-    ports: z.array(z.number().int().min(1).max(65535)).min(1),
   })
   .strict();
 const publishedPort = z
@@ -54,7 +48,7 @@ export const runtimeNetworkPlanSchema = z
     frozenDenyRevisionId: id,
     effectiveDenyRevisionId: id,
     ingressSourceCidrs: z.array(cidr),
-    egress: z.array(destination),
+    egress: z.array(networkDestinationSchema),
     managementDeny: z.array(networkRule),
     expectedRulesetHash: sha256,
   })
@@ -195,6 +189,25 @@ export function runtimeNetworkRulesMaterial(
           "-j",
           "DROP",
         ]);
+  }
+  for (const destination of plan.egress) {
+    if (destination.destinationScope !== "host") continue;
+    for (const port of destination.ports)
+      hostRules.push([
+        "-i",
+        plan.bridgeInterface,
+        "-s",
+        plan.networkSubnet,
+        "-d",
+        destination.cidr,
+        "-p",
+        destination.protocol,
+        "--dport",
+        String(port),
+        "-j",
+        // Revoke must also precede the legacy gateway reply allowance.
+        revoked ? "DROP" : "ACCEPT",
+      ]);
   }
   hostRules.push([
     "-i",
@@ -370,7 +383,8 @@ export function runtimeNetworkRulesMaterial(
           "RETURN",
         ]);
     }
-    for (const destination of plan.egress)
+    for (const destination of plan.egress) {
+      if (destination.destinationScope === "host") continue;
       for (const port of destination.ports) {
         forwardRules.push([
           "-i",
@@ -388,6 +402,7 @@ export function runtimeNetworkRulesMaterial(
           "RETURN",
         ]);
       }
+    }
   }
   if (revoked)
     forwardRules.push([

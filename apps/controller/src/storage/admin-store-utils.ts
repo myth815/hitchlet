@@ -3,6 +3,7 @@ import {
   hyperVRuntimeFactsSchema,
   tartRuntimeFactsSchema,
   supportsContainerEntrypoint,
+  networkDestinationSchema,
 } from "@hitchlet/contracts/internal";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
@@ -193,18 +194,7 @@ export function validateNetworkProfile(value: unknown) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry))
       throw new RangeError("Invalid network egress rule");
     const rule = entry as Record<string, unknown>;
-    if (
-      !cidr(rule.cidr) ||
-      !new Set(["tcp", "udp"]).has(String(rule.protocol)) ||
-      !Array.isArray(rule.ports) ||
-      rule.ports.length === 0 ||
-      rule.ports.some(
-        (port) =>
-          !Number.isSafeInteger(port) ||
-          Number(port) < 1 ||
-          Number(port) > 65535,
-      )
-    )
+    if (!cidr(rule.cidr) || !networkDestinationSchema.safeParse(rule).success)
       throw new RangeError("Invalid network egress rule");
   }
   if (p.allowedIngressSourceCidrs.some((source) => !cidr(source)))

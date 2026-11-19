@@ -65,6 +65,7 @@ capacity. Approved persistent home and project data remain.
 
 The Runtime network envelope already accepts zero published ports. This recipe
 does not change firewall rules or add egress grants. Outbound clients need the
-existing approved destination/protocol/port grants. The current bridge INPUT
-rules do not implement generic tenant-initiated access to host services; using a
-service on the Docker host requires a separately verified supported path.
+existing approved destination/protocol/port grants. Unmarked egress retains its
+forwarded-only behavior. Explicit same-host destinations use the normal profile
+with `destinationScope: "host"`; see [Host egress](HOST-EGRESS.md). This does not
+grant network access merely by selecting the entrypoint recipe.

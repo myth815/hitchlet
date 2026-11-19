@@ -12,7 +12,10 @@ import {
   NoMatchingEnvironmentError,
 } from "../domain/admission.js";
 import { supportsNodeSshRecipe } from "../domain/docker-recipe.js";
-import { supportsContainerEntrypoint } from "@hitchlet/contracts/internal";
+import {
+  supportsContainerEntrypoint,
+  networkDestinationSchema,
+} from "@hitchlet/contracts/internal";
 import {
   leaseDeadline,
   terminalReasonFor,
@@ -343,9 +346,13 @@ export class TicketService {
       throw new RangeError("Invalid Tart network mode");
     const trustedNat =
       contract.kind === "vm" && networkPolicy.tartMode !== "isolated";
-    const allowedEgress = trustedNat
-      ? []
-      : parseDestinations(networkPolicy.allowedEgress);
+    const declaredEgress = parseDestinations(networkPolicy.allowedEgress);
+    if (
+      contract.kind === "vm" &&
+      declaredEgress.some((r) => r.destinationScope === "host")
+    )
+      throw new ApplicationError("environment_unsupported");
+    const allowedEgress = trustedNat ? [] : declaredEgress;
     const allowedIngressSourceCidrs = trustedNat
       ? []
       : stringListRequired(
@@ -1044,25 +1051,7 @@ function object(value: unknown): Record<string, unknown> {
 function parseDestinations(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value))
     throw new Error("Invalid network allowed egress list");
-  return value.map((entry) => {
-    const rule = object(entry);
-    if (
-      typeof rule.cidr !== "string" ||
-      !rule.cidr ||
-      (rule.protocol !== "tcp" && rule.protocol !== "udp") ||
-      !Array.isArray(rule.ports) ||
-      rule.ports.length === 0 ||
-      !rule.ports.every(
-        (port) =>
-          typeof port === "number" &&
-          Number.isInteger(port) &&
-          port >= 1 &&
-          port <= 65535,
-      )
-    )
-      throw new Error("Invalid network destination");
-    return rule;
-  });
+  return value.map((entry) => networkDestinationSchema.parse(entry));
 }
 function parseDenyRules(value: unknown): unknown[] {
   const parsed = parseJson(value, "management deny rules");
