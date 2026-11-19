@@ -80,7 +80,12 @@ export type ProvisionPlan = Readonly<{
       allowedEgress: readonly NetworkDestination[];
       allowedIngressSourceCidrs: readonly string[];
       managementDenyRules: readonly NetworkDenyRule[];
-      enforcement: "docker_iptables" | "tart_agent" | "tart_nat" | "hyperv_nat";
+      enforcement:
+        | "docker_bridge"
+        | "docker_iptables"
+        | "tart_agent"
+        | "tart_nat"
+        | "hyperv_nat";
       verificationRequired: boolean;
     }>;
     mounts: readonly ResolvedStorageMount[];

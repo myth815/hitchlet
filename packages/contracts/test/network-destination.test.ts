@@ -55,3 +55,35 @@ it.each([
     }).success,
   ).toBe(false);
 });
+
+it("freezes native Docker bridge mode without changing omitted/filtered policies", () => {
+  const policy = {
+    dockerMode: "bridge",
+    allowedEgress: [],
+    allowedIngressSourceCidrs: [],
+    ipv6: "disabled",
+  };
+  expect(NetworkProfileRevisionSchema.parse({ policy })).toEqual({ policy });
+  for (const change of [
+    { dockerMode: "any" },
+    { allowedEgress: [host] },
+    { allowedIngressSourceCidrs: ["192.0.2.0/24"] },
+    { ipv6: "verified_equivalent" },
+  ])
+    expect(
+      NetworkProfileRevisionSchema.safeParse({
+        policy: { ...policy, ...change },
+      }).success,
+    ).toBe(false);
+  for (const dockerMode of [undefined, "filtered"])
+    expect(
+      NetworkProfileRevisionSchema.safeParse({
+        policy: {
+          allowedIngressSourceCidrs: [],
+          ipv6: "disabled",
+          ...(dockerMode ? { dockerMode } : {}),
+          allowedEgress: [host],
+        },
+      }).success,
+    ).toBe(true);
+});

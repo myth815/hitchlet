@@ -8,6 +8,7 @@ import {
 } from "@hitchlet/contracts/internal";
 
 const state = vi.hoisted(() => ({
+  requireChain: vi.fn(),
   config: "",
   imageRoot: "",
   result: undefined as unknown,
@@ -57,7 +58,7 @@ vi.mock("../src/engine.js", () => {
 vi.mock("../src/firewall.js", () => ({
   IptablesFirewall: class {},
   IptablesRunner: class {
-    async requireChain() {}
+    requireChain = state.requireChain;
   },
 }));
 vi.mock("../src/journal.js", () => ({
@@ -145,6 +146,7 @@ it("projects only storage identity from the complete deployed Agent configuratio
     await import("../src/main.js");
     await started;
     expect(state.error).toBeUndefined();
+    expect(state.requireChain).not.toHaveBeenCalled();
     const result = runtimeStorageResultSchema.parse(state.result);
     expect(result).toMatchObject({
       installationId: config.installationId,

@@ -43,7 +43,7 @@ keys stay in the approved mounted home, outside images, API input and logs.
 Hitchlet does not interpret the consumer's control-session configuration.
 
 The provider starts the container and verifies its running state, frozen image,
-resource limits, mount sources and authenticated network readback. It creates no
+resource limits, mount sources and the frozen network mode readback. It creates no
 SSH material, uploads no authorized_keys, publishes no port and executes no SSH
 probe. `ready` and `bootstrapComplete` describe resource delivery, not consumer
 registration, Git progress or application health. Owner claim and renewal use
@@ -60,10 +60,14 @@ write exclusion as unknown.
 Consumer session shutdown is independent of resource cleanup. A session closing
 does not release capacity; a failed session unregister is not a cleanup gate.
 The owner releases through the ordinary API after handling its data, and
-Hitchlet verifies network revocation and owned-object absence before releasing
+Hitchlet verifies the frozen network cleanup and owned-object absence before releasing
 capacity. Approved persistent home and project data remain.
 
-The Runtime network envelope already accepts zero published ports. This recipe
+For ordinary native Docker networking, select a profile with `dockerMode:"bridge"`;
+see [Docker bridge leases](DOCKER-BRIDGE-LEASES.md). This mode does not require
+Hitchlet host firewall actions or fine-grained destination grants.
+
+For the existing filtered mode, the Runtime envelope accepts zero published ports. This recipe
 does not change firewall rules or add egress grants. Outbound clients need the
 existing approved destination/protocol/port grants. Unmarked egress retains its
 forwarded-only behavior. Explicit same-host destinations use the normal profile

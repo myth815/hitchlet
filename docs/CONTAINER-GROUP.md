@@ -43,11 +43,13 @@ containerGroup: {
 
 ## 运行与网络
 
-Hitchlet 使用镜像原 entrypoint，创建两个成员并在启动前安装规则。workload 为 UID/GID 1000；gateway 为 UID 0、drop ALL 后仅加 NET_ADMIN 与 NET_RAW，仅映射 `/dev/net/tun`，不允许 privileged、host 网络、宿主端口或第二网络。`ipv4Forwarding:true` 只设置 gateway 自己网络命名空间的 `net.ipv4.ip_forward=1`，不改宿主。
+Hitchlet 使用镜像原 entrypoint，创建两个成员；网络按冻结 profile 的模式处理。workload 为 UID/GID 1000；gateway 为 UID 0、drop ALL 后仅加 NET_ADMIN 与 NET_RAW，仅映射 `/dev/net/tun`，不允许 privileged、host 网络、宿主端口或第二网络。`ipv4Forwarding:true` 只设置 gateway 自己网络命名空间的 `net.ipv4.ip_forward=1`，不改宿主。
 
-同桥别名分别是 `workload`、`gateway`。Hitchlet 从实际分配的子网固定成员地址并核对 Engine 读回。每条 link 只放行对应成员地址之间的 TCP 目的端口及已建立连接的反向源端口；管理拒绝优先，其他同桥转发仍 DROP。跨 allocation 隔离、既有显式 host/forward egress 语义不变。撤销后不再有成员 link 允许规则，并沿原流程清除连接、核对容器和卷删除及网络规则撤销。
+同桥别名分别是 `workload`、`gateway`。Hitchlet 从实际分配的子网固定成员地址并核对 Engine 读回。在既有 filtered 模式，每条 link 只放行对应成员地址之间的 TCP 目的端口及已建立连接的反向源端口；管理拒绝优先，其他同桥转发仍 DROP。跨 allocation 隔离、既有显式 host/forward egress 语义不变。撤销后不再有成员 link 允许规则，并沿原流程清除连接、核对容器和卷删除及网络规则撤销。
 
-Gateway 的隧道、路由、目的映射、配置及业务报到属于租客。Hitchlet 不解析 VPN 地址或等待其管理面。ready 只证明固定镜像、运行状态、资源限额、挂载、单桥与规则读回符合合同；不执行 SSH probe、不生成 SSH 凭据。普通消费者可在 ready 后自动完成原租约签收，业务程序已由 entrypoint 启动，不存在业务控制权授予。`access` 继续返回 `access_not_applicable`。
+普通 `dockerMode:"bridge"` 不执行额外的宿主防火墙动作，同桥使用 Docker 原生语义，links 作为消费者接线声明；详见 [普通 bridge 租约](DOCKER-BRIDGE-LEASES.md)。
+
+Gateway 的隧道、路由、目的映射、配置及业务报到属于租客。Hitchlet 不解析 VPN 地址或等待其管理面。ready 只证明固定镜像、运行状态、资源限额、挂载、单桥及所选网络模式符合合同；不执行 SSH probe、不生成 SSH 凭据。普通消费者可在 ready 后自动完成原租约签收，业务程序已由 entrypoint 启动，不存在业务控制权授予。`access` 继续返回 `access_not_applicable`。
 
 ## 清单与配对
 

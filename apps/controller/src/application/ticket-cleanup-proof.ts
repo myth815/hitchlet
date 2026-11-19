@@ -133,6 +133,7 @@ export const TICKET_CLEANUP_PROOF_SQL = `SELECT
  a.id AS allocationId,a.generation AS allocationGeneration,a.control_version AS controlVersion,
  a.desired_state AS desiredState,a.observed_state AS observedState,a.cleanup_status AS allocationCleanup,
  a.manifest_complete AS manifestComplete,a.manifest_id AS manifestId,r.contract_hash AS contractHash,
+ COALESCE(json_extract(r.network_binding_json,'$.enforcement'),'docker_iptables') AS networkEnforcement,
  json_extract(a.actual_resources_json,'$.executionMode') AS executionMode,
  json_object('identity',json_extract(a.actual_resources_json,'$.receipt.identity'),
    'contractHash',json_extract(a.actual_resources_json,'$.receipt.contractHash'),
@@ -338,7 +339,10 @@ export class TicketCleanupProofReader {
             receipt.verifiedAtMs >= op.createdAtMs &&
             receipt.verifiedAtMs <= evidence.verifiedAbsentAtMs &&
             (receipt.kind === "network_policy"
-              ? receipt.networkRules === "removed"
+              ? receipt.networkRules ===
+                (row.networkEnforcement === "docker_bridge"
+                  ? "not_applicable"
+                  : "removed")
               : receipt.networkRules === "not_applicable"),
         );
       const actual = {

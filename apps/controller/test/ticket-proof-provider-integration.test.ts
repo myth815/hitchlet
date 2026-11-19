@@ -62,6 +62,9 @@ function dockerTransport(
     gatewayCapabilities?: string[];
     skipProvision?: boolean;
     skipReserve?: boolean;
+    dockerBridge?: boolean;
+    extraAttachment?: boolean;
+    publishedHostPort?: boolean;
   } = { loseGatewayCreateResponse: false },
 ) {
   type Json = Record<string, any>;
@@ -173,6 +176,15 @@ function dockerTransport(
             Propagation: "rprivate",
           })),
         };
+        if (faults.extraAttachment)
+          c.NetworkSettings.Networks.foreign = {
+            NetworkID: "foreign-network",
+            IPAddress: "198.51.100.2",
+          };
+        if (faults.publishedHostPort)
+          c.HostConfig.PortBindings = {
+            "3000/tcp": [{ HostIp: "0.0.0.0", HostPort: "3000" }],
+          };
         containers.set(c.Id, c);
         if (
           body.Labels["io.hitchlet.member"] === "gateway" &&
@@ -193,7 +205,11 @@ function dockerTransport(
         for (const endpoint of Object.values(
           container!.NetworkSettings.Networks,
         ) as Json[])
-          endpoint.IPAddress = endpoint.IPAMConfig?.IPv4Address ?? "172.30.1.2";
+          endpoint.IPAddress =
+            endpoint.IPAMConfig?.IPv4Address ??
+            [...networks.values()]
+              .find((n) => n.Id === endpoint.NetworkID)!
+              .IPAM.Config[0].Subnet.replace(".0/24", ".2");
         return new Response(null, { status: 204 });
       }
       if (method === "POST" && path.endsWith("/stop")) {
@@ -283,6 +299,9 @@ async function fixture(
     gatewayCapabilities?: string[];
     skipProvision?: boolean;
     skipReserve?: boolean;
+    dockerBridge?: boolean;
+    extraAttachment?: boolean;
+    publishedHostPort?: boolean;
   } = { loseGatewayCreateResponse: false },
 ) {
   vi.clearAllMocks();
@@ -305,17 +324,19 @@ async function fixture(
   let now = Date.now();
   const clock = () => now;
   const losesResponse = faults.loseGatewayCreateResponse;
-  const networkProfile = networkEgress.length
-    ? await new SQLiteProfileStore(storage, clock).createProfile("network", {
-        name: "synthetic explicit host endpoints",
-        config: {
-          allowedEgress: networkEgress,
-          allowedIngressSourceCidrs: [],
-          ipv6: "disabled",
-        },
-        authorizedConsumerIds: [consumerId],
-      })
-    : null;
+  const networkProfile =
+    networkEgress.length || faults.dockerBridge
+      ? await new SQLiteProfileStore(storage, clock).createProfile("network", {
+          name: "synthetic explicit host endpoints",
+          config: {
+            ...(faults.dockerBridge ? { dockerMode: "bridge" } : {}),
+            allowedEgress: networkEgress,
+            allowedIngressSourceCidrs: [],
+            ipv6: "disabled",
+          },
+          authorizedConsumerIds: [consumerId],
+        })
+      : null;
   const networkId = networkProfile?.id ?? seedNetworkId;
   const profile = await new SQLiteProfileStore(storage, clock).createProfile(
     "storage",
@@ -338,7 +359,11 @@ async function fixture(
     [JSON.stringify([profile.revisionId])],
   );
   // Synthetic node qualification for this newly created fixture revision only.
-  if (networkProfile)
+  if (faults.dockerBridge)
+    await storage.run(
+      "UPDATE nodes SET capabilities_json=json_remove(capabilities_json,'$.networkPolicyEnforcement','$.verifiedNetworkProfileRevisionIds')",
+    );
+  else if (networkProfile)
     await storage.run(
       "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.verifiedNetworkProfileRevisionIds',json(?))",
       [JSON.stringify([networkProfile.revisionId])],
@@ -393,28 +418,34 @@ async function fixture(
   );
   vi.stubGlobal("fetch", transport.fetcher);
   const networkResult = vi.fn(
-    async (command: RuntimeNetworkCommand): Promise<RuntimeNetworkResult> => ({
-      commandId: command.commandId,
-      operationId: command.operationId,
-      allocationId: command.allocationId,
-      generation: command.generation,
-      nativeEngineId: "hitchlet-simulator",
-      status:
-        command.kind === "network.ensure"
-          ? "installed"
-          : command.kind === "network.revoke"
-            ? "revoked"
-            : command.kind === "network.remove"
-              ? "removed"
-              : "present",
-      rulesetHash:
-        command.kind === "network.remove"
-          ? null
-          : command.kind === "network.revoke"
-            ? hashRuntimeNetworkRules(command.plan, true)
-            : command.plan.expectedRulesetHash,
-      verifiedAt: new Date(now).toISOString(),
-    }),
+    async (command: RuntimeNetworkCommand): Promise<RuntimeNetworkResult> => {
+      if (faults.dockerBridge)
+        throw new Error(
+          "Ordinary bridge must never call Runtime network actions",
+        );
+      return {
+        commandId: command.commandId,
+        operationId: command.operationId,
+        allocationId: command.allocationId,
+        generation: command.generation,
+        nativeEngineId: "hitchlet-simulator",
+        status:
+          command.kind === "network.ensure"
+            ? "installed"
+            : command.kind === "network.revoke"
+              ? "revoked"
+              : command.kind === "network.remove"
+                ? "removed"
+                : "present",
+        rulesetHash:
+          command.kind === "network.remove"
+            ? null
+            : command.kind === "network.revoke"
+              ? hashRuntimeNetworkRules(command.plan, true)
+              : command.plan.expectedRulesetHash,
+        verifiedAt: new Date(now).toISOString(),
+      };
+    },
   );
   const getOrCreate = vi.fn(async () => ({
     privateKey: "synthetic-private",
@@ -500,6 +531,8 @@ async function fixture(
     !losesResponse &&
     !faults.rejectGatewayImage &&
     faults.gatewayCapabilities === undefined &&
+    !faults.extraAttachment &&
+    !faults.publishedHostPort &&
     !faults.skipProvision &&
     !faults.skipReserve
   )
@@ -535,14 +568,19 @@ async function fixture(
 }
 
 it.each([
-  [0, "ssh"],
-  [2, "ssh"],
-  [0, "none"],
-  [2, "none"],
+  [0, "ssh", false],
+  [2, "ssh", false],
+  [0, "none", false],
+  [2, "none", false],
+  [0, "none", true],
+  [2, "none", true],
 ] as const)(
-  "ordinary Provider -> real SQLite journal -> both proof readers (%i references, %s)",
-  async (referenceCount, accessMode) => {
-    const f = await fixture(referenceCount, accessMode),
+  "ordinary Provider -> real SQLite journal -> both proof readers (%i references, %s, bridge=%s)",
+  async (referenceCount, accessMode, dockerBridge = false) => {
+    const f = await fixture(referenceCount, accessMode, true, [], undefined, {
+        loseGatewayCreateResponse: false,
+        dockerBridge,
+      }),
       ticketId = f.ready.id,
       query = {
         leaseId: f.ready.lease!.id,
@@ -651,6 +689,7 @@ it.each([
       .soft(after)
       .toMatchObject({ value: { ticketId, providerCleanup: "complete" } });
     if ("value" in after) expect(after.value!.receipts).toHaveLength(3);
+    if (dockerBridge) expect(f.networkResult).not.toHaveBeenCalled();
     expect(f.transport.deletes).toHaveLength(3);
     expect(
       f.transport.deletes.every((path) => !path.includes("storage:")),
@@ -703,111 +742,123 @@ const groupRecipe: ContainerGroup = {
     { from: "workload", to: "gateway", protocol: "tcp", ports: [18080] },
   ],
 };
-it("delivers a two-member lease before claim and proves complete group cleanup without deleting persistent references", async () => {
-  const f = await fixture(3, "none", true, [], groupRecipe);
-  const query = {
-    leaseId: f.ready.lease!.id,
-    generation: f.ready.lease!.generation,
-  };
-  const inventory = await new TicketReadyInventoryReader(
-    f.storage,
-    f.clock,
-  ).read(f.consumerId, f.ready.id, query);
-  expect(inventory!.objects).toHaveLength(5);
-  expect(inventory!.objects.filter((o) => o.kind === "container")).toHaveLength(
-    2,
-  );
-  expect(f.ready.lease!.claimedAt).toBeNull();
-  const native = [...f.transport.containers.values()];
-  expect(
-    native.map((c) => c.Config.Labels["io.hitchlet.member"]).sort(),
-  ).toEqual(["gateway", "workload"]);
-  expect(native.reduce((n, c) => n + c.HostConfig.CpuQuota, 0)).toBe(50000);
-  expect(native.reduce((n, c) => n + c.HostConfig.Memory, 0)).toBe(
-    512 * 1024 * 1024,
-  );
-  expect(
-    native.every(
-      (c) => !c.HostConfig.Privileged && c.HostConfig.NetworkMode !== "host",
-    ),
-  ).toBe(true);
-  const gateway = native.find(
-    (c) => c.Config.Labels["io.hitchlet.member"] === "gateway",
-  )!;
-  const workload = native.find(
-    (c) => c.Config.Labels["io.hitchlet.member"] === "workload",
-  )!;
-  expect(gateway.HostConfig.CapDrop).toEqual(["ALL"]);
-  expect(gateway.HostConfig.CapAdd).toEqual(["NET_ADMIN", "NET_RAW"]);
-  expect(workload.Config.User).toBe("1000:1000");
-  expect(workload.HostConfig.CapDrop).toEqual(["ALL"]);
-  expect(workload.HostConfig.CapAdd).toEqual([
-    "CHOWN",
-    "DAC_OVERRIDE",
-    "FOWNER",
-    "SETGID",
-    "SETUID",
-    "SYS_CHROOT",
-    "NET_BIND_SERVICE",
-  ]);
-  expect(workload.HostConfig.Devices).toBeUndefined();
-  expect(gateway.HostConfig.Devices).toEqual([
-    {
-      PathOnHost: "/dev/net/tun",
-      PathInContainer: "/dev/net/tun",
-      CgroupPermissions: "rw",
-    },
-  ]);
-  expect(
-    gateway.Mounts.find(
-      (m: { Destination: string }) => m.Destination === "/persist/gateway",
-    ),
-  ).toMatchObject({ Type: "bind", RW: false });
-  expect(
-    workload.Mounts.some(
-      (m: { Destination: string }) => m.Destination === "/persist/gateway",
-    ),
-  ).toBe(false);
-  expect(
-    inventory!.containerGroup!.members.find((m) => m.name === "gateway"),
-  ).toMatchObject({
-    artifactDigest: groupRecipe.gateway.digest,
-    stateVolume: { target: "/var/lib/gateway", ownership: "owned" },
-  });
-  const ensured = f.networkResult.mock.calls.find(
-    ([c]) => c.kind === "network.ensure",
-  )![0].plan;
-  expect(ensured.containerIds).toHaveLength(2);
-  expect(ensured.memberLinks).toMatchObject([
-    { fromIpv4: "172.30.1.3", toIpv4: "172.30.1.2", ports: [3000] },
-    { fromIpv4: "172.30.1.2", toIpv4: "172.30.1.3", ports: [18080] },
-  ]);
-  expect(f.getOrCreate).not.toHaveBeenCalled();
-  expect(probeSsh).not.toHaveBeenCalled();
-  const leases = new LeaseService(f.storage, f.clock);
-  await leases.renew(f.consumerId, f.ready.id, "group-auto-claim", {
-    generation: query.generation,
-    expectedLeaseVersion: f.ready.lease!.version,
-  });
-  await leases.reconcilePending();
-  await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
-    expectedGeneration: query.generation,
-  });
-  await f.worker.reconcileCleanupLane();
-  expect((await f.queries.get(f.consumerId, f.ready.id))!.phase).toBe(
-    "released",
-  );
-  expect(
-    (await new TicketCleanupProofReader(f.storage, f.clock).read(
+it.each([false, true])(
+  "delivers a two-member lease before claim and proves complete group cleanup without deleting persistent references (bridge=%s)",
+  async (dockerBridge) => {
+    const f = await fixture(3, "none", true, [], groupRecipe, {
+      loseGatewayCreateResponse: false,
+      dockerBridge,
+    });
+    const query = {
+      leaseId: f.ready.lease!.id,
+      generation: f.ready.lease!.generation,
+    };
+    const inventory = await new TicketReadyInventoryReader(
+      f.storage,
+      f.clock,
+    ).read(f.consumerId, f.ready.id, query);
+    expect(inventory!.objects).toHaveLength(5);
+    expect(
+      inventory!.objects.filter((o) => o.kind === "container"),
+    ).toHaveLength(2);
+    expect(f.ready.lease!.claimedAt).toBeNull();
+    const native = [...f.transport.containers.values()];
+    expect(
+      native.map((c) => c.Config.Labels["io.hitchlet.member"]).sort(),
+    ).toEqual(["gateway", "workload"]);
+    expect(native.reduce((n, c) => n + c.HostConfig.CpuQuota, 0)).toBe(50000);
+    expect(native.reduce((n, c) => n + c.HostConfig.Memory, 0)).toBe(
+      512 * 1024 * 1024,
+    );
+    expect(
+      native.every(
+        (c) => !c.HostConfig.Privileged && c.HostConfig.NetworkMode !== "host",
+      ),
+    ).toBe(true);
+    const gateway = native.find(
+      (c) => c.Config.Labels["io.hitchlet.member"] === "gateway",
+    )!;
+    const workload = native.find(
+      (c) => c.Config.Labels["io.hitchlet.member"] === "workload",
+    )!;
+    expect(gateway.HostConfig.CapDrop).toEqual(["ALL"]);
+    expect(gateway.HostConfig.CapAdd).toEqual(["NET_ADMIN", "NET_RAW"]);
+    expect(workload.Config.User).toBe("1000:1000");
+    expect(workload.HostConfig.CapDrop).toEqual(["ALL"]);
+    expect(workload.HostConfig.CapAdd).toEqual([
+      "CHOWN",
+      "DAC_OVERRIDE",
+      "FOWNER",
+      "SETGID",
+      "SETUID",
+      "SYS_CHROOT",
+      "NET_BIND_SERVICE",
+    ]);
+    expect(workload.HostConfig.Devices).toBeUndefined();
+    expect(gateway.HostConfig.Devices).toEqual([
+      {
+        PathOnHost: "/dev/net/tun",
+        PathInContainer: "/dev/net/tun",
+        CgroupPermissions: "rw",
+      },
+    ]);
+    expect(
+      gateway.Mounts.find(
+        (m: { Destination: string }) => m.Destination === "/persist/gateway",
+      ),
+    ).toMatchObject({ Type: "bind", RW: false });
+    expect(
+      workload.Mounts.some(
+        (m: { Destination: string }) => m.Destination === "/persist/gateway",
+      ),
+    ).toBe(false);
+    expect(
+      inventory!.containerGroup!.members.find((m) => m.name === "gateway"),
+    ).toMatchObject({
+      artifactDigest: groupRecipe.gateway.digest,
+      stateVolume: { target: "/var/lib/gateway", ownership: "owned" },
+    });
+    if (dockerBridge) expect(f.networkResult).not.toHaveBeenCalled();
+    else {
+      const ensured = f.networkResult.mock.calls.find(
+        ([c]) => c.kind === "network.ensure",
+      )![0].plan;
+      expect(ensured.containerIds).toHaveLength(2);
+      expect(ensured.memberLinks).toMatchObject([
+        { fromIpv4: "172.30.1.3", toIpv4: "172.30.1.2", ports: [3000] },
+        { fromIpv4: "172.30.1.2", toIpv4: "172.30.1.3", ports: [18080] },
+      ]);
+    }
+    expect(f.getOrCreate).not.toHaveBeenCalled();
+    expect(probeSsh).not.toHaveBeenCalled();
+    const leases = new LeaseService(f.storage, f.clock);
+    await leases.renew(f.consumerId, f.ready.id, "group-auto-claim", {
+      generation: query.generation,
+      expectedLeaseVersion: f.ready.lease!.version,
+    });
+    await leases.reconcilePending();
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+      expectedGeneration: query.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    expect((await f.queries.get(f.consumerId, f.ready.id))!.phase).toBe(
+      "released",
+    );
+    const proof = (await new TicketCleanupProofReader(f.storage, f.clock).read(
       f.consumerId,
       f.ready.id,
       query,
-    ))!.receipts,
-  ).toHaveLength(5);
-  expect(f.transport.deletes).toHaveLength(5);
-  expect(f.transport.containers.size).toBe(0);
-  expect(f.transport.networks.size).toBe(0);
-});
+    ))!;
+    expect(proof.receipts).toHaveLength(5);
+    expect(
+      proof.receipts.find((r) => r.kind === "network_policy")!.networkRules,
+    ).toBe(dockerBridge ? "not_applicable" : "removed");
+    if (dockerBridge) expect(f.networkResult).not.toHaveBeenCalled();
+    expect(f.transport.deletes).toHaveLength(5);
+    expect(f.transport.containers.size).toBe(0);
+    expect(f.transport.networks.size).toBe(0);
+  },
+);
 
 it("reclaims both group members when startup fails without claiming ready or waiting for business registration", async () => {
   const f = await fixture(3, "none", false, [], groupRecipe);
@@ -919,9 +970,14 @@ it("freezes explicit host scope through Provider and cleanup despite a newer emp
   expect(f.transport.deletes).toHaveLength(3);
 });
 
-it.each([false, true])(
-  "registers, validates and publishes an entrypoint artifact through the ordinary image path (group=%s)",
-  async (group) => {
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+  [true, true],
+])(
+  "registers, validates and publishes an entrypoint artifact through the ordinary image path (group=%s, bridge=%s)",
+  async (group, dockerBridge) => {
     const validationGroup = {
       ...groupRecipe,
       gateway: { ...groupRecipe.gateway, mountPaths: [] },
@@ -932,6 +988,7 @@ it.each([false, true])(
       true,
       [],
       group ? validationGroup : undefined,
+      { loseGatewayCreateResponse: false, dockerBridge },
     );
     await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
       expectedGeneration: f.ready.lease!.generation,
@@ -1056,79 +1113,100 @@ it.each([false, true])(
     ).toMatchObject({ status: "published" });
     expect(f.getOrCreate).not.toHaveBeenCalled();
     expect(probeSsh).not.toHaveBeenCalled();
+    if (dockerBridge) expect(f.networkResult).not.toHaveBeenCalled();
   },
 );
 
-it("keeps another two-member lease running when one line returns", async () => {
-  const f = await fixture(3, "none", true, [], groupRecipe);
-  const accepted = await f.storage.get<{ request_json: string }>(
-    "SELECT request_json FROM tickets WHERE id=?",
-    [f.ready.id],
-  );
-  const request = JSON.parse(accepted!.request_json);
-  request.storage = request.storage.map((m: Record<string, unknown>) => ({
-    ...m,
-    authorizedSubpath: String(m.authorizedSubpath).replace(
-      "borrow/",
-      "borrow-b/",
-    ),
-  }));
-  const second = await f.tickets.acquire(f.consumerId, "second-group-line", {
-    image: { versionId: f.ready.pinnedImageVersionId },
-    resources: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
-    access: { protocol: "none" },
-    networkProfileId: f.networkId,
-    lease: { requestedSeconds: 900, maximumLifetimeSeconds: 3600 },
-    storage: request.storage,
-  });
-  await f.tickets.reserveNext();
-  await f.worker.reconcile();
-  const b = (await f.queries.get(f.consumerId, second.ticketId))!;
-  expect(b.phase).toBe("ready");
-  const reader = new TicketReadyInventoryReader(f.storage, f.clock);
-  const aQuery = {
-    leaseId: f.ready.lease!.id,
-    generation: f.ready.lease!.generation,
-  };
-  const bQuery = { leaseId: b.lease!.id, generation: b.lease!.generation };
-  const aInventory = (await reader.read(f.consumerId, f.ready.id, aQuery))!;
-  const bInventory = (await reader.read(f.consumerId, b.id, bQuery))!;
-  expect(
-    aInventory.containerGroup!.members.every((a) =>
-      bInventory.containerGroup!.members.every(
-        (b) =>
-          a.containerId !== b.containerId &&
-          a.ipv4 !== b.ipv4 &&
-          a.stateVolume.id !== b.stateVolume.id,
+it.each([false, true])(
+  "keeps another two-member lease running when one line returns (bridge=%s)",
+  async (dockerBridge) => {
+    const f = await fixture(3, "none", true, [], groupRecipe, {
+      loseGatewayCreateResponse: false,
+      dockerBridge,
+    });
+    const accepted = await f.storage.get<{ request_json: string }>(
+      "SELECT request_json FROM tickets WHERE id=?",
+      [f.ready.id],
+    );
+    const request = JSON.parse(accepted!.request_json);
+    request.storage = request.storage.map((m: Record<string, unknown>) => ({
+      ...m,
+      authorizedSubpath: String(m.authorizedSubpath).replace(
+        "borrow/",
+        "borrow-b/",
       ),
-    ),
-  ).toBe(true);
-  await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
-    expectedGeneration: aQuery.generation,
-  });
-  await f.worker.reconcileCleanupLane();
-  expect(await reader.read(f.consumerId, b.id, bQuery)).toMatchObject({
-    completeness: "complete",
-  });
-  expect(f.transport.containers.size).toBe(2);
-  expect(
-    [...f.transport.containers.values()].every((c) => c.State.Running),
-  ).toBe(true);
-  expect(f.transport.networks.size).toBe(1);
-  await f.tickets.cancel(b.id, f.consumerId, "consumer_release", {
-    expectedGeneration: bQuery.generation,
-  });
-  await f.worker.reconcileCleanupLane();
-  expect(
-    (await new TicketCleanupProofReader(f.storage, f.clock).read(
+    }));
+    const second = await f.tickets.acquire(f.consumerId, "second-group-line", {
+      image: { versionId: f.ready.pinnedImageVersionId },
+      resources: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+      access: { protocol: "none" },
+      networkProfileId: f.networkId,
+      lease: { requestedSeconds: 900, maximumLifetimeSeconds: 3600 },
+      storage: request.storage,
+    });
+    await f.tickets.reserveNext();
+    await f.worker.reconcile();
+    const b = (await f.queries.get(f.consumerId, second.ticketId))!;
+    expect(b.phase).toBe("ready");
+    const reader = new TicketReadyInventoryReader(f.storage, f.clock);
+    const aQuery = {
+      leaseId: f.ready.lease!.id,
+      generation: f.ready.lease!.generation,
+    };
+    const bQuery = { leaseId: b.lease!.id, generation: b.lease!.generation };
+    const aInventory = (await reader.read(f.consumerId, f.ready.id, aQuery))!;
+    const bInventory = (await reader.read(f.consumerId, b.id, bQuery))!;
+    expect(
+      aInventory.containerGroup!.members.every((a) =>
+        bInventory.containerGroup!.members.every(
+          (b) =>
+            a.containerId !== b.containerId &&
+            a.ipv4 !== b.ipv4 &&
+            a.stateVolume.id !== b.stateVolume.id,
+        ),
+      ),
+    ).toBe(true);
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+      expectedGeneration: aQuery.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    const aProof = (await new TicketCleanupProofReader(f.storage, f.clock).read(
       f.consumerId,
-      b.id,
-      bQuery,
-    ))!.receipts,
-  ).toHaveLength(5);
-  expect(f.transport.deletes).toHaveLength(10);
-  expect(f.transport.containers.size).toBe(0);
-});
+      f.ready.id,
+      aQuery,
+    ))!;
+    expect(aProof.objects.map((o) => o.id).sort()).toEqual(
+      aInventory.objects.map((o) => o.id).sort(),
+    );
+    expect(
+      aProof.receipts.every((r) =>
+        aInventory.objects.some((o) => o.id === r.resourceId),
+      ),
+    ).toBe(true);
+    expect(await reader.read(f.consumerId, b.id, bQuery)).toMatchObject({
+      completeness: "complete",
+    });
+    expect(f.transport.containers.size).toBe(2);
+    expect(
+      [...f.transport.containers.values()].every((c) => c.State.Running),
+    ).toBe(true);
+    expect(f.transport.networks.size).toBe(1);
+    await f.tickets.cancel(b.id, f.consumerId, "consumer_release", {
+      expectedGeneration: bQuery.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    expect(
+      (await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        b.id,
+        bQuery,
+      ))!.receipts,
+    ).toHaveLength(5);
+    if (dockerBridge) expect(f.networkResult).not.toHaveBeenCalled();
+    expect(f.transport.deletes).toHaveLength(10);
+    expect(f.transport.containers.size).toBe(0);
+  },
+);
 
 it("recovers a committed gateway whose create response was lost without duplicating it", async () => {
   const f = await fixture(3, "none", true, [], groupRecipe, {
@@ -1220,15 +1298,20 @@ it("rejects mutated member image, role and state facts from the actual persisted
 });
 
 it.each([
-  "startup_failed",
-  "partial_create",
-  "reserved_never_started",
-  "queued_never_reserved",
+  ["startup_failed", false],
+  ["partial_create", false],
+  ["reserved_never_started", false],
+  ["queued_never_reserved", false],
+  ["startup_failed", true],
+  ["partial_create", true],
+  ["reserved_never_started", true],
+  ["queued_never_reserved", true],
 ] as const)(
-  "pre-ready %s returns terminal cleanup evidence without fabricating ready",
-  async (caseName) => {
+  "pre-ready %s returns terminal cleanup evidence without fabricating ready (bridge=%s)",
+  async (caseName, dockerBridge) => {
     const faults = {
       loseGatewayCreateResponse: false,
+      dockerBridge,
       rejectGatewayImage: caseName === "partial_create",
       skipProvision: caseName === "reserved_never_started",
       skipReserve: caseName === "queued_never_reserved",
@@ -1264,6 +1347,7 @@ it.each([
       lease ? { expectedGeneration: lease.generation } : undefined,
     );
     await f.worker.reconcileCleanupLane();
+    if (dockerBridge) expect(f.networkResult).not.toHaveBeenCalled();
     const ticket = (await f.queries.get(f.consumerId, f.ready.id))!;
     expect(ticket.phase).toBe("released");
     const expectedObjects =
@@ -1423,6 +1507,7 @@ it.each([
         "missing_receipt",
         "wrong_runtime",
         "false_no_create",
+        "wrong_network_rules",
       ] as const) {
         if (change === "unknown_effect" || change === "wrong_created_id") {
           const bad = JSON.parse(provision.result_json);
@@ -1440,6 +1525,10 @@ it.each([
           if (change === "missing_receipt") bad.destructionReceipts.pop();
           else if (change === "wrong_runtime")
             bad.inventory.runtime.runtimeIdentityId = "foreign-runtime";
+          else if (change === "wrong_network_rules")
+            bad.destructionReceipts.find(
+              (r: any) => r.kind === "network_policy",
+            ).networkRules = dockerBridge ? "removed" : "not_applicable";
           else bad.noExternalCreate = true;
           await f.storage.run(
             "UPDATE operations SET result_json=? WHERE allocation_id=(SELECT id FROM allocations WHERE ticket_id=?) AND kind='allocation.cleanup'",
@@ -1515,5 +1604,95 @@ it.each([
     expect(proof!.receipts).toHaveLength(5);
     expect(f.transport.containers.size).toBe(0);
     expect(f.transport.deletes).toHaveLength(5);
+  },
+);
+
+it("keeps the accepted native bridge mode through a newer filtered profile and rejects incompatible proof receipts", async () => {
+  const f = await fixture(3, "none", true, [], groupRecipe, {
+    loseGatewayCreateResponse: false,
+    dockerBridge: true,
+  });
+  const query = {
+    leaseId: f.ready.lease!.id,
+    generation: f.ready.lease!.generation,
+  };
+  const frozen = (await f.storage.get<{ accepted_contract_json: string }>(
+    "SELECT accepted_contract_json FROM tickets WHERE id=?",
+    [f.ready.id],
+  ))!;
+  expect(JSON.parse(frozen.accepted_contract_json).network).toMatchObject({
+    enforcement: "docker_bridge",
+    verificationRequired: false,
+  });
+  await new SQLiteProfileStore(f.storage, f.clock).newProfileRevision(
+    "network",
+    f.networkId,
+    f.networkProfile!.version,
+    {
+      config: {
+        dockerMode: "filtered",
+        allowedEgress: [],
+        allowedIngressSourceCidrs: [],
+        ipv6: "disabled",
+      },
+    },
+  );
+  await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+    expectedGeneration: query.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  const reader = new TicketCleanupProofReader(f.storage, f.clock);
+  const proof = (await reader.read(f.consumerId, f.ready.id, query))!;
+  expect(
+    proof.receipts.find((r) => r.kind === "network_policy")!.networkRules,
+  ).toBe("not_applicable");
+  expect(f.networkResult).not.toHaveBeenCalled();
+  const op = (await f.storage.get<{ id: string; result_json: string }>(
+    "SELECT id,result_json FROM operations WHERE allocation_id=(SELECT id FROM allocations WHERE ticket_id=?) AND kind='allocation.cleanup'",
+    [f.ready.id],
+  ))!;
+  const altered = JSON.parse(op.result_json);
+  altered.destructionReceipts.find(
+    (r: any) => r.kind === "network_policy",
+  ).networkRules = "removed";
+  await f.storage.run("UPDATE operations SET result_json=? WHERE id=?", [
+    JSON.stringify(altered),
+    op.id,
+  ]);
+  await expect(
+    reader.read(f.consumerId, f.ready.id, query),
+  ).rejects.toMatchObject({ code: "conflict" });
+});
+
+it.each(["extraAttachment", "publishedHostPort"] as const)(
+  "rejects %s on ordinary bridge readback and proves actual pre-ready cleanup",
+  async (fault) => {
+    const f = await fixture(2, "none", true, [], undefined, {
+      loseGatewayCreateResponse: false,
+      dockerBridge: true,
+      [fault]: true,
+    });
+    expect(f.ready.phase).not.toBe("ready");
+    const query = {
+      leaseId: f.ready.lease!.id,
+      generation: f.ready.lease!.generation,
+    };
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_cancel", {
+      expectedGeneration: query.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    expect(
+      await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        f.ready.id,
+        query,
+      ),
+    ).toMatchObject({
+      version: "1.1",
+      outcome: "reclaimed",
+      receipts: expect.any(Array),
+    });
+    expect(f.transport.deletes).toHaveLength(3);
+    expect(f.networkResult).not.toHaveBeenCalled();
   },
 );

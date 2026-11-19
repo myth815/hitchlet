@@ -209,6 +209,8 @@ export class ImageValidationService {
       throw new RangeError("Invalid Tart network mode");
     const trustedNat =
       isHyperV || (isTart && networkPolicy.tartMode !== "isolated");
+    const dockerBridge = !isVm && networkPolicy.dockerMode === "bridge";
+    const unfiltered = trustedNat || dockerBridge;
     let tartProofVerified = !isTart;
     if (isTart && this.tartFactsForRevision) {
       try {
@@ -270,6 +272,10 @@ export class ImageValidationService {
       throw new RangeError(
         "Docker validation resources must meet artifact minimums and use equal v1 request/limit without unverified accelerators",
       );
+    if (dockerBridge && !noAccess)
+      throw new RangeError(
+        "Docker bridge recipe has no published access endpoint",
+      );
     const expiry =
       typeof caps.expiresAt === "string"
         ? Date.parse(caps.expiresAt)
@@ -277,11 +283,11 @@ export class ImageValidationService {
     const block =
       caps.cpuHardLimit !== "verified" ||
       caps.memoryHardLimit !== "verified" ||
-      (!trustedNat && caps.networkPolicyEnforcement !== "verified") ||
+      (!unfiltered && caps.networkPolicyEnforcement !== "verified") ||
       (input.resources.scratchEnforcement === "required" &&
         caps.scratchHardLimit !== "verified") ||
       caps.capacity === undefined ||
-      (!trustedNat &&
+      (!unfiltered &&
         (!Array.isArray(caps.verifiedNetworkProfileRevisionIds) ||
           !caps.verifiedNetworkProfileRevisionIds.includes(
             String(network.current_revision_id),
@@ -380,19 +386,21 @@ export class ImageValidationService {
             ? "isolated_vm"
             : "isolated_bridge",
         ipv6: trustedNat ? "not_enforced" : networkPolicy.ipv6,
-        allowedEgress: trustedNat ? [] : declaredEgress,
-        allowedIngressSourceCidrs: trustedNat
+        allowedEgress: unfiltered ? [] : declaredEgress,
+        allowedIngressSourceCidrs: unfiltered
           ? []
           : networkPolicy.allowedIngressSourceCidrs,
-        enforcement: trustedNat
-          ? isHyperV
-            ? "hyperv_nat"
-            : "tart_nat"
-          : isTart
-            ? "tart_agent"
-            : "docker_iptables",
-        verificationRequired: !trustedNat,
-        managementDenyRules: trustedNat
+        enforcement: dockerBridge
+          ? "docker_bridge"
+          : trustedNat
+            ? isHyperV
+              ? "hyperv_nat"
+              : "tart_nat"
+            : isTart
+              ? "tart_agent"
+              : "docker_iptables",
+        verificationRequired: !unfiltered,
+        managementDenyRules: unfiltered
           ? []
           : JSON.parse(String(deny.management_deny_rules_json)),
       },

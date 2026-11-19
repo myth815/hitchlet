@@ -811,9 +811,11 @@ export class OperationWorker {
           : network.enforcement,
       ),
       verificationRequired:
-        network.mode === "trusted_nat"
-          ? natVerification(network.enforcement, network.verificationRequired)
-          : requiredTrue(network.verificationRequired),
+        network.enforcement === "docker_bridge"
+          ? bridgeVerification(network)
+          : network.mode === "trusted_nat"
+            ? natVerification(network.enforcement, network.verificationRequired)
+            : requiredTrue(network.verificationRequired),
     };
     const contractPayload = {
       selectionHash,
@@ -1178,8 +1180,14 @@ function architecture(value: unknown): "amd64" | "arm64" {
 }
 function enforcement(
   value: unknown,
-): "docker_iptables" | "tart_agent" | "tart_nat" | "hyperv_nat" {
+):
+  | "docker_bridge"
+  | "docker_iptables"
+  | "tart_agent"
+  | "tart_nat"
+  | "hyperv_nat" {
   if (
+    value !== "docker_bridge" &&
     value !== "docker_iptables" &&
     value !== "tart_agent" &&
     value !== "tart_nat" &&
@@ -1348,4 +1356,17 @@ function journaledOwnedResource(plan: ProvisionPlan, row: Row): OwnedResource {
 }
 function hash(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function bridgeVerification(network: Record<string, unknown>): false {
+  if (
+    network.mode !== "isolated_bridge" ||
+    network.verificationRequired !== false ||
+    network.ipv6 !== "disabled" ||
+    parseEgress(network.allowedEgress).length ||
+    stringList(network.allowedIngressSourceCidrs).length ||
+    parseDenyRules(network.managementDenyRules).length
+  )
+    throw new Error("Persisted Docker bridge contract is inconsistent");
+  return false;
 }

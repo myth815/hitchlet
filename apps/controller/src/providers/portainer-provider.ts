@@ -422,50 +422,56 @@ export class PortainerExecutionProvider implements ExecutionPort {
     );
     if (inspectedContainer.Id !== containerId)
       throw new Error("Docker container readback identity mismatch");
-    const networkPlan = this.networkPlan(
-      plan,
-      runtime,
-      networkId,
-      name,
-      [containerId],
-      undefined,
-      inspectedContainer,
-      inspectedNetwork,
-    );
-    await journal.recordCreated(
-      this.owned(plan, networkId, "network_policy", {
-        networkName: name,
-        ...networkFacts(inspectedNetwork, networkId),
-        publishedPorts: networkPlan.publishedPorts,
-      }),
-    );
-    await journal.assertActive?.();
-    const ensured = await this.agentCommand(
-      plan,
-      runtime,
-      networkPlan,
-      "network.ensure",
-    );
-    assertNetworkResult(
-      ensured,
-      plan,
-      runtime,
-      "installed",
-      networkPlan.expectedRulesetHash,
-    );
-    const verified = await this.agentCommand(
-      plan,
-      runtime,
-      networkPlan,
-      "network.inspect",
-    );
-    assertNetworkResult(
-      verified,
-      plan,
-      runtime,
-      "present",
-      networkPlan.expectedRulesetHash,
-    );
+    if (plainBridge(plan)) {
+      this.assertNativeBridge(plan, runtime, inspectedNetwork, [
+        inspectedContainer,
+      ]);
+    } else {
+      const networkPlan = this.networkPlan(
+        plan,
+        runtime,
+        networkId,
+        name,
+        [containerId],
+        undefined,
+        inspectedContainer,
+        inspectedNetwork,
+      );
+      await journal.recordCreated(
+        this.owned(plan, networkId, "network_policy", {
+          networkName: name,
+          ...networkFacts(inspectedNetwork, networkId),
+          publishedPorts: networkPlan.publishedPorts,
+        }),
+      );
+      await journal.assertActive?.();
+      const ensured = await this.agentCommand(
+        plan,
+        runtime,
+        networkPlan,
+        "network.ensure",
+      );
+      assertNetworkResult(
+        ensured,
+        plan,
+        runtime,
+        "installed",
+        networkPlan.expectedRulesetHash,
+      );
+      const verified = await this.agentCommand(
+        plan,
+        runtime,
+        networkPlan,
+        "network.inspect",
+      );
+      assertNetworkResult(
+        verified,
+        plan,
+        runtime,
+        "present",
+        networkPlan.expectedRulesetHash,
+      );
+    }
     await this.assertStorageCapacity(plan);
     await this.assertMounts(plan);
     await journal.assertActive?.();
@@ -735,43 +741,52 @@ export class PortainerExecutionProvider implements ExecutionPort {
       publishedPorts: [],
     });
     await journal.recordCreated(boundNetwork);
-    const agentPlan = this.networkPlan(
-      plan,
-      runtime,
-      networkId,
-      name,
-      created.map((c) => c.id),
-      [],
-      undefined,
-      network,
-      memberLinks,
-    );
-    const ensured = await this.agentCommand(
-      plan,
-      runtime,
-      agentPlan,
-      "network.ensure",
-    );
-    assertNetworkResult(
-      ensured,
-      plan,
-      runtime,
-      "installed",
-      agentPlan.expectedRulesetHash,
-    );
-    const checked = await this.agentCommand(
-      plan,
-      runtime,
-      agentPlan,
-      "network.inspect",
-    );
-    assertNetworkResult(
-      checked,
-      plan,
-      runtime,
-      "present",
-      agentPlan.expectedRulesetHash,
-    );
+    if (plainBridge(plan)) {
+      this.assertNativeBridge(
+        plan,
+        runtime,
+        network,
+        created.map((c) => c.detail),
+      );
+    } else {
+      const agentPlan = this.networkPlan(
+        plan,
+        runtime,
+        networkId,
+        name,
+        created.map((c) => c.id),
+        [],
+        undefined,
+        network,
+        memberLinks,
+      );
+      const ensured = await this.agentCommand(
+        plan,
+        runtime,
+        agentPlan,
+        "network.ensure",
+      );
+      assertNetworkResult(
+        ensured,
+        plan,
+        runtime,
+        "installed",
+        agentPlan.expectedRulesetHash,
+      );
+      const checked = await this.agentCommand(
+        plan,
+        runtime,
+        agentPlan,
+        "network.inspect",
+      );
+      assertNetworkResult(
+        checked,
+        plan,
+        runtime,
+        "present",
+        agentPlan.expectedRulesetHash,
+      );
+    }
     for (const c of created) {
       await journal.assertActive?.();
       if (record(c.detail.State).Running !== true)
@@ -842,6 +857,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
     const architecture = dockerArchitecture(
       (await this.request(runtime, "GET", "info")).Architecture,
     );
+    const observedMembers: Json[] = [];
     for (const member of members) {
       const owned = objects.find(
         (o) => o.kind === "container" && o.details?.memberName === member.name,
@@ -856,6 +872,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
         "GET",
         `containers/${encodeURIComponent(owned.id)}/json`,
       );
+      observedMembers.push(detail);
       const image = await this.inspectImage(
         runtime,
         member.plan.artifact.ref,
@@ -887,30 +904,34 @@ export class PortainerExecutionProvider implements ExecutionPort {
     );
     const memberLinks = runtimeLinksForResources(plan, objects);
     if (!memberLinks) throw new Error("Group link inventory is incomplete");
-    const networkPlan = this.networkPlan(
-      plan,
-      runtime,
-      networkResource.id,
-      resourceName(plan),
-      objects.filter((o) => o.kind === "container").map((o) => o.id),
-      [],
-      undefined,
-      network,
-      memberLinks,
-    );
-    const verified = await this.agentCommand(
-      plan,
-      runtime,
-      networkPlan,
-      "network.inspect",
-    );
-    assertNetworkResult(
-      verified,
-      plan,
-      runtime,
-      "present",
-      networkPlan.expectedRulesetHash,
-    );
+    if (plainBridge(plan)) {
+      this.assertNativeBridge(plan, runtime, network, observedMembers);
+    } else {
+      const networkPlan = this.networkPlan(
+        plan,
+        runtime,
+        networkResource.id,
+        resourceName(plan),
+        objects.filter((o) => o.kind === "container").map((o) => o.id),
+        [],
+        undefined,
+        network,
+        memberLinks,
+      );
+      const verified = await this.agentCommand(
+        plan,
+        runtime,
+        networkPlan,
+        "network.inspect",
+      );
+      assertNetworkResult(
+        verified,
+        plan,
+        runtime,
+        "present",
+        networkPlan.expectedRulesetHash,
+      );
+    }
     return {
       identity: plan.identity,
       artifactDigest: plan.artifact.digest,
@@ -935,6 +956,64 @@ export class PortainerExecutionProvider implements ExecutionPort {
       bootstrapComplete: true,
       offlineLeaseEnforcement: "unsupported",
     };
+  }
+
+  /** Native Docker bridge delivery: no host policy, sysctl, or Runtime network action. */
+  private assertNativeBridge(
+    plan: ProvisionPlan,
+    runtime: RuntimeAccess,
+    network: Json,
+    containers: readonly Json[],
+  ) {
+    const subnet = subnetAddress(network);
+    if (
+      network.Name !== resourceName(plan) ||
+      network.Driver !== "bridge" ||
+      network.Internal !== false ||
+      network.EnableIPv6 !== false ||
+      !matchesOwnership(record(network.Labels), plan) ||
+      !cidrContains(runtime.networkCidrBase, subnet)
+    )
+      throw new Error(
+        "Native Docker bridge differs from the frozen allocation",
+      );
+    for (const container of containers) {
+      const host = record(container.HostConfig);
+      const attachments = Object.values(
+        record(record(container.NetworkSettings).Networks),
+      ).map(record);
+      if (
+        !matchesOwnership(record(record(container.Config).Labels), plan) ||
+        host.NetworkMode !== network.Name ||
+        host.Privileged === true ||
+        host.PublishAllPorts === true ||
+        Object.keys(record(host.PortBindings)).length ||
+        containerPorts(container).length ||
+        attachments.length !== 1 ||
+        attachments[0]?.NetworkID !== network.Id
+      )
+        throw new Error(
+          "Container must use only its owned bridge with no published host ports",
+        );
+      if (
+        record(container.State).Running === true &&
+        !cidrContains(
+          subnet,
+          `${requiredString(attachments[0]?.IPAddress, "Container bridge IPv4")}/32`,
+        )
+      )
+        throw new Error("Container address is outside its owned bridge");
+    }
+    const running = containers
+      .filter((c) => record(c.State).Running === true)
+      .map((c) => String(c.Id))
+      .sort();
+    if (
+      running.length &&
+      JSON.stringify(Object.keys(record(network.Containers)).sort()) !==
+        JSON.stringify(running)
+    )
+      throw new Error("Native Docker bridge has unexpected attached members");
   }
 
   private async createNative(
@@ -1274,47 +1353,53 @@ export class PortainerExecutionProvider implements ExecutionPort {
           evidence,
           integrity: { state: "lost", reason: "CONTAINER_GUARANTEE_LOST" },
         };
-      const networkPlan = this.networkPlan(
-        plan,
-        runtime,
-        networkResource.id,
-        String(networkResource.details?.networkName),
-        containers.map((item) => item.id),
-        undefined,
-        containerDetail,
-        networkDetail,
-      );
-      const networkResult = await this.agentCommand(
-        plan,
-        runtime,
-        networkPlan,
-        "network.inspect",
-      );
-      const boundToSnapshot =
-        networkResult.nativeEngineId === runtime.engineId &&
-        networkResult.operationId === plan.identity.operationId &&
-        networkResult.allocationId === plan.identity.allocationId &&
-        networkResult.generation === plan.identity.generation;
-      if (!boundToSnapshot)
-        return { presence: "unknown", reason: "runtime_identity_mismatch" };
-      if (networkResult.status === "unknown")
-        return {
-          presence: "present",
-          evidence,
-          integrity: {
-            state: "lost",
-            reason: "NETWORK_GUARANTEE_UNVERIFIED",
-          },
-        };
-      if (
-        networkResult.status !== "present" ||
-        networkResult.rulesetHash !== networkPlan.expectedRulesetHash
-      )
-        return {
-          presence: "present",
-          evidence,
-          integrity: { state: "lost", reason: "NETWORK_GUARANTEE_LOST" },
-        };
+      if (plainBridge(plan)) {
+        this.assertNativeBridge(plan, runtime, networkDetail, [
+          containerDetail,
+        ]);
+      } else {
+        const networkPlan = this.networkPlan(
+          plan,
+          runtime,
+          networkResource.id,
+          String(networkResource.details?.networkName),
+          containers.map((item) => item.id),
+          undefined,
+          containerDetail,
+          networkDetail,
+        );
+        const networkResult = await this.agentCommand(
+          plan,
+          runtime,
+          networkPlan,
+          "network.inspect",
+        );
+        const boundToSnapshot =
+          networkResult.nativeEngineId === runtime.engineId &&
+          networkResult.operationId === plan.identity.operationId &&
+          networkResult.allocationId === plan.identity.allocationId &&
+          networkResult.generation === plan.identity.generation;
+        if (!boundToSnapshot)
+          return { presence: "unknown", reason: "runtime_identity_mismatch" };
+        if (networkResult.status === "unknown")
+          return {
+            presence: "present",
+            evidence,
+            integrity: {
+              state: "lost",
+              reason: "NETWORK_GUARANTEE_UNVERIFIED",
+            },
+          };
+        if (
+          networkResult.status !== "present" ||
+          networkResult.rulesetHash !== networkPlan.expectedRulesetHash
+        )
+          return {
+            presence: "present",
+            evidence,
+            integrity: { state: "lost", reason: "NETWORK_GUARANTEE_LOST" },
+          };
+      }
       {
         try {
           await this.assertMounts(plan);
@@ -1412,29 +1497,33 @@ export class PortainerExecutionProvider implements ExecutionPort {
       "GET",
       `networks/${encodeURIComponent(networkResource.id)}`,
     );
-    const networkPlan = this.networkPlan(
-      plan,
-      runtime,
-      networkResource.id,
-      String(containerResource.details?.networkName ?? resourceName(plan)),
-      [containerResource.id],
-      undefined,
-      detail,
-      networkInspect,
-    );
-    const net = await this.agentCommand(
-      plan,
-      runtime,
-      networkPlan,
-      "network.inspect",
-    );
-    assertNetworkResult(
-      net,
-      plan,
-      runtime,
-      "present",
-      networkPlan.expectedRulesetHash,
-    );
+    if (plainBridge(plan)) {
+      this.assertNativeBridge(plan, runtime, networkInspect, [detail]);
+    } else {
+      const networkPlan = this.networkPlan(
+        plan,
+        runtime,
+        networkResource.id,
+        String(containerResource.details?.networkName ?? resourceName(plan)),
+        [containerResource.id],
+        undefined,
+        detail,
+        networkInspect,
+      );
+      const net = await this.agentCommand(
+        plan,
+        runtime,
+        networkPlan,
+        "network.inspect",
+      );
+      assertNetworkResult(
+        net,
+        plan,
+        runtime,
+        "present",
+        networkPlan.expectedRulesetHash,
+      );
+    }
     const receipt: ReadyReceipt = {
       identity: plan.identity,
       artifactDigest: plan.artifact.digest,
@@ -1514,6 +1603,10 @@ export class PortainerExecutionProvider implements ExecutionPort {
     const journaledNetwork = plan.cleanupResources?.find(
       (r) => r.kind === "network_policy",
     );
+    if (plainBridge(plan)) {
+      await this.stopOwnedContainers(runtime, containerIds);
+      return;
+    }
     if (!network) {
       if (containerIds.length === 0) return;
       await this.stopOwnedContainers(runtime, containerIds);
@@ -1670,6 +1763,34 @@ export class PortainerExecutionProvider implements ExecutionPort {
         undefined,
         [404],
       );
+      if (plainBridge(plan)) {
+        if (detail.Id) {
+          if (
+            !matchesOwnership(record(detail.Labels), plan) ||
+            !hasNoAttachedEndpoints(detail)
+          )
+            throw new Error(
+              "Owned Docker bridge must be empty before deletion",
+            );
+          await this.request(
+            runtime,
+            "DELETE",
+            `networks/${encodeURIComponent(resource.id)}`,
+            undefined,
+            [404],
+          );
+        }
+        const absent = await this.request(
+          runtime,
+          "GET",
+          `networks/${encodeURIComponent(resource.id)}`,
+          undefined,
+          [404],
+        );
+        if (absent.Id)
+          throw new Error("Owned Docker bridge deletion is not confirmed");
+        return this.cleanupReceipt(plan, resource, "not_applicable");
+      }
       if (
         !detail.Id &&
         (typeof resource.details?.networkSubnet !== "string" ||
@@ -2540,6 +2661,20 @@ function sha256(value: unknown): string {
 }
 function assertDockerRecipe(plan: ProvisionPlan) {
   if (
+    plainBridge(plan) &&
+    (plan.accessProtocol !== "none" ||
+      plan.resolved.network.mode !== "isolated_bridge" ||
+      plan.resolved.network.verificationRequired !== false ||
+      plan.resolved.network.ipv6 !== "disabled" ||
+      plan.resolved.network.allowedEgress.length ||
+      plan.resolved.network.allowedIngressSourceCidrs.length ||
+      plan.resolved.network.managementDenyRules.length)
+  )
+    throw new Error(
+      "Native Docker bridge requires its no-published-access contract",
+    );
+
+  if (
     plan.accessProtocol === "none" &&
     supportsContainerEntrypoint(
       {
@@ -2625,4 +2760,8 @@ function readTarFile(archive: Buffer, wanted: string): Buffer {
     offset = start + Math.ceil(size / 512) * 512;
   }
   throw new Error(`Docker archive is missing ${wanted}`);
+}
+
+function plainBridge(plan: ProvisionPlan): boolean {
+  return plan.resolved.network.enforcement === "docker_bridge";
 }

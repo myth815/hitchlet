@@ -40,7 +40,7 @@ function seed(referenceCount = 0) {
     CREATE TABLE allocations(id,ticket_id,purpose,runtime_identity_id,generation,control_version,desired_state,observed_state,cleanup_status,manifest_complete,manifest_id,resolved_provision_contract_id,actual_resources_json,image_artifact_id,node_id);
     CREATE TABLE image_artifacts(id,requirements_json,content_digest);
     CREATE TABLE installations(singleton,installation_id);
-    CREATE TABLE resolved_provision_contracts(id,contract_hash,node_id);
+    CREATE TABLE resolved_provision_contracts(id,contract_hash,node_id,network_binding_json);
     CREATE TABLE managed_resources(id,provider_id,allocation_id,generation,kind,ownership,observed_state,ownership_json,details_json);
     CREATE TABLE operations(id,allocation_id,installation_id,generation,control_version,runtime_identity_id,connection_revision_id,kind,state,created_at_ms,updated_at_ms,result_json,intent_json,attempt_count);
     CREATE TABLE capacity_claims(allocation_id,state);`);

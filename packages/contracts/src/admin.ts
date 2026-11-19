@@ -64,13 +64,25 @@ const access = z
   .strict();
 const networkPolicy = z
   .object({
-    /** Applies to Tart only; Docker retains its enforced profile. */
+    /** Each backend freezes its own declared mode. Omitted Docker mode retains filtered leases. */
     tartMode: z.enum(["trusted_nat", "isolated"]).optional(),
+    dockerMode: z.enum(["bridge", "filtered"]).optional(),
     allowedEgress: z.array(networkDestinationSchema),
     allowedIngressSourceCidrs: z.array(z.string().min(1)),
     ipv6: z.enum(["disabled", "verified_equivalent"]),
   })
-  .strict();
+  .strict()
+  .refine(
+    (p) =>
+      p.dockerMode !== "bridge" ||
+      (p.allowedEgress.length === 0 &&
+        p.allowedIngressSourceCidrs.length === 0 &&
+        p.ipv6 === "disabled"),
+    {
+      message:
+        "Docker bridge mode uses native networking without fine-grained ingress/egress rules",
+    },
+  );
 const storageConfig = z
   .object({
     sourceRef: z.string().min(1),

@@ -347,14 +347,17 @@ export class TicketService {
       throw new RangeError("Invalid Tart network mode");
     const trustedNat =
       contract.kind === "vm" && networkPolicy.tartMode !== "isolated";
+    const dockerBridge =
+      contract.kind === "container" && networkPolicy.dockerMode === "bridge";
+    const unfiltered = trustedNat || dockerBridge;
     const declaredEgress = parseDestinations(networkPolicy.allowedEgress);
     if (
       contract.kind === "vm" &&
       declaredEgress.some((r) => r.destinationScope === "host")
     )
       throw new ApplicationError("environment_unsupported");
-    const allowedEgress = trustedNat ? [] : declaredEgress;
-    const allowedIngressSourceCidrs = trustedNat
+    const allowedEgress = unfiltered ? [] : declaredEgress;
+    const allowedIngressSourceCidrs = unfiltered
       ? []
       : stringListRequired(
           networkPolicy.allowedIngressSourceCidrs,
@@ -396,16 +399,18 @@ export class TicketService {
             : "isolated_bridge",
         allowedEgress,
         allowedIngressSourceCidrs,
-        managementDenyRules: trustedNat
+        managementDenyRules: unfiltered
           ? []
           : parseDenyRules(deny.management_deny_rules_json),
         ipv6: trustedNat ? "not_enforced" : networkPolicy.ipv6,
-        enforcement: trustedNat
-          ? "tart_nat"
-          : contract.kind === "vm"
-            ? "tart_agent"
-            : "docker_iptables",
-        verificationRequired: !trustedNat,
+        enforcement: dockerBridge
+          ? "docker_bridge"
+          : trustedNat
+            ? "tart_nat"
+            : contract.kind === "vm"
+              ? "tart_agent"
+              : "docker_iptables",
+        verificationRequired: !unfiltered,
       },
     };
     return {
@@ -842,6 +847,7 @@ export class TicketService {
       caps.cpuHardLimit !== "verified" ||
       caps.memoryHardLimit !== "verified" ||
       (object(frozen.network).mode !== "trusted_nat" &&
+        object(frozen.network).enforcement !== "docker_bridge" &&
         caps.networkPolicyEnforcement !== "verified") ||
       (contract.resources.scratchEnforcement === "required" &&
         caps.scratchHardLimit !== "verified") ||
@@ -850,14 +856,16 @@ export class TicketService {
       hardReasons.add("capabilities_unavailable");
     if (
       contract.access.protocol !== "none" &&
-      !stringListRequired(
-        caps.supportedAccess,
-        "node access protocols",
-      ).includes(contract.access.protocol)
+      (object(frozen.network).enforcement === "docker_bridge" ||
+        !stringListRequired(
+          caps.supportedAccess,
+          "node access protocols",
+        ).includes(contract.access.protocol))
     )
       hardReasons.add("access_unavailable");
     if (
       object(frozen.network).mode !== "trusted_nat" &&
+      object(frozen.network).enforcement !== "docker_bridge" &&
       !stringList(caps.verifiedNetworkProfileRevisionIds).includes(
         networkRevisionId,
       )

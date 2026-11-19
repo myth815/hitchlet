@@ -193,6 +193,21 @@ export function validateNetworkProfile(value: unknown) {
     throw new RangeError(
       "Network profile must declare allowed egress, ingress sources, and IPv6 policy",
     );
+  if (
+    p.dockerMode !== undefined &&
+    p.dockerMode !== "bridge" &&
+    p.dockerMode !== "filtered"
+  )
+    throw new RangeError("Invalid Docker network mode");
+  if (
+    p.dockerMode === "bridge" &&
+    ((p.allowedEgress as unknown[]).length ||
+      (p.allowedIngressSourceCidrs as unknown[]).length ||
+      p.ipv6 !== "disabled")
+  )
+    throw new RangeError(
+      "Docker bridge mode does not declare fine-grained ingress/egress rules",
+    );
   const cidr = (candidate: unknown) => {
     if (typeof candidate !== "string") return false;
     const [address, prefix, extra] = candidate.split("/");

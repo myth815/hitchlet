@@ -23,6 +23,7 @@ export const PRE_READY_CLEANUP_PROOF_SQL = `SELECT
  a.desired_state AS desiredState,a.observed_state AS observedState,a.cleanup_status AS allocationCleanup,
  a.manifest_id AS manifestId,a.manifest_complete AS manifestComplete,
  a.resolved_provision_contract_id AS resolvedId,r.contract_hash AS contractHash,ia.requirements_json AS requirementsJson,
+ COALESCE(json_extract(r.network_binding_json,'$.enforcement'),'docker_iptables') AS networkEnforcement,
  (SELECT installation_id FROM installations WHERE singleton=1) AS installationId,
  (SELECT count(*) FROM capacity_claims c WHERE c.allocation_id=a.id) AS claimCount,
  (SELECT count(*) FROM capacity_claims c WHERE c.allocation_id=a.id AND c.state<>'released') AS unreleasedClaims,
@@ -285,7 +286,10 @@ export async function readPreReadyCleanupProof(
             receipt.verifiedAtMs >= cleanup.createdAt &&
             receipt.verifiedAtMs <= cleanup.verifiedAt &&
             (receipt.kind === "network_policy"
-              ? ["removed", "never_installed"].includes(receipt.networkRules)
+              ? (row.networkEnforcement === "docker_bridge"
+                  ? ["not_applicable"]
+                  : ["removed", "never_installed"]
+                ).includes(receipt.networkRules)
               : receipt.networkRules === "not_applicable"),
         );
     }

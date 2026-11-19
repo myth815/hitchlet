@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { FileJournal } from "./journal.js";
 import { EnginePreflightError, LocalEngine } from "./engine.js";
-import { IptablesFirewall, IptablesRunner } from "./firewall.js";
+import { IptablesFirewall } from "./firewall.js";
 import { NetworkWorker } from "./worker.js";
 import { createRuntimeServer, listenRuntimeServer } from "./server.js";
 
@@ -43,7 +43,8 @@ async function start(): Promise<void> {
   });
   await engine.assertEngine();
   process.stdout.write(`Hitchlet Runtime Agent Docker mode: ${engine.mode}\n`);
-  await new IptablesRunner().requireChain("DOCKER-USER");
+  // Host-chain checks belong to explicit network actions. Storage-only and
+  // native-bridge leases do not read or install host firewall policy at startup.
   const journal = new FileJournal(parsed.journalFile);
   await journal.initialize();
   const worker = new NetworkWorker(
