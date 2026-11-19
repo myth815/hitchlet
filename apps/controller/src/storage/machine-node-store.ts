@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { StorageError, type Storage } from "./index.js";
 import { ApplicationError } from "../application/errors.js";
-import { validAttestedCapability } from "../domain/attested-capability.js";
+import {
+  validAttestedCapability,
+  passedCapabilityScopes,
+  PORTAINER_FILTERED_SCOPES,
+} from "../domain/attested-capability.js";
 import { isNodeObservationFresh } from "../domain/human-use.js";
 import {
   evaluateMachineAdmission,
@@ -859,7 +863,8 @@ export class SQLiteMachineNodeStore {
       scopes: Readonly<
         Record<
           string,
-          Readonly<{ status: "passed"; summary: string; evidenceRef: string }>
+          | Readonly<{ status: "passed"; summary: string; evidenceRef: string }>
+          | undefined
         >
       >;
     }>;
@@ -899,18 +904,30 @@ export class SQLiteMachineNodeStore {
       !Number.isSafeInteger(validForSeconds) ||
       validForSeconds < 3600 ||
       validForSeconds > 30 * 24 * 3600 ||
-      Object.keys(input.report.scopes).length !== 6
+      !passedCapabilityScopes(input.report.scopes, ["resourceLimits"])
     )
       throw new RangeError(
-        "Manual test report must match the current Engine and include all six passed test scopes",
+        "Manual test report must match the current Engine and include passed resource-limit evidence",
       );
     const revisions = await this.db.all<Row>(
-      `SELECT id FROM network_profile_revisions WHERE id IN (${input.networkProfileRevisionIds.map(() => "?").join(",")})`,
+      `SELECT id,policy_json FROM network_profile_revisions WHERE id IN (${input.networkProfileRevisionIds.map(() => "?").join(",")})`,
       [...input.networkProfileRevisionIds],
     );
     if (revisions.length !== input.networkProfileRevisionIds.length)
       throw new RangeError(
         "Capability report references an unknown network revision",
+      );
+    const filteredRevisions = revisions.filter(
+      (revision) =>
+        parseJson(String(revision.policy_json)).dockerMode !== "bridge",
+    );
+    const filteredVerified = passedCapabilityScopes(
+      input.report.scopes,
+      PORTAINER_FILTERED_SCOPES,
+    );
+    if (filteredRevisions.length && !filteredVerified)
+      throw new RangeError(
+        "Filtered Docker revisions require all six passed test scopes",
       );
     const storageRevisions = input.storageProfileRevisionIds ?? [];
     if (storageRevisions.length) {
@@ -965,11 +982,15 @@ export class SQLiteMachineNodeStore {
       cpuHardLimit: "verified",
       memoryHardLimit: "verified",
       scratchHardLimit: "unsupported",
-      networkPolicyEnforcement: "verified",
+      networkPolicyEnforcement: filteredVerified ? "verified" : "unsupported",
       storagePolicyEnforcement: storageRevisions.length
         ? "verified"
         : "unsupported",
-      supportedAccess: ["ssh"],
+      supportedAccess: passedCapabilityScopes(input.report.scopes, [
+        "sshBootstrap",
+      ])
+        ? ["ssh"]
+        : [],
       resourceKinds: ["container"],
       architectures: [input.architecture],
       guestOs: ["linux"],
@@ -978,7 +999,9 @@ export class SQLiteMachineNodeStore {
         memoryMiB: integer(pool.total_memory_mib),
         scratchMiB: integer(pool.total_scratch_mib),
       },
-      verifiedNetworkProfileRevisionIds: [...input.networkProfileRevisionIds],
+      verifiedNetworkProfileRevisionIds: filteredVerified
+        ? filteredRevisions.map((revision) => String(revision.id))
+        : [],
       verifiedStorageProfileRevisionIds: [...storageRevisions],
       providerVersion: `Portainer/${input.portainerVersion}; Docker/${input.dockerVersion}`,
       expiresAt: new Date(checkedAt + validForSeconds * 1000).toISOString(),

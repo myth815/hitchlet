@@ -2,7 +2,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Validates the stored evidence envelope used by Node health and formal admission. */
+export const PORTAINER_FILTERED_SCOPES = [
+  "resourceLimits",
+  "firewallInput",
+  "firewallForward",
+  "ipv6",
+  "sshBootstrap",
+  "cleanupRecovery",
+] as const;
+
+export function passedCapabilityScopes(
+  scopes: unknown,
+  names: readonly string[],
+): boolean {
+  return (
+    isRecord(scopes) &&
+    names.every(
+      (name) => isRecord(scopes[name]) && scopes[name].status === "passed",
+    )
+  );
+}
+
+/** Base Docker health requires resource evidence; selected filtered/SSH work uses its own verified capability fields. */
 export function validAttestedCapability(
   value: unknown,
   now: number,
@@ -21,7 +42,6 @@ export function validAttestedCapability(
     typeof value.connectionRevisionId !== "string" ||
     value.cpuHardLimit !== "verified" ||
     value.memoryHardLimit !== "verified" ||
-    value.networkPolicyEnforcement !== "verified" ||
     typeof value.capabilityFingerprint !== "string" ||
     !/^[a-f0-9]{64}$/.test(value.capabilityFingerprint) ||
     typeof value.providerVersion !== "string" ||
@@ -32,21 +52,13 @@ export function validAttestedCapability(
     return false;
   const report = value.manualReport;
   if (!isRecord(report) || typeof report.sha256 !== "string") return false;
-  const scopes = report.scopes;
-  const names = [
-    "resourceLimits",
-    "firewallInput",
-    "firewallForward",
-    "ipv6",
-    "sshBootstrap",
-    "cleanupRecovery",
-  ];
   return (
-    isRecord(scopes) &&
-    Object.keys(scopes).length === names.length &&
-    names.every(
-      (name) => isRecord(scopes[name]) && scopes[name].status === "passed",
-    )
+    passedCapabilityScopes(report.scopes, ["resourceLimits"]) &&
+    (value.networkPolicyEnforcement !== "verified" ||
+      passedCapabilityScopes(report.scopes, PORTAINER_FILTERED_SCOPES)) &&
+    (!Array.isArray(value.supportedAccess) ||
+      !value.supportedAccess.includes("ssh") ||
+      passedCapabilityScopes(report.scopes, ["sshBootstrap"]))
   );
 }
 

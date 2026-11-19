@@ -525,9 +525,14 @@ describe("profile grant administration and management replay", () => {
 });
 
 describe("D24 management and safe consumer directory", () => {
-  it.each(["injected JSON parser", "real loopback HTTP"])(
-    "parses the actual SQLite capability receipt through SDK and %s with the unchanged bare-hex fingerprint",
-    async (transport) => {
+  it.each([
+    ["injected JSON parser", false],
+    ["real loopback HTTP", false],
+    ["injected JSON parser", true],
+    ["real loopback HTTP", true],
+  ])(
+    "parses the actual SQLite capability receipt through SDK and %s with the unchanged bare-hex fingerprint (bridge=%s)",
+    async (transport, dockerBridge) => {
       const f = await fixture(true),
         evidence = {
           engineId: "receipt-engine",
@@ -623,22 +628,41 @@ describe("D24 management and safe consumer directory", () => {
         1,
         "receipt-runtime",
       );
-      const revision = (await f.db.get<{ current_revision_id: string }>(
-          "SELECT current_revision_id FROM network_profiles WHERE id=?",
-          [f.networkId],
-        ))!.current_revision_id,
+      const revision = dockerBridge
+          ? (
+              await client.admin.inventory.createNetwork(
+                {
+                  name: "native bridge receipt",
+                  policy: {
+                    dockerMode: "bridge",
+                    allowedEgress: [],
+                    allowedIngressSourceCidrs: [],
+                    ipv6: "disabled",
+                  },
+                  authorizedConsumerIds: [f.adminId],
+                },
+                "bridge-profile",
+              )
+            ).revisionId
+          : (await f.db.get<{ current_revision_id: string }>(
+              "SELECT current_revision_id FROM network_profiles WHERE id=?",
+              [f.networkId],
+            ))!.current_revision_id,
         report = {
           runId: randomUUID(),
           sha256: "b".repeat(64),
           scopes: Object.fromEntries(
-            [
-              "resourceLimits",
-              "firewallInput",
-              "firewallForward",
-              "ipv6",
-              "sshBootstrap",
-              "cleanupRecovery",
-            ].map((scope) => [
+            (dockerBridge
+              ? ["resourceLimits"]
+              : [
+                  "resourceLimits",
+                  "firewallInput",
+                  "firewallForward",
+                  "ipv6",
+                  "sshBootstrap",
+                  "cleanupRecovery",
+                ]
+            ).map((scope) => [
               scope,
               {
                 status: "passed" as const,
@@ -658,6 +682,31 @@ describe("D24 management and safe consumer directory", () => {
           networkProfileRevisionIds: [revision],
           storageProfileRevisionIds: [],
         },
+        rejectUnrelatedQualification = dockerBridge
+          ? await (async () => {
+              const filteredRevision = (await f.db.get<{
+                current_revision_id: string;
+              }>(
+                "SELECT current_revision_id FROM network_profiles WHERE id=?",
+                [f.networkId],
+              ))!.current_revision_id;
+              await expect(
+                client.admin.inventory.attestCapabilities(
+                  node.id,
+                  { ...body, networkProfileRevisionIds: [filteredRevision] },
+                  configured.version,
+                  "reject-filtered-partial",
+                ),
+              ).rejects.toMatchObject({ statusCode: 422 });
+              expect(
+                (await f.db.get<{ admission: string }>(
+                  "SELECT admission FROM nodes WHERE id=?",
+                  [node.id],
+                ))!.admission,
+              ).toBe("disabled");
+              return true;
+            })()
+          : false,
         receipt = await client.admin.inventory.attestCapabilities(
           node.id,
           body,
@@ -679,6 +728,7 @@ describe("D24 management and safe consumer directory", () => {
             }),
           )
           .digest("hex");
+      expect(rejectUnrelatedQualification).toBe(dockerBridge);
       expect(receipt).toMatchObject({
         nodeId: node.id,
         admission: "enabled",
@@ -700,6 +750,16 @@ describe("D24 management and safe consumer directory", () => {
         node.id,
       ]))!;
       expect(saved.admission).toBe("enabled");
+      if (dockerBridge) {
+        const capability = JSON.parse(saved.capabilities_json);
+        expect(capability.networkPolicyEnforcement).toBe("unsupported");
+        expect(capability.supportedAccess).toEqual([]);
+        expect(capability.verifiedNetworkProfileRevisionIds).toEqual([]);
+        expect(Object.keys(capability.manualReport.scopes)).toEqual([
+          "resourceLimits",
+        ]);
+      }
+
       expect(JSON.parse(saved.capabilities_json).capabilityFingerprint).toBe(
         expected,
       );

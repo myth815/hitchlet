@@ -546,6 +546,13 @@ export const ProviderConnectionInputSchema = z.union([
   TartConnectionInputSchema,
   HyperVConnectionInputSchema,
 ]);
+const portainerQualificationScope = z
+  .object({
+    status: z.literal("passed"),
+    summary: z.string().min(1).max(1000),
+    evidenceRef: z.string().min(1).max(500),
+  })
+  .strict();
 const capabilityReport = z
   .object({
     report: z
@@ -562,27 +569,14 @@ const capabilityReport = z
           .strict()
           .optional(),
         scopes: z
-          .object(
-            Object.fromEntries(
-              [
-                "resourceLimits",
-                "firewallInput",
-                "firewallForward",
-                "ipv6",
-                "sshBootstrap",
-                "cleanupRecovery",
-              ].map((key) => [
-                key,
-                z
-                  .object({
-                    status: z.literal("passed"),
-                    summary: z.string().min(1).max(1000),
-                    evidenceRef: z.string().min(1).max(500),
-                  })
-                  .strict(),
-              ]),
-            ),
-          )
+          .object({
+            resourceLimits: portainerQualificationScope,
+            firewallInput: portainerQualificationScope.optional(),
+            firewallForward: portainerQualificationScope.optional(),
+            ipv6: portainerQualificationScope.optional(),
+            sshBootstrap: portainerQualificationScope.optional(),
+            cleanupRecovery: portainerQualificationScope.optional(),
+          })
           .strict(),
       })
       .strict(),

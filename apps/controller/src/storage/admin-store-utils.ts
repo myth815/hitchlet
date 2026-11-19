@@ -1,3 +1,4 @@
+import { validAttestedCapability } from "../domain/attested-capability.js";
 import { dockerImageReferencePath } from "../domain/docker-image-reference.js";
 import {
   hyperVRuntimeFactsSchema,
@@ -77,7 +78,8 @@ export function projectCapabilities(value: string, now = Date.now()) {
       c.cpuHardLimit === "verified" &&
       c.memoryHardLimit === "verified" &&
       (c.networkMode === "trusted_nat" ||
-        c.networkPolicyEnforcement === "verified"),
+        c.networkPolicyEnforcement === "verified" ||
+        validAttestedCapability(c, now)),
     expiresAt,
     architectures: Array.isArray(c.architectures)
       ? c.architectures.filter((x) => x === "amd64" || x === "arm64")

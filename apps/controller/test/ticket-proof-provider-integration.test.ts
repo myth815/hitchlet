@@ -1,6 +1,7 @@
 // Synthetic Portainer/SSH/Runtime transports; real ordinary Ticket, Provider,
 // OperationWorker, migrated SQLite journal and proof readers. No host operations.
 import { afterEach, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -65,6 +66,9 @@ function dockerTransport(
     dockerBridge?: boolean;
     extraAttachment?: boolean;
     publishedHostPort?: boolean;
+    networkDriver?: string;
+    gatewayMissingTun?: boolean;
+    gatewayForwardingDisabled?: boolean;
   } = { loseGatewayCreateResponse: false },
 ) {
   type Json = Record<string, any>;
@@ -120,6 +124,7 @@ function dockerTransport(
             ],
           },
         };
+        if (faults.networkDriver) n.Driver = faults.networkDriver;
         networks.set(n.Id, n);
         return json({ Id: n.Id });
       }
@@ -135,6 +140,11 @@ function dockerTransport(
           faults.gatewayCapabilities
         )
           body.HostConfig.CapAdd = [...faults.gatewayCapabilities];
+        if (body.Labels["io.hitchlet.member"] === "gateway") {
+          if (faults.gatewayMissingTun) body.HostConfig.Devices = [];
+          if (faults.gatewayForwardingDisabled)
+            body.HostConfig.Sysctls["net.ipv4.ip_forward"] = "0";
+        }
         const image =
           gateway && body.Image === gateway.artifactRef
             ? "synthetic-gateway-image"
@@ -302,6 +312,9 @@ async function fixture(
     dockerBridge?: boolean;
     extraAttachment?: boolean;
     publishedHostPort?: boolean;
+    networkDriver?: string;
+    gatewayMissingTun?: boolean;
+    gatewayForwardingDisabled?: boolean;
   } = { loseGatewayCreateResponse: false },
 ) {
   vi.clearAllMocks();
@@ -359,11 +372,100 @@ async function fixture(
     [JSON.stringify([profile.revisionId])],
   );
   // Synthetic node qualification for this newly created fixture revision only.
-  if (faults.dockerBridge)
+  if (faults.dockerBridge) {
+    const node = (await storage.get<{ id: string; version: bigint }>(
+      "SELECT id,version FROM nodes",
+    ))!;
+    const adminId = (await storage.get<{ id: string }>(
+      "SELECT id FROM consumers WHERE role='admin'",
+    ))!.id;
+    const evidence = {
+      engineId: "hitchlet-simulator",
+      dockerVersion: "29.0.0",
+      portainerVersion: "2.45.2",
+      architecture: "amd64",
+      os: "linux",
+      cpuCount: 8,
+      memoryBytes: 16 * 1024 ** 3,
+      containerCount: 0,
+      unmanagedContainerCount: 0,
+      apiVersion: "1.54",
+      minimumApiVersion: "1.44",
+    };
     await storage.run(
-      "UPDATE nodes SET capabilities_json=json_remove(capabilities_json,'$.networkPolicyEnforcement','$.verifiedNetworkProfileRevisionIds')",
+      "INSERT INTO provider_connection_revisions(id,connection_id,revision,endpoint_ref,provider_endpoint_id,secret_version_ref,verified_runtime_identity_id,verified_at_ms,evidence_json,created_at_ms) SELECT ?,connection_id,revision+1,'https://portainer.test','1',?,verified_runtime_identity_id,?, ?,? FROM provider_connection_revisions",
+      [
+        randomUUID(),
+        "secret:" + "a".repeat(32),
+        now,
+        JSON.stringify(evidence),
+        now,
+      ],
     );
-  else if (networkProfile)
+    await storage.run(
+      "UPDATE provider_connections SET current_revision_id=(SELECT id FROM provider_connection_revisions ORDER BY revision DESC LIMIT 1)",
+    );
+    await storage.run(
+      "UPDATE nodes SET admission='disabled',config_json=json_set(config_json,'$.runtimeProfile',json('{}'))",
+    );
+    const admin = new AdminService(
+      storage,
+      async () => evidence,
+      clock,
+      false,
+      async () => "synthetic-only",
+    );
+    await admin.attestNodeCapabilities({
+      nodeId: node.id,
+      expectedVersion: Number(node.version),
+      engineId: evidence.engineId,
+      dockerVersion: evidence.dockerVersion,
+      portainerVersion: evidence.portainerVersion,
+      architecture: "amd64",
+      checkedAt: new Date(now).toISOString(),
+      networkProfileRevisionIds: [networkProfile!.revisionId],
+      storageProfileRevisionIds: [profile.revisionId],
+      operatorId: adminId,
+      requestId: randomUUID(),
+      report: {
+        runId: randomUUID(),
+        sha256: "a".repeat(64),
+        scopes: {
+          resourceLimits: {
+            status: "passed",
+            summary: "synthetic CPU/memory enforcement",
+            evidenceRef: "fixture:limits",
+          },
+        },
+        storageScopes: {
+          readOnly: "passed",
+          independentWrite: "passed",
+          sourceBoundary: "passed",
+          persistentSurvival: "passed",
+        },
+      },
+    });
+    await storage.run("UPDATE nodes SET observed_at_ms=?", [now - 46000]);
+    expect(await admin.refreshPortainerObservations()).toMatchObject({
+      checked: 1,
+      refreshed: 1,
+      unhealthy: 0,
+    });
+    expect((await admin.listNodes())[0]!.capabilities).toMatchObject({
+      verified: true,
+      supportedAccess: [],
+    });
+    const capability = JSON.parse(
+      (await storage.get<{ capabilities_json: string }>(
+        "SELECT capabilities_json FROM nodes",
+      ))!.capabilities_json,
+    );
+    expect(capability.networkPolicyEnforcement).toBe("unsupported");
+    expect(capability.verifiedNetworkProfileRevisionIds).toEqual([]);
+    expect(Object.keys(capability.manualReport.scopes)).toEqual([
+      "resourceLimits",
+    ]);
+  } else if (networkProfile)
     await storage.run(
       "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.verifiedNetworkProfileRevisionIds',json(?))",
       [JSON.stringify([networkProfile.revisionId])],
@@ -533,6 +635,9 @@ async function fixture(
     faults.gatewayCapabilities === undefined &&
     !faults.extraAttachment &&
     !faults.publishedHostPort &&
+    !faults.networkDriver &&
+    !faults.gatewayMissingTun &&
+    !faults.gatewayForwardingDisabled &&
     !faults.skipProvision &&
     !faults.skipReserve
   )
@@ -1064,22 +1169,87 @@ it.each([
       },
       authorizedConsumerIds: [adminId, f.consumerId],
     });
-    const run = await admin.scheduleValidation({
-      versionId: draft.versionId,
-      requestedBy: adminId,
-      imageArtifactId: draft.artifactId,
-      nodeId,
-      networkProfileId: f.networkId,
-      storage: [],
-      deadlineSeconds: 120,
-      resources: {
-        request: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
-        limit: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
-        isolation: "shared_kernel",
-        scratchEnforcement: "best_effort",
-        accelerators: [],
-      },
-    });
+    const validationRequest: Parameters<AdminService["scheduleValidation"]>[0] =
+      {
+        versionId: draft.versionId,
+        requestedBy: adminId,
+        imageArtifactId: draft.artifactId,
+        nodeId,
+        networkProfileId: f.networkId,
+        storage: [],
+        deadlineSeconds: 120,
+        resources: {
+          request: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+          limit: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+          isolation: "shared_kernel",
+          scratchEnforcement: "best_effort",
+          accelerators: [],
+        },
+      };
+    if (dockerBridge && !group) {
+      const original = (await f.storage.get<{ capabilities_json: string }>(
+        "SELECT capabilities_json FROM nodes",
+      ))!.capabilities_json;
+      const filtered = await admin.createProfile("network", {
+        name: "synthetic filtered revision",
+        config: {
+          allowedEgress: [],
+          allowedIngressSourceCidrs: [],
+          ipv6: "disabled",
+        },
+        authorizedConsumerIds: [adminId, f.consumerId],
+      });
+      for (const missing of [
+        "cpuHardLimit",
+        "memoryHardLimit",
+        "capacity",
+        "expiresAt",
+        "filtered",
+      ] as const) {
+        const caps = JSON.parse(original);
+        if (missing === "expiresAt")
+          caps.expiresAt = new Date(f.clock() - 1).toISOString();
+        else if (missing !== "filtered") delete caps[missing];
+        await f.storage.run("UPDATE nodes SET capabilities_json=?", [
+          JSON.stringify(caps),
+        ]);
+        const networkProfileId =
+          missing === "filtered" ? filtered.id : f.networkId;
+        const blocked = await admin.scheduleValidation({
+          ...validationRequest,
+          networkProfileId,
+        });
+        expect(blocked).toMatchObject({
+          scheduler: "blocked",
+          blockReason: "node_capacity_or_network_capability_unverified",
+        });
+        expect(
+          await f.storage.get(
+            "SELECT id FROM allocations WHERE image_validation_id=?",
+            [blocked.validationId],
+          ),
+        ).toBeUndefined();
+        await admin.cancelValidation(blocked.validationId);
+        if (missing !== "capacity") {
+          const preview = await f.tickets.preview(f.consumerId, {
+            image: { versionId: f.ready.pinnedImageVersionId },
+            networkProfileId,
+            resources: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+            access: { protocol: "none" },
+          });
+          expect(preview.eligibleNodeIds, missing).toEqual([]);
+          expect(preview.reasons).toContain(
+            missing === "expiresAt"
+              ? "capabilities_expired"
+              : missing === "filtered"
+                ? "network_profile_unverified"
+                : "capabilities_unavailable",
+          );
+        }
+      }
+      await f.storage.run("UPDATE nodes SET capabilities_json=?", [original]);
+    }
+    const run = await admin.scheduleValidation(validationRequest);
     expect(run).toMatchObject({ scheduler: "queued" });
     await f.worker.reconcile();
     await f.worker.reconcileCleanupLane();
@@ -1563,14 +1733,17 @@ it.each([
 );
 
 it.each([
-  ["missing NET_RAW", ["NET_ADMIN"]],
-  ["extra SYS_ADMIN", ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]],
+  ["missing NET_RAW", ["NET_ADMIN"], false],
+  ["extra SYS_ADMIN", ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"], false],
+  ["missing NET_RAW", ["NET_ADMIN"], true],
+  ["extra SYS_ADMIN", ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"], true],
 ] as const)(
-  "rejects gateway capability readback with %s before starting either member",
-  async (_name, capabilities) => {
+  "rejects gateway capability readback with %s before starting either member (capabilities=%s, bridge=%s)",
+  async (_name, capabilities, dockerBridge) => {
     const f = await fixture(3, "none", true, [], groupRecipe, {
       loseGatewayCreateResponse: false,
       gatewayCapabilities: [...capabilities],
+      dockerBridge,
     });
     expect(f.ready.phase).not.toBe("ready");
     expect(f.transport.containers.size).toBe(2);
@@ -1693,6 +1866,44 @@ it.each(["extraAttachment", "publishedHostPort"] as const)(
       receipts: expect.any(Array),
     });
     expect(f.transport.deletes).toHaveLength(3);
+    expect(f.networkResult).not.toHaveBeenCalled();
+  },
+);
+
+it.each([
+  "networkDriver",
+  "gatewayMissingTun",
+  "gatewayForwardingDisabled",
+] as const)(
+  "keeps required ordinary bridge/gateway %s readback and failed-start cleanup",
+  async (fault) => {
+    const f = await fixture(3, "none", true, [], groupRecipe, {
+      loseGatewayCreateResponse: false,
+      dockerBridge: true,
+      ...(fault === "networkDriver"
+        ? { networkDriver: "macvlan" }
+        : { [fault]: true }),
+    });
+    expect(f.ready.phase).not.toBe("ready");
+    const query = {
+      leaseId: f.ready.lease!.id,
+      generation: f.ready.lease!.generation,
+    };
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_cancel", {
+      expectedGeneration: query.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    expect(
+      await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        f.ready.id,
+        query,
+      ),
+    ).toMatchObject({
+      version: "1.1",
+      outcome: "reclaimed",
+      providerCleanup: "complete",
+    });
     expect(f.networkResult).not.toHaveBeenCalled();
   },
 );
