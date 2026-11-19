@@ -19,6 +19,7 @@ import {
   memberDetailsSchema,
 } from "@hitchlet/contracts/internal";
 import { groupInventory } from "./group-inventory.js";
+import { readPreReadyCleanupProof } from "./pre-ready-cleanup-proof.js";
 
 const Id = z.string().min(1).max(512),
   Hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -197,7 +198,14 @@ export class TicketCleanupProofReader {
       query.leaseId,
       query.generation,
     ]);
-    if (!row) return null;
+    if (!row)
+      return readPreReadyCleanupProof(
+        this.storage,
+        this.now,
+        consumerId,
+        ticketId,
+        query,
+      );
     try {
       requireProof(
         row.ticketId === ticketId &&

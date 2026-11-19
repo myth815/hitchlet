@@ -35,14 +35,14 @@ type Fixture = ReturnType<typeof seed>;
 function seed(referenceCount = 0) {
   const db = new DatabaseSync(":memory:");
   dbs.push(db);
-  db.exec(`CREATE TABLE tickets(id,consumer_id,phase,cleanup_status,request_json);
+  db.exec(`CREATE TABLE tickets(id,consumer_id,phase,cleanup_status,request_json,ready_at_ms);
     CREATE TABLE leases(id,ticket_id,allocation_id,generation,state,revoked_at_ms,claimed_at_ms);
-    CREATE TABLE allocations(id,ticket_id,purpose,runtime_identity_id,generation,control_version,desired_state,observed_state,cleanup_status,manifest_complete,manifest_id,resolved_provision_contract_id,actual_resources_json,image_artifact_id);
+    CREATE TABLE allocations(id,ticket_id,purpose,runtime_identity_id,generation,control_version,desired_state,observed_state,cleanup_status,manifest_complete,manifest_id,resolved_provision_contract_id,actual_resources_json,image_artifact_id,node_id);
     CREATE TABLE image_artifacts(id,requirements_json,content_digest);
     CREATE TABLE installations(singleton,installation_id);
-    CREATE TABLE resolved_provision_contracts(id,contract_hash);
-    CREATE TABLE managed_resources(id,provider_id,allocation_id,generation,kind,ownership,observed_state,ownership_json);
-    CREATE TABLE operations(id,allocation_id,installation_id,generation,control_version,runtime_identity_id,connection_revision_id,kind,state,created_at_ms,updated_at_ms,result_json);
+    CREATE TABLE resolved_provision_contracts(id,contract_hash,node_id);
+    CREATE TABLE managed_resources(id,provider_id,allocation_id,generation,kind,ownership,observed_state,ownership_json,details_json);
+    CREATE TABLE operations(id,allocation_id,installation_id,generation,control_version,runtime_identity_id,connection_revision_id,kind,state,created_at_ms,updated_at_ms,result_json,intent_json,attempt_count);
     CREATE TABLE capacity_claims(allocation_id,state);`);
   const create = {
     installationId: ids.installation,
@@ -505,7 +505,7 @@ describe("owner-bound immutable cleanup proof", () => {
       "ambiguous cleanup operations",
       (f) => {
         f.db.exec(
-          "INSERT INTO operations SELECT 'second',allocation_id,installation_id,generation,control_version,runtime_identity_id,connection_revision_id,kind,state,created_at_ms,updated_at_ms,result_json FROM operations",
+          "INSERT INTO operations SELECT 'second',allocation_id,installation_id,generation,control_version,runtime_identity_id,connection_revision_id,kind,state,created_at_ms,updated_at_ms,result_json,intent_json,attempt_count FROM operations",
         );
       },
     ],
@@ -633,7 +633,7 @@ describe("ordinary authenticated route and SDK read method", () => {
         expect(result.statusCode).toBe(
           kind === "no_read_scope" ? 403 : kind === "foreign_owner" ? 404 : 422,
         );
-        expect(get.mock.calls.length).toBe(kind === "foreign_owner" ? 1 : 0);
+        expect(get.mock.calls.length).toBe(kind === "foreign_owner" ? 2 : 0);
       } finally {
         await app.close();
       }

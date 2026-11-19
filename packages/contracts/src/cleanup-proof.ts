@@ -57,7 +57,7 @@ export const CleanupProofReceiptSchema = z
     verifiedAtMs: Positive,
   })
   .strict();
-export const TicketCleanupProofSchema = z
+export const ReadyTicketCleanupProofSchema = z
   .object({
     version: z.literal("1.0"),
     ticketId: Id,
@@ -94,6 +94,88 @@ export const TicketCleanupProofSchema = z
     wholeScopeWriteExclusion: z.literal("unknown"),
   })
   .strict();
+
+const PreReadyObjectSchema = CleanupProofObjectSchema.extend({
+  memberName: z.enum(["workload", "gateway"]).optional(),
+}).strict();
+export const PreReadyTicketCleanupProofSchema = z
+  .object({
+    version: z.literal("1.1"),
+    basis: z.literal("pre_ready_cleanup"),
+    outcome: z.enum(["not_created", "reclaimed"]),
+    ticketId: Id,
+    consumerId: Id,
+    leaseId: Id,
+    generation: Positive,
+    allocationId: Id,
+    cleanupOperationId: Id,
+    cleanupControlVersion: Positive,
+    createIdentity: CleanupProofIdentitySchema,
+    cleanupIdentity: CleanupProofIdentitySchema,
+    cleanupManifest: z.object({ id: Id, hash: Hash }).strict(),
+    createJournal: z
+      .object({
+        operationId: Id,
+        attemptCount: z.number().int().nonnegative(),
+        effects: z.array(
+          z
+            .object({
+              key: z.enum([
+                "container",
+                "volume",
+                "network_policy",
+                "container_gateway",
+                "volume_gateway",
+              ]),
+              kind: CleanupProofObjectSchema.shape.kind,
+              resourceId: Id,
+            })
+            .strict(),
+        ),
+      })
+      .strict(),
+    objects: z.array(PreReadyObjectSchema),
+    receipts: z.array(CleanupProofReceiptSchema),
+    after: ReadyTicketCleanupProofSchema.shape.after.nullable(),
+    claimState: z.literal("released"),
+    leaseState: z.literal("revoked"),
+    providerCleanup: z.literal("complete"),
+    producer: z.literal("controller.allocation.cleanup"),
+    readAtMs: Positive,
+    io: z.literal("unknown"),
+    wholeScopeWriteExclusion: z.literal("unknown"),
+  })
+  .strict()
+  .superRefine((v, ctx) => {
+    const ids = (rows: readonly { id: string; kind: string }[]) =>
+      rows.map((x) => `${x.kind}:${x.id}`).sort();
+    const actual = ids(v.objects);
+    const receipts = ids(
+      v.receipts.map((r) => ({ id: r.resourceId, kind: r.kind })),
+    );
+    const effects = ids(
+      v.createJournal.effects.map((e) => ({ id: e.resourceId, kind: e.kind })),
+    );
+    if (
+      new Set(actual).size !== actual.length ||
+      JSON.stringify(actual) !== JSON.stringify(receipts) ||
+      JSON.stringify(actual) !== JSON.stringify(effects) ||
+      new Set(v.createJournal.effects.map((e) => e.key)).size !==
+        effects.length ||
+      (v.outcome === "not_created"
+        ? actual.length !== 0
+        : actual.length === 0 || v.after === null)
+    )
+      ctx.addIssue({
+        code: "custom",
+        message: "Cleanup must cover exactly the actual created objects",
+      });
+  });
+
+export const TicketCleanupProofSchema = z.union([
+  ReadyTicketCleanupProofSchema,
+  PreReadyTicketCleanupProofSchema,
+]);
 export const CleanupProofHttpQuerySchema = z
   .object({
     leaseId: z.string().uuid(),
@@ -107,3 +189,9 @@ export const CleanupProofHttpQuerySchema = z
   .strict();
 export type CleanupProofQuery = z.infer<typeof CleanupProofQuerySchema>;
 export type TicketCleanupProof = z.infer<typeof TicketCleanupProofSchema>;
+export type ReadyTicketCleanupProof = z.infer<
+  typeof ReadyTicketCleanupProofSchema
+>;
+export type PreReadyTicketCleanupProof = z.infer<
+  typeof PreReadyTicketCleanupProofSchema
+>;

@@ -26,6 +26,11 @@ import { ManagementSchemas } from "@hitchlet/contracts/admin";
 import { AcquireRequestSchema, type AcquireRequest } from "@hitchlet/contracts";
 
 export { ComputeClientError } from "./transport.js";
+export {
+  TicketCleanupProofSchema,
+  ReadyTicketCleanupProofSchema,
+  PreReadyTicketCleanupProofSchema,
+} from "@hitchlet/contracts";
 export { AdminCommands } from "./admin.js";
 export { PreparedManagementRevokeSchema } from "@hitchlet/contracts/admin";
 export { PreparedManagementRequestSchema } from "@hitchlet/contracts/admin";

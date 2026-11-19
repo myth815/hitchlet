@@ -8,6 +8,8 @@ import {
   CleanupProofQuerySchema,
   CleanupProofHttpQuerySchema,
   TicketCleanupProofSchema,
+  ReadyTicketCleanupProofSchema,
+  PreReadyTicketCleanupProofSchema,
 } from "./cleanup-proof.js";
 import type {
   AcceleratorRequirement,
@@ -776,6 +778,8 @@ export const PublicSchemas = {
   CleanupProofQuery: CleanupProofQuerySchema,
   CleanupProofHttpQuery: CleanupProofHttpQuerySchema,
   TicketCleanupProof: TicketCleanupProofSchema,
+  ReadyTicketCleanupProof: ReadyTicketCleanupProofSchema,
+  PreReadyTicketCleanupProof: PreReadyTicketCleanupProofSchema,
   AuthenticatedPrincipal: AuthenticatedPrincipalSchema,
   AcquireRequest: AcquireRequestSchema,
   ResourceAmounts: ResourceAmountsSchema,

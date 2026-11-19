@@ -15,6 +15,9 @@ import { LeaseService } from "../src/application/leases.js";
 import { AccessService } from "../src/application/access.js";
 import { probeSsh } from "../src/providers/ssh-readiness.js";
 import { AdminService } from "../src/application/admin.js";
+import { buildApp } from "../src/app.js";
+import { loadConfig } from "../src/config.js";
+import { HitchletClient } from "../../../packages/sdk/dist/index.js";
 import { SQLiteImagePublicationStore } from "../src/storage/image-publication-store.js";
 import { TicketReadyInventoryReader } from "../src/application/ticket-ready-inventory.js";
 import { TicketCleanupProofReader } from "../src/application/ticket-cleanup-proof.js";
@@ -53,7 +56,12 @@ function dockerTransport(
   digest: string,
   starts = true,
   gateway?: { artifactRef: string; digest: string },
-  faults = { loseGatewayCreateResponse: false },
+  faults: {
+    loseGatewayCreateResponse: boolean;
+    rejectGatewayImage?: boolean;
+    skipProvision?: boolean;
+    skipReserve?: boolean;
+  } = { loseGatewayCreateResponse: false },
 ) {
   type Json = Record<string, any>;
   const networks = new Map<string, Json>(),
@@ -230,6 +238,12 @@ function dockerTransport(
       const isGateway =
         gateway && decodeURIComponent(path).includes(gateway.digest);
       const wanted = isGateway ? gateway! : { artifactRef, digest };
+      if (
+        path.startsWith("distribution/") &&
+        isGateway &&
+        faults.rejectGatewayImage
+      )
+        return new Response(null, { status: 503 });
       if (path.startsWith("distribution/"))
         return json({
           Descriptor: {
@@ -257,7 +271,12 @@ async function fixture(
   starts = true,
   networkEgress: readonly NetworkDestination[] = [],
   containerGroup?: ContainerGroup,
-  faults = { loseGatewayCreateResponse: false },
+  faults: {
+    loseGatewayCreateResponse: boolean;
+    rejectGatewayImage?: boolean;
+    skipProvision?: boolean;
+    skipReserve?: boolean;
+  } = { loseGatewayCreateResponse: false },
 ) {
   vi.clearAllMocks();
   const dir = await mkdtemp(join(tmpdir(), "hitchlet-proof-provider-"));
@@ -269,7 +288,8 @@ async function fixture(
   );
   const consumerId = stdout.match(/Consumer ID: (\S+)/)![1]!,
     versionId = stdout.match(/Image version: (\S+)/)![1]!,
-    seedNetworkId = stdout.match(/Network profile: (\S+)/)![1]!;
+    seedNetworkId = stdout.match(/Network profile: (\S+)/)![1]!,
+    consumerToken = stdout.match(/Bearer token \(shown once\): (\S+)/)![1]!;
   const storage = await openStorage(dir);
   cleanup.push(() => storage.close());
   const installation = (await storage.get<{ installation_id: string }>(
@@ -464,11 +484,17 @@ async function fixture(
       mode: n === 2 ? "read_only" : "read_write",
     })),
   });
-  await tickets.reserveNext();
-  await worker.reconcile();
+  if (!faults.skipReserve) await tickets.reserveNext();
+  if (!faults.skipProvision && !faults.skipReserve) await worker.reconcile();
   const queries = new TicketQueries(storage, clock),
     ready = await queries.get(consumerId, receipt.ticketId);
-  if (starts && !losesResponse)
+  if (
+    starts &&
+    !losesResponse &&
+    !faults.rejectGatewayImage &&
+    !faults.skipProvision &&
+    !faults.skipReserve
+  )
     expect(
       ready?.phase,
       JSON.stringify({
@@ -478,8 +504,10 @@ async function fixture(
         ),
       }),
     ).toBe("ready");
-  expect(ready!.lease!.claimedAt).toBeNull();
+  if (ready!.lease) expect(ready!.lease!.claimedAt).toBeNull();
   return {
+    dir,
+    consumerToken,
     storage,
     clock,
     advance: (ms: number) => {
@@ -635,6 +663,17 @@ it("does not mark an exited entrypoint ready and still reclaims its actual owned
     "released",
   );
   expect(f.transport.deletes).toHaveLength(3);
+  expect(
+    await new TicketCleanupProofReader(f.storage, f.clock).read(
+      f.consumerId,
+      f.ready.id,
+      { leaseId: f.ready.lease!.id, generation: f.ready.lease!.generation },
+    ),
+  ).toMatchObject({
+    version: "1.1",
+    outcome: "reclaimed",
+    objects: expect.any(Array),
+  });
 });
 
 const groupRecipe: ContainerGroup = {
@@ -1158,3 +1197,257 @@ it("rejects mutated member image, role and state facts from the actual persisted
   });
   await f.worker.reconcileCleanupLane();
 });
+
+it.each([
+  "startup_failed",
+  "partial_create",
+  "reserved_never_started",
+  "queued_never_reserved",
+] as const)(
+  "pre-ready %s returns terminal cleanup evidence without fabricating ready",
+  async (caseName) => {
+    const faults = {
+      loseGatewayCreateResponse: false,
+      rejectGatewayImage: caseName === "partial_create",
+      skipProvision: caseName === "reserved_never_started",
+      skipReserve: caseName === "queued_never_reserved",
+    };
+    const f = await fixture(
+      3,
+      "none",
+      caseName !== "startup_failed",
+      [],
+      groupRecipe,
+      faults,
+    );
+    expect(f.ready.phase).not.toBe("ready");
+    expect(
+      await f.storage.get(
+        "SELECT 1 FROM events WHERE aggregate_id=? AND event_type='ticket.ready'",
+        [f.ready.id],
+      ),
+    ).toBeUndefined();
+    const lease = f.ready.lease;
+    if (lease)
+      await expect(
+        new TicketCleanupProofReader(f.storage, f.clock).read(
+          f.consumerId,
+          f.ready.id,
+          { leaseId: lease.id, generation: lease.generation },
+        ),
+      ).rejects.toMatchObject({ code: "conflict" });
+    await f.tickets.cancel(
+      f.ready.id,
+      f.consumerId,
+      "consumer_cancel",
+      lease ? { expectedGeneration: lease.generation } : undefined,
+    );
+    await f.worker.reconcileCleanupLane();
+    const ticket = (await f.queries.get(f.consumerId, f.ready.id))!;
+    expect(ticket.phase).toBe("released");
+    const expectedObjects =
+      caseName === "startup_failed" ? 5 : caseName === "partial_create" ? 4 : 0;
+    expect(f.transport.deletes).toHaveLength(expectedObjects);
+    expect(f.transport.containers.size).toBe(0);
+    expect(f.transport.networks.size).toBe(0);
+    if (!lease) {
+      expect(ticket.cleanupStatus).toBe("not_needed");
+      expect(
+        await f.storage.get("SELECT id FROM allocations WHERE ticket_id=?", [
+          ticket.id,
+        ]),
+      ).toBeUndefined();
+      return;
+    }
+    const allocation = (await f.storage.get<any>(
+      "SELECT manifest_id,manifest_complete,cleanup_status,observed_state,actual_resources_json FROM allocations WHERE ticket_id=?",
+      [ticket.id],
+    ))!;
+    expect(allocation).toMatchObject({
+      manifest_id: null,
+      manifest_complete: 0n,
+      cleanup_status: "complete",
+      observed_state: "absent",
+    });
+    const cleanup = (await f.storage.get<any>(
+      "SELECT state,result_json FROM operations WHERE allocation_id=(SELECT id FROM allocations WHERE ticket_id=?) AND kind='allocation.cleanup'",
+      [ticket.id],
+    ))!;
+    expect(cleanup.state).toBe("succeeded");
+    const evidence = JSON.parse(cleanup.result_json);
+    if (caseName === "reserved_never_started")
+      expect(evidence.noExternalCreate).toBe(true);
+    else {
+      expect(evidence.resources).toHaveLength(expectedObjects);
+      expect(evidence.destructionReceipts).toHaveLength(expectedObjects);
+      expect(evidence.inventory.completeness).toBe("complete");
+      expect(
+        evidence.destructionReceipts.every((r: any) => r.presence === "absent"),
+      ).toBe(true);
+    }
+    expect(
+      await f.storage.get(
+        "SELECT 1 FROM capacity_claims WHERE allocation_id=(SELECT id FROM allocations WHERE ticket_id=?) AND state<>'released'",
+        [ticket.id],
+      ),
+    ).toBeUndefined();
+    const query = { leaseId: lease.id, generation: lease.generation };
+    const reader = new TicketCleanupProofReader(f.storage, f.clock);
+    const proof = (await reader.read(f.consumerId, ticket.id, query))!;
+    expect(proof).toMatchObject({
+      version: "1.1",
+      basis: "pre_ready_cleanup",
+      outcome: expectedObjects ? "reclaimed" : "not_created",
+      ticketId: ticket.id,
+      leaseId: lease.id,
+      generation: lease.generation,
+      claimState: "released",
+      leaseState: "revoked",
+      providerCleanup: "complete",
+    });
+    expect(proof).not.toHaveProperty("manifest");
+    expect(proof).not.toHaveProperty("containerGroup");
+    expect(proof.objects).toHaveLength(expectedObjects);
+    expect(proof.receipts).toHaveLength(expectedObjects);
+    if (proof.version !== "1.1") throw new Error("Expected pre-ready proof");
+    expect(proof.createJournal.effects).toHaveLength(expectedObjects);
+    expect(proof.objects.some((o) => o.id.startsWith("storage:"))).toBe(false);
+    expect(
+      proof.objects
+        .filter((o) => o.kind === "container")
+        .map((o) => o.memberName)
+        .sort(),
+    ).toEqual(
+      caseName === "startup_failed"
+        ? ["gateway", "workload"]
+        : caseName === "partial_create"
+          ? ["workload"]
+          : [],
+    );
+
+    if (expectedObjects)
+      expect(proof.after).toMatchObject({
+        presence: "absent",
+        completeness: "complete",
+      });
+    else expect(proof.after).toBeNull();
+    expect(
+      await reader.read(f.consumerId, ticket.id, {
+        ...query,
+        expected: {
+          manifestId: proof.cleanupManifest.id,
+          manifestHash: proof.cleanupManifest.hash,
+        },
+      }),
+    ).toEqual(proof);
+    const app = await buildApp(
+      loadConfig({
+        DATA_DIR: f.dir,
+        LOG_LEVEL: "silent",
+        EXECUTION_MODE: "portainer",
+        HITCHLET_SECRET_KEY_FILE: join(f.dir, "synthetic-unused.key"),
+      }),
+      { storage: f.storage },
+    );
+    try {
+      const response = await app.inject({
+        method: "GET",
+        url: `/v1/tickets/${ticket.id}/cleanup-proof?${new URLSearchParams({ leaseId: lease.id, generation: String(lease.generation) })}`,
+        headers: { authorization: `Bearer ${f.consumerToken}` },
+      });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json()).toMatchObject({
+        version: "1.1",
+        cleanupManifest: proof.cleanupManifest,
+        objects: proof.objects,
+        receipts: proof.receipts,
+      });
+      // A new SDK instance represents original-ticket re-entry; no saved ready inventory is supplied.
+      const sdk = new HitchletClient("https://controller.test", {
+        auth: { kind: "bearer", token: f.consumerToken },
+        fetch: async (input, init) => {
+          const url = new URL(String(input));
+          const headers: Record<string, string> = {};
+          new Headers(init?.headers).forEach((v, k) => {
+            headers[k] = v;
+          });
+          const read = await app.inject({
+            method: "GET",
+            url: url.pathname + url.search,
+            headers,
+          });
+          return new Response(read.body, {
+            status: read.statusCode,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+      expect(await sdk.tickets.cleanupProof(ticket.id, query)).toMatchObject({
+        version: "1.1",
+        cleanupManifest: proof.cleanupManifest,
+        objects: proof.objects,
+        receipts: proof.receipts,
+      });
+    } finally {
+      await app.close();
+    }
+    if (caseName === "startup_failed") {
+      const provision = (await f.storage.get<any>(
+        "SELECT id,result_json FROM operations WHERE allocation_id=(SELECT id FROM allocations WHERE ticket_id=?) AND kind='allocation.provision'",
+        [ticket.id],
+      ))!;
+      for (const change of [
+        "unknown_effect",
+        "wrong_created_id",
+        "missing_receipt",
+        "wrong_runtime",
+        "false_no_create",
+      ] as const) {
+        if (change === "unknown_effect" || change === "wrong_created_id") {
+          const bad = JSON.parse(provision.result_json);
+          if (change === "unknown_effect")
+            bad.createEffects.container_gateway.state = "unknown";
+          else
+            bad.createEffects.container_gateway.resourceId =
+              "foreign-container";
+          await f.storage.run(
+            "UPDATE operations SET result_json=? WHERE id=?",
+            [JSON.stringify(bad), provision.id],
+          );
+        } else {
+          const bad = JSON.parse(cleanup.result_json);
+          if (change === "missing_receipt") bad.destructionReceipts.pop();
+          else if (change === "wrong_runtime")
+            bad.inventory.runtime.runtimeIdentityId = "foreign-runtime";
+          else bad.noExternalCreate = true;
+          await f.storage.run(
+            "UPDATE operations SET result_json=? WHERE allocation_id=(SELECT id FROM allocations WHERE ticket_id=?) AND kind='allocation.cleanup'",
+            [JSON.stringify(bad), ticket.id],
+          );
+        }
+        await expect(
+          reader.read(f.consumerId, ticket.id, query),
+          change,
+        ).rejects.toMatchObject({ code: "conflict" });
+        await f.storage.run("UPDATE operations SET result_json=? WHERE id=?", [
+          provision.result_json,
+          provision.id,
+        ]);
+        await f.storage.run(
+          "UPDATE operations SET result_json=? WHERE allocation_id=(SELECT id FROM allocations WHERE ticket_id=?) AND kind='allocation.cleanup'",
+          [cleanup.result_json, ticket.id],
+        );
+      }
+      expect(
+        await reader.read("foreign-consumer", ticket.id, query),
+      ).toBeNull();
+      expect(
+        await reader.read(f.consumerId, ticket.id, {
+          ...query,
+          generation: query.generation + 1,
+        }),
+      ).toBeNull();
+      expect(await reader.read(f.consumerId, ticket.id, query)).toEqual(proof);
+    }
+  },
+);

@@ -53,7 +53,7 @@ Gateway 的隧道、路由、目的映射、配置及业务报到属于租客。
 
 两个 reader 保留完整 receipt、owner、代次、manifest、未知副作用、容量和真实清理对账。对象集合由冻结 recipe 决定，原单成员仍为三个 owned 对象，本 recipe 为两 container、两 volume、一 network_policy。reference 不计入销毁数量。角色、镜像摘要、实际 IPv4、资源份额、卷目标和引用绑定参与 manifest 摘要。
 
-ready inventory 和 cleanup proof 都附：
+ready inventory 和已有 ready 清单的 cleanup proof 都附：
 
 ```ts
 containerGroup: {
@@ -70,5 +70,7 @@ containerGroup: {
 ```
 
 不返回 host source、环境变量、argv 或密钥。Controller、Runtime、contracts 和 SDK 应从同一提交构建配对。没有 group 的旧规则摘要保持不变；旧 Runtime 不理解新增成员字段，不能用于此 recipe。无需数据库迁移。部署应由原实施方另行按具体范围进行；本候选没有部署或防火墙操作。
+
+未 ready 的失败清理使用 [未 ready 清理证明](PRE-READY-CLEANUP-PROOF.md) 的独立终态分支，只证明实际创建的对象，不补造完整成员清单。
 
 本地测试使用合成 Portainer、Runtime、sysfs、iptables 和数据包，实际经过普通 Provider、临时 SQLite、创建日志、两个 reader、租约签收及清理。覆盖双线并存与单线归还、响应丢失恢复、启动失败回收、清单篡改、精确 TCP 正反例、管理拒绝优先及撤销。真实镜像入口、TUN 数据道、VPN 控制面、隧道前端与出站业务、真实 A/B 隔离和归还仍须现场配对验收。

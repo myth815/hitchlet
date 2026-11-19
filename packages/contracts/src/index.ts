@@ -8,6 +8,8 @@ export {
   CleanupProofQuerySchema,
   CleanupProofHttpQuerySchema,
   TicketCleanupProofSchema,
+  ReadyTicketCleanupProofSchema,
+  PreReadyTicketCleanupProofSchema,
   CleanupProofIdentitySchema,
   CleanupProofRuntimeSchema,
   CleanupProofObjectSchema,

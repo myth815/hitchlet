@@ -486,7 +486,7 @@ export function openApiDocument() {
           "TicketCleanupProof",
           {
             description:
-              "Read-only tickets:read query. Actual lease/generation required; no lifecycle effect or Admin scope. Incomplete evidence is not a proof.",
+              "Read-only tickets:read query. Actual lease/generation required; no lifecycle effect or Admin scope. Version 1.0 certifies ready-manifest cleanup; version 1.1 certifies pre-ready cleanup from the original create journal and final receipts. Incomplete or unknown effects are not a proof.",
             parameters: [
               parameter("ticketId", "path", { type: "string", format: "uuid" }),
               parameter("leaseId", "query", { type: "string", format: "uuid" }),
