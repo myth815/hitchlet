@@ -27,7 +27,7 @@ const Owned = z.object({
     resourcesHash: Id,
     networkHash: Id,
     mountsHash: Id,
-    accessProtocol: z.literal("ssh"),
+    accessProtocol: z.enum(["ssh", "none"]),
   }),
 });
 // References are accounted for, but never require a destruction receipt.
@@ -119,6 +119,7 @@ function identityWithoutControl(
 // effects. Any additional result metadata remains unresolved.
 export const TICKET_CLEANUP_PROOF_SQL = `SELECT
  t.id AS ticketId,t.consumer_id AS consumerId,t.phase AS ticketPhase,t.cleanup_status AS ticketCleanup,
+ json_extract(t.request_json,'$.access.protocol') AS accessProtocol,
  l.id AS leaseId,l.generation AS generation,l.state AS leaseState,l.revoked_at_ms AS revokedAtMs,
  a.id AS allocationId,a.generation AS allocationGeneration,a.control_version AS controlVersion,
  a.desired_state AS desiredState,a.observed_state AS observedState,a.cleanup_status AS allocationCleanup,
@@ -240,7 +241,10 @@ export class TicketCleanupProofReader {
       requireProof(
         inventory.every(
           (o) =>
-            equal(o.identity, create) && o.contractHash === ready.contractHash,
+            equal(o.identity, create) &&
+            o.contractHash === ready.contractHash &&
+            (o.ownership === "reference" ||
+              o.evidence.accessProtocol === row.accessProtocol),
         ),
       );
       // Producer hashes JSON property order, not a normalized DTO. Both raw values

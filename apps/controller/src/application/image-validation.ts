@@ -1,5 +1,8 @@
 import { hyperVTemplateProofMatches } from "./hyperv-facts.js";
-import { runtimeStorageMountSchema } from "@hitchlet/contracts/internal";
+import {
+  runtimeStorageMountSchema,
+  supportsContainerEntrypoint,
+} from "@hitchlet/contracts/internal";
 import { randomUUID } from "node:crypto";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
 import { z } from "zod";
@@ -110,6 +113,12 @@ export class ImageValidationService {
     );
     const nodeAccess = stringArray(caps.supportedAccess);
     const accessProtocols = stringArray(recipe.accessProtocols);
+    const noAccess =
+      target.backend_kind === "portainer" &&
+      supportsContainerEntrypoint(
+        object(target.requirements_json, "artifact requirements"),
+        recipe,
+      );
     const networkPolicy = object(network.policy_json, "network policy");
     const bindings = [];
     for (const [index, request] of input.storage.entries()) {
@@ -269,7 +278,8 @@ export class ImageValidationService {
       !stringArray(caps.architectures).includes(String(target.architecture)) ||
       !stringArray(caps.guestOs).includes(String(target.guest_os)) ||
       !stringArray(caps.resourceKinds).includes(isVm ? "vm" : "container") ||
-      !accessProtocols.some((protocol) => nodeAccess.includes(protocol)) ||
+      (!noAccess &&
+        !accessProtocols.some((protocol) => nodeAccess.includes(protocol))) ||
       !Number.isFinite(expiry) ||
       expiry <= this.now() ||
       target.admission !== "enabled" ||

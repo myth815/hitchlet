@@ -96,7 +96,7 @@ export type ProvisionPlan = Readonly<{
   /** Persisted resources supplied only to cleanup so a missing container does
    * not erase the original network ports/bridge facts needed to revoke rules. */
   cleanupResources?: readonly OwnedResource[];
-  accessProtocol: "ssh" | "rdp";
+  accessProtocol: "ssh" | "rdp" | "none";
   bootstrap: Readonly<{
     mechanism: string;
     contractVersion: string;
@@ -131,7 +131,7 @@ export type OwnedResource = Readonly<{
     resourcesHash: string;
     networkHash: string;
     mountsHash: string;
-    accessProtocol: "ssh" | "rdp";
+    accessProtocol: "ssh" | "rdp" | "none";
   }>;
 }>;
 export type InventoryEvidence = Readonly<{
@@ -185,7 +185,7 @@ export type ReadyReceipt = Readonly<{
   networkRevisionId: string;
   networkContractHash: string;
   mountContractHash: string;
-  accessProtocol: "ssh" | "rdp";
+  accessProtocol: "ssh" | "rdp" | "none";
   bootstrapComplete: true;
   offlineLeaseEnforcement: "unsupported";
   access?: Readonly<{

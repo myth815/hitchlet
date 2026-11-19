@@ -2,6 +2,7 @@ import { dockerImageReferencePath } from "../domain/docker-image-reference.js";
 import {
   hyperVRuntimeFactsSchema,
   tartRuntimeFactsSchema,
+  supportsContainerEntrypoint,
 } from "@hitchlet/contracts/internal";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
@@ -123,6 +124,7 @@ export function validateBootstrapAndAccess(
   bootstrap: unknown,
   access: unknown,
 ) {
+  if (supportsContainerEntrypoint({ bootstrap }, access)) return;
   if (
     !bootstrap ||
     typeof bootstrap !== "object" ||

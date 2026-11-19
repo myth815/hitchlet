@@ -20,6 +20,7 @@ export type ApplicationErrorCode =
   | "renewal_in_progress"
   | "lease_not_accessible"
   | "access_material_unavailable"
+  | "access_not_applicable"
   | "console_credentials_disabled";
 export class ApplicationError extends Error {
   constructor(readonly code: ApplicationErrorCode) {

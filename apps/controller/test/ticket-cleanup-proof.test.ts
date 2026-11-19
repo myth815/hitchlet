@@ -35,7 +35,7 @@ type Fixture = ReturnType<typeof seed>;
 function seed(referenceCount = 0) {
   const db = new DatabaseSync(":memory:");
   dbs.push(db);
-  db.exec(`CREATE TABLE tickets(id,consumer_id,phase,cleanup_status);
+  db.exec(`CREATE TABLE tickets(id,consumer_id,phase,cleanup_status,request_json);
     CREATE TABLE leases(id,ticket_id,allocation_id,generation,state,revoked_at_ms,claimed_at_ms);
     CREATE TABLE allocations(id,ticket_id,purpose,runtime_identity_id,generation,control_version,desired_state,observed_state,cleanup_status,manifest_complete,manifest_id,resolved_provision_contract_id,actual_resources_json);
     CREATE TABLE installations(singleton,installation_id);
@@ -131,6 +131,7 @@ function seed(referenceCount = 0) {
     consumer_id: ids.consumer,
     phase: "released",
     cleanup_status: "complete",
+    request_json: JSON.stringify({ access: { protocol: "ssh" } }),
   });
   insert("leases", {
     id: ids.lease,
@@ -227,6 +228,16 @@ function updateEvidence(f: Fixture) {
 }
 
 describe("owner-bound immutable cleanup proof", () => {
+  it("binds the proof's access mode to the frozen request", async () => {
+    const f = seed(2),
+      item = f.ready.objects[0]!;
+    if (!("evidence" in item)) throw new Error("Missing owned test object");
+    Object.assign(item.evidence, { accessProtocol: "none" });
+    updateReady(f);
+    await expect(read(reader(f).service)).rejects.toMatchObject({
+      code: "conflict",
+    });
+  });
   it.each([1, 2, 4])(
     "accounts for %i detached references without claiming their destruction for a never-claimed lease",
     async (referenceCount) => {

@@ -159,10 +159,13 @@ export const LeaseRequestSchema = z
   .strict();
 export const AccessRequestSchema = z
   .object({
-    protocol: z.enum(["ssh", "rdp"]),
+    protocol: z.enum(["ssh", "rdp", "none"]),
     clientPublicKey: z.string().trim().min(32).max(16_384).optional(),
   })
-  .strict();
+  .strict()
+  .refine((v) => v.protocol !== "none" || v.clientPublicKey === undefined, {
+    message: "No-access requests do not supply an interactive public key",
+  });
 export const AcquireRequestSchema = z
   .object({
     image: ImageSelectorSchema,

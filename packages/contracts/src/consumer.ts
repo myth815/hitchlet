@@ -362,7 +362,7 @@ export interface CancelRequest {
 /** 申请的技术连接方式；平台只负责交付入口，不接收业务 shell 命令。 */
 export interface AccessRequest {
   /** 传输协议或连接协议的判别值。 */
-  readonly protocol: "ssh" | "rdp";
+  readonly protocol: "ssh" | "rdp" | "none";
   /** 租客本次使用的公钥，省略时按已验证镜像入口策略签发独立材料。 */
   readonly clientPublicKey?: string;
 }

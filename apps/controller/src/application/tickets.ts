@@ -12,6 +12,7 @@ import {
   NoMatchingEnvironmentError,
 } from "../domain/admission.js";
 import { supportsNodeSshRecipe } from "../domain/docker-recipe.js";
+import { supportsContainerEntrypoint } from "@hitchlet/contracts/internal";
 import {
   leaseDeadline,
   terminalReasonFor,
@@ -840,6 +841,7 @@ export class TicketService {
     )
       hardReasons.add("capabilities_unavailable");
     if (
+      contract.access.protocol !== "none" &&
       !stringListRequired(
         caps.supportedAccess,
         "node access protocols",
@@ -912,10 +914,18 @@ export class TicketService {
           (typeof recipe.account === "string" &&
             !/^[a-z_][a-z0-9_-]{0,31}$/.test(recipe.account)));
       if (
-        !recipeProtocols.includes(contract.access.protocol) ||
+        (contract.access.protocol === "none"
+          ? executionMode(candidate.config_json) !== "portainer" ||
+            !supportsContainerEntrypoint(requirements, recipe)
+          : !recipeProtocols.includes(contract.access.protocol)) ||
         tartSshRecipeInvalid ||
         (executionMode(candidate.config_json) === "portainer" &&
-          !supportsNodeSshRecipe({ bootstrap: requirements.bootstrap }, recipe))
+          !(contract.access.protocol === "none"
+            ? supportsContainerEntrypoint(requirements, recipe)
+            : supportsNodeSshRecipe(
+                { bootstrap: requirements.bootstrap },
+                recipe,
+              )))
       )
         hardReasons.add("image_access_unavailable");
     }

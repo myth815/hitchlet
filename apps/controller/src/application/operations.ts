@@ -1,4 +1,7 @@
-import { resolvedStorageMountSchema } from "@hitchlet/contracts/internal";
+import {
+  resolvedStorageMountSchema,
+  supportsContainerEntrypoint,
+} from "@hitchlet/contracts/internal";
 import { admissionOpen } from "./maintenance.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
 import { randomUUID } from "node:crypto";
@@ -701,6 +704,12 @@ export class OperationWorker {
     if (!executionMode)
       throw new Error("Persisted provision execution mode is unavailable");
     const isTart = executionMode === "tart" || executionMode === "hyperv";
+    const entrypointOnly =
+      executionMode === "portainer" &&
+      supportsContainerEntrypoint(
+        parseObject(stringField(val(row, "requirements_json"))),
+        parseObject(stringField(val(row, "access_recipe_json"))),
+      );
     const accepted =
       subject.kind === "tenant"
         ? (AcceptedAcquireRequestSchema.parse(
@@ -710,7 +719,9 @@ export class OperationWorker {
             resources: ResourceContractSchema.parse(
               frozen.resources,
             ) as ResourceContract,
-            access: { protocol: "ssh" as const },
+            access: {
+              protocol: entrypointOnly ? ("none" as const) : ("ssh" as const),
+            },
           };
     const network = objectValue(frozen.network);
     const storage = Array.isArray(frozen.storage)

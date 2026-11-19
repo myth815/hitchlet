@@ -1,4 +1,5 @@
 import { resourceManifest } from "../domain/resource-manifest.js";
+import { supportsContainerEntrypoint } from "@hitchlet/contracts/internal";
 import { createHash, randomUUID } from "node:crypto";
 import { probeSsh } from "./ssh-readiness.js";
 import type {
@@ -148,14 +149,15 @@ export class PortainerExecutionProvider implements ExecutionPort {
     plan: ProvisionPlan,
     journal: ResourceJournal,
   ): Promise<readonly OwnedResource[]> {
-    assertNodeSshRecipe(plan);
+    assertDockerRecipe(plan);
     await this.assertStorageCapacity(plan);
     await this.assertMounts(plan);
     await journal.assertActive?.();
     const runtime = await this.runtime(plan, true);
-    const accessMaterial = await this.accessMaterials.getOrCreate(
-      plan.identity.allocationId,
-    );
+    const accessMaterial =
+      plan.accessProtocol === "none"
+        ? undefined
+        : await this.accessMaterials.getOrCreate(plan.identity.allocationId);
     const name = resourceName(plan);
     const labels = ownershipLabels(plan);
     const prior = await this.inspect(plan);
@@ -294,6 +296,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
           {
             Image: plan.artifact.ref,
             Cmd: [],
+            ...(plan.accessProtocol === "none" ? { User: "1000:1000" } : {}),
             Hostname: `h-${plan.identity.allocationId.slice(0, 12)}`,
             Labels: labels,
             ExposedPorts: exposed,
@@ -360,7 +363,10 @@ export class PortainerExecutionProvider implements ExecutionPort {
         "Created Docker container does not match its frozen owner and name",
       );
     const existingDetail = priorContainer ? containerReadback : undefined;
-    if (!existingDetail || record(existingDetail.State).Running !== true)
+    if (
+      accessMaterial &&
+      (!existingDetail || record(existingDetail.State).Running !== true)
+    )
       await this.putArchive(
         runtime,
         `containers/${encodeURIComponent(containerId)}/archive?path=%2Frun%2Fhitchlet`,
@@ -822,7 +828,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
     _inventory: InventoryEvidence,
   ): Promise<ReadyReceipt> {
     const plan = _plan;
-    assertNodeSshRecipe(plan);
+    assertDockerRecipe(plan);
     await this.assertMounts(plan);
     if (plan.resources.scratchEnforcement === "required")
       throw new Error(
@@ -919,6 +925,31 @@ export class PortainerExecutionProvider implements ExecutionPort {
       "present",
       networkPlan.expectedRulesetHash,
     );
+    const receipt: ReadyReceipt = {
+      identity: plan.identity,
+      artifactDigest: plan.artifact.digest,
+      contractHash: plan.resolved.contractHash,
+      ...resourceManifest(plan, inspection.evidence.objects),
+      objectIds: inspection.evidence.objects.map((item) => item.id).sort(),
+      effectiveResources: {
+        limits: {
+          cpuMillis: actualCpu,
+          memoryMiB: actualMemory,
+          scratchMiB: 0,
+        },
+        cpuEnforcement: "hard",
+        memoryEnforcement: "hard",
+        scratchEnforcement: "best_effort",
+        acceleratorAssignments: [],
+      },
+      networkRevisionId: plan.resolved.network.revisionId,
+      networkContractHash: sha256(plan.resolved.network),
+      mountContractHash: sha256(plan.resolved.mounts),
+      accessProtocol: plan.accessProtocol,
+      bootstrapComplete: true,
+      offlineLeaseEnforcement: "unsupported",
+    };
+    if (plan.accessProtocol === "none") return receipt;
     const ports = containerPorts(detail);
     const ssh = ports.find(
       (port) => port.containerPort === 22 && port.protocol === "tcp",
@@ -946,30 +977,8 @@ export class PortainerExecutionProvider implements ExecutionPort {
       privateKey: materials.privateKey,
       expectedHostKey,
     });
-    const limits = {
-      cpuMillis: actualCpu,
-      memoryMiB: actualMemory,
-      scratchMiB: 0,
-    };
     return {
-      identity: plan.identity,
-      artifactDigest: plan.artifact.digest,
-      contractHash: plan.resolved.contractHash,
-      ...resourceManifest(plan, inspection.evidence.objects),
-      objectIds: inspection.evidence.objects.map((item) => item.id).sort(),
-      effectiveResources: {
-        limits,
-        cpuEnforcement: "hard",
-        memoryEnforcement: "hard",
-        scratchEnforcement: "best_effort",
-        acceleratorAssignments: [],
-      },
-      networkRevisionId: plan.resolved.network.revisionId,
-      networkContractHash: sha256(plan.resolved.network),
-      mountContractHash: sha256(plan.resolved.mounts),
-      accessProtocol: "ssh",
-      bootstrapComplete: true,
-      offlineLeaseEnforcement: "unsupported",
+      ...receipt,
       access: {
         host: runtime.accessHost,
         port: ssh.hostPort,
@@ -1906,7 +1915,8 @@ function cidrContains(pool: string, subnet: string): boolean {
 function bindingsFor(
   plan: ProvisionPlan,
 ): Record<string, Array<{ HostIp: string; HostPort: string }>> {
-  assertNodeSshRecipe(plan);
+  assertDockerRecipe(plan);
+  if (plan.accessProtocol === "none") return {};
   const value = createHash("sha256")
     .update(`${plan.identity.allocationId}:${plan.identity.generation}`)
     .digest()
@@ -1936,6 +1946,8 @@ function containerMatchesFrozen(
   const actualPorts = record(host.PortBindings);
   return (
     container.Image === imageId &&
+    (plan.accessProtocol !== "none" ||
+      record(container.Config).User === "1000:1000") &&
     host.NetworkMode === networkName &&
     actualCpu === plan.resources.limit.cpuMillis &&
     actualMemory === plan.resources.limit.memoryMiB &&
@@ -1976,13 +1988,18 @@ function containerMatchesFrozen(
 function sha256(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
-function assertNodeSshRecipe(plan: ProvisionPlan) {
+function assertDockerRecipe(plan: ProvisionPlan) {
+  if (
+    plan.accessProtocol === "none" &&
+    supportsContainerEntrypoint({ bootstrap: plan.bootstrap }, plan.access)
+  )
+    return;
   if (
     plan.accessProtocol !== "ssh" ||
     !supportsNodeSshRecipe({ bootstrap: plan.bootstrap }, plan.access)
   )
     throw new Error(
-      "Only the fixed hitchlet-node-ssh-v1 bootstrap/access contract is supported by this Provider",
+      "Only the fixed Docker bootstrap/access recipes are supported by this Provider",
     );
 }
 function containerPorts(container: Json): Array<{

@@ -76,6 +76,7 @@ export class AccessService {
       parseJson(row.request_json),
     );
     const protocol = request.access.protocol;
+    if (protocol === "none") throw conflict("access_not_applicable");
     let access: Record<string, unknown>;
     let authentication: Record<string, unknown>;
     if (simulator) {

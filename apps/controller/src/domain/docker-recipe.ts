@@ -1,4 +1,4 @@
-/** The only Docker bootstrap/readiness contract this M1 Provider claims. */
+/** The interactive Docker bootstrap/readiness contract. */
 export function supportsNodeSshRecipe(
   requirements: unknown,
   access: unknown,

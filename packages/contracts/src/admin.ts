@@ -5,6 +5,7 @@ import {
   MachinePowerExecutionStatusSchema,
 } from "./power-execution.js";
 import { z } from "zod";
+import { supportsContainerEntrypoint } from "./container-entrypoint.js";
 import {
   StorageRequestSchema,
   ResourceContractSchema,
@@ -47,8 +48,8 @@ const requirements = z
   .strict();
 const access = z
   .object({
-    accessProtocols: z.array(z.enum(["ssh", "rdp"])).min(1),
-    ports: z.array(z.number().int().min(1).max(65535)).min(1),
+    accessProtocols: z.array(z.enum(["ssh", "rdp"])),
+    ports: z.array(z.number().int().min(1).max(65535)),
     account: z.string().min(1),
     allowedSourceCidrs: z.array(z.string()),
     discovery: z.string().min(1),
@@ -86,9 +87,28 @@ function validateDraftPlatform(
     architecture: "amd64" | "arm64";
     guestOs: "linux" | "macos" | "windows";
     artifactRef: string;
+    bootstrap?: unknown;
+    requirements?: { bootstrap: unknown };
+    access: z.infer<typeof access>;
   },
   context: z.RefinementCtx,
 ) {
+  if (
+    (!value.access.accessProtocols.length || !value.access.ports.length) &&
+    !(
+      value.backendKind === "portainer" &&
+      value.kind === "container" &&
+      supportsContainerEntrypoint(
+        value.requirements ?? { bootstrap: value.bootstrap },
+        value.access,
+      )
+    )
+  )
+    context.addIssue({
+      code: "custom",
+      path: ["access"],
+      message: "Empty access requires the fixed container entrypoint recipe",
+    });
   if (value.backendKind === "portainer") {
     if (
       value.kind !== "container" ||
