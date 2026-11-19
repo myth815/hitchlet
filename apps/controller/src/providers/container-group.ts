@@ -212,7 +212,7 @@ export function groupContainerBody(
       Binds: [],
       CapDrop: ["ALL"],
       CapAdd: gateway
-        ? ["NET_ADMIN"]
+        ? ["NET_ADMIN", "NET_RAW"]
         : [
             "CHOWN",
             "DAC_OVERRIDE",

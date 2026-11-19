@@ -43,7 +43,7 @@ containerGroup: {
 
 ## 运行与网络
 
-Hitchlet 使用镜像原 entrypoint，创建两个成员并在启动前安装规则。workload 为 UID/GID 1000；gateway 为 UID 0、drop ALL 后仅加 NET_ADMIN，仅映射 `/dev/net/tun`，不允许 privileged、host 网络、宿主端口或第二网络。`ipv4Forwarding:true` 只设置 gateway 自己网络命名空间的 `net.ipv4.ip_forward=1`，不改宿主。
+Hitchlet 使用镜像原 entrypoint，创建两个成员并在启动前安装规则。workload 为 UID/GID 1000；gateway 为 UID 0、drop ALL 后仅加 NET_ADMIN 与 NET_RAW，仅映射 `/dev/net/tun`，不允许 privileged、host 网络、宿主端口或第二网络。`ipv4Forwarding:true` 只设置 gateway 自己网络命名空间的 `net.ipv4.ip_forward=1`，不改宿主。
 
 同桥别名分别是 `workload`、`gateway`。Hitchlet 从实际分配的子网固定成员地址并核对 Engine 读回。每条 link 只放行对应成员地址之间的 TCP 目的端口及已建立连接的反向源端口；管理拒绝优先，其他同桥转发仍 DROP。跨 allocation 隔离、既有显式 host/forward egress 语义不变。撤销后不再有成员 link 允许规则，并沿原流程清除连接、核对容器和卷删除及网络规则撤销。
 

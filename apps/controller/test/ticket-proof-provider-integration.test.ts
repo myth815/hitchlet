@@ -59,6 +59,7 @@ function dockerTransport(
   faults: {
     loseGatewayCreateResponse: boolean;
     rejectGatewayImage?: boolean;
+    gatewayCapabilities?: string[];
     skipProvision?: boolean;
     skipReserve?: boolean;
   } = { loseGatewayCreateResponse: false },
@@ -126,6 +127,11 @@ function dockerTransport(
       }
       if (method === "POST" && path === "containers/create") {
         const body = JSON.parse(String(init!.body));
+        if (
+          body.Labels["io.hitchlet.member"] === "gateway" &&
+          faults.gatewayCapabilities
+        )
+          body.HostConfig.CapAdd = [...faults.gatewayCapabilities];
         const image =
           gateway && body.Image === gateway.artifactRef
             ? "synthetic-gateway-image"
@@ -274,6 +280,7 @@ async function fixture(
   faults: {
     loseGatewayCreateResponse: boolean;
     rejectGatewayImage?: boolean;
+    gatewayCapabilities?: string[];
     skipProvision?: boolean;
     skipReserve?: boolean;
   } = { loseGatewayCreateResponse: false },
@@ -492,6 +499,7 @@ async function fixture(
     starts &&
     !losesResponse &&
     !faults.rejectGatewayImage &&
+    faults.gatewayCapabilities === undefined &&
     !faults.skipProvision &&
     !faults.skipReserve
   )
@@ -729,7 +737,20 @@ it("delivers a two-member lease before claim and proves complete group cleanup w
   const workload = native.find(
     (c) => c.Config.Labels["io.hitchlet.member"] === "workload",
   )!;
-  expect(gateway.HostConfig.CapAdd).toEqual(["NET_ADMIN"]);
+  expect(gateway.HostConfig.CapDrop).toEqual(["ALL"]);
+  expect(gateway.HostConfig.CapAdd).toEqual(["NET_ADMIN", "NET_RAW"]);
+  expect(workload.Config.User).toBe("1000:1000");
+  expect(workload.HostConfig.CapDrop).toEqual(["ALL"]);
+  expect(workload.HostConfig.CapAdd).toEqual([
+    "CHOWN",
+    "DAC_OVERRIDE",
+    "FOWNER",
+    "SETGID",
+    "SETUID",
+    "SYS_CHROOT",
+    "NET_BIND_SERVICE",
+  ]);
+  expect(workload.HostConfig.Devices).toBeUndefined();
   expect(gateway.HostConfig.Devices).toEqual([
     {
       PathOnHost: "/dev/net/tun",
@@ -1449,5 +1470,50 @@ it.each([
       ).toBeNull();
       expect(await reader.read(f.consumerId, ticket.id, query)).toEqual(proof);
     }
+  },
+);
+
+it.each([
+  ["missing NET_RAW", ["NET_ADMIN"]],
+  ["extra SYS_ADMIN", ["NET_ADMIN", "NET_RAW", "SYS_ADMIN"]],
+] as const)(
+  "rejects gateway capability readback with %s before starting either member",
+  async (_name, capabilities) => {
+    const f = await fixture(3, "none", true, [], groupRecipe, {
+      loseGatewayCreateResponse: false,
+      gatewayCapabilities: [...capabilities],
+    });
+    expect(f.ready.phase).not.toBe("ready");
+    expect(f.transport.containers.size).toBe(2);
+    expect(
+      f.transport.fetcher.mock.calls.some(([input]) =>
+        new URL(String(input)).pathname.endsWith("/start"),
+      ),
+    ).toBe(false);
+    expect(
+      f.networkResult.mock.calls.some(([c]) => c.kind === "network.ensure"),
+    ).toBe(false);
+    const query = {
+      leaseId: f.ready.lease!.id,
+      generation: f.ready.lease!.generation,
+    };
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_cancel", {
+      expectedGeneration: query.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    const proof = await new TicketCleanupProofReader(f.storage, f.clock).read(
+      f.consumerId,
+      f.ready.id,
+      query,
+    );
+    expect(proof).toMatchObject({
+      version: "1.1",
+      outcome: "reclaimed",
+      providerCleanup: "complete",
+    });
+    expect(proof!.objects).toHaveLength(5);
+    expect(proof!.receipts).toHaveLength(5);
+    expect(f.transport.containers.size).toBe(0);
+    expect(f.transport.deletes).toHaveLength(5);
   },
 );

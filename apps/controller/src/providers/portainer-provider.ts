@@ -2507,7 +2507,7 @@ function containerMatchesFrozen(
     Array.isArray(host.CapDrop) &&
     host.CapDrop.includes("ALL") &&
     (plan.containerRole === "gateway"
-      ? ["NET_ADMIN"]
+      ? ["NET_ADMIN", "NET_RAW"]
       : [
           "CHOWN",
           "DAC_OVERRIDE",
@@ -2519,7 +2519,7 @@ function containerMatchesFrozen(
         ]
     ).every((cap) => capAdd.includes(cap)) &&
     (plan.containerRole === undefined ||
-      capAdd.length === (plan.containerRole === "gateway" ? 1 : 7)) &&
+      capAdd.length === (plan.containerRole === "gateway" ? 2 : 7)) &&
     (plan.containerRole === undefined ||
       JSON.stringify(Array.isArray(host.Devices) ? host.Devices : []) ===
         JSON.stringify(
