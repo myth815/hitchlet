@@ -9,6 +9,15 @@ import type {
   RuntimeNetworkPlan,
   RuntimeNetworkResult,
 } from "@hitchlet/contracts/internal";
+import { runtimeMemberLinkSchema } from "@hitchlet/contracts/internal";
+import {
+  containerMembers,
+  memberNativeName,
+  groupAddresses,
+  containerIpv4,
+  runtimeLinksForResources,
+  groupContainerBody,
+} from "./container-group.js";
 import {
   buildRuntimeNetworkCommand,
   buildRuntimeNetworkPlan,
@@ -150,6 +159,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
     journal: ResourceJournal,
   ): Promise<readonly OwnedResource[]> {
     assertDockerRecipe(plan);
+    if (plan.containerGroup) return this.createGroup(plan, journal);
     await this.assertStorageCapacity(plan);
     await this.assertMounts(plan);
     await journal.assertActive?.();
@@ -501,6 +511,432 @@ export class PortainerExecutionProvider implements ExecutionPort {
     return [completedNetwork, volumeResource, containerResource, ...references];
   }
 
+  private async groupImage(
+    runtime: RuntimeAccess,
+    member: ProvisionPlan,
+  ): Promise<Json> {
+    const architecture = dockerArchitecture(
+      (await this.request(runtime, "GET", "info")).Architecture,
+    );
+    await this.verifyDistributionArtifact(
+      runtime,
+      member.artifact.ref,
+      member.artifact.digest,
+      architecture,
+    );
+    let image = await this.inspectImage(
+      runtime,
+      member.artifact.ref,
+      member.artifact.digest,
+      architecture,
+    );
+    if (!image) {
+      await this.pullImage(runtime, member.artifact.ref);
+      await this.verifyDistributionArtifact(
+        runtime,
+        member.artifact.ref,
+        member.artifact.digest,
+        architecture,
+      );
+      image = await this.inspectImage(
+        runtime,
+        member.artifact.ref,
+        member.artifact.digest,
+        architecture,
+      );
+    }
+    if (!image)
+      throw new Error(
+        "Pinned member image is unavailable on the selected Engine",
+      );
+    return image;
+  }
+
+  private async createGroup(
+    plan: ProvisionPlan,
+    journal: ResourceJournal,
+  ): Promise<readonly OwnedResource[]> {
+    const members = containerMembers(plan);
+    await this.assertStorageCapacity(plan);
+    await this.assertMounts(plan);
+    await journal.assertActive?.();
+    const runtime = await this.runtime(plan, true),
+      name = resourceName(plan),
+      labels = ownershipLabels(plan);
+    const prior = await this.inspect(plan);
+    if (prior.presence === "unknown")
+      throw new Error("Cannot resume group with unknown ownership");
+    const objects = prior.presence === "present" ? prior.evidence.objects : [];
+    const priorNetwork = objects.find((o) => o.kind === "network_policy");
+    const createdNetwork = priorNetwork
+      ? { Id: priorNetwork.id }
+      : await this.createNative(
+          journal,
+          runtime,
+          "network_policy",
+          name,
+          "networks/create",
+          {
+            Name: name,
+            Driver: "bridge",
+            CheckDuplicate: true,
+            Internal: false,
+            Attachable: false,
+            EnableIPv6: false,
+            Labels: labels,
+          },
+        );
+    const networkId = requiredString(createdNetwork.Id, "Group network ID");
+    const network = await this.request(
+      runtime,
+      "GET",
+      `networks/${encodeURIComponent(networkId)}`,
+    );
+    if (
+      network.Id !== networkId ||
+      network.Name !== name ||
+      !matchesOwnership(record(network.Labels), plan)
+    )
+      throw new Error("Group network readback differs from its frozen owner");
+    const networkResource = this.owned(plan, networkId, "network_policy", {
+      networkName: name,
+      ...networkFacts(network, networkId),
+    });
+    await journal.recordCreated(networkResource);
+    const volumeName = `${name}-workspace`,
+      stateVolumeName = `${name}-gateway-state`;
+    for (const v of [
+      { name: volumeName, memberName: "workload", target: "/workspace" },
+      {
+        name: stateVolumeName,
+        memberName: "gateway",
+        target: plan.containerGroup!.gateway.stateMountPath,
+      },
+    ]) {
+      if (!objects.some((o) => o.kind === "volume" && o.id === v.name))
+        await this.createNative(
+          journal,
+          runtime,
+          "volume",
+          v.name,
+          "volumes/create",
+          {
+            Name: v.name,
+            Driver: "local",
+            Labels: { ...labels, "io.hitchlet.member": v.memberName },
+          },
+          v.memberName === "gateway" ? "volume_gateway" : undefined,
+        );
+      const volume = await this.request(
+        runtime,
+        "GET",
+        `volumes/${encodeURIComponent(v.name)}`,
+      );
+      if (
+        volume.Name !== v.name ||
+        !matchesOwnership(record(volume.Labels), plan) ||
+        record(volume.Labels)["io.hitchlet.member"] !== v.memberName
+      )
+        throw new Error("Group volume ownership differs");
+      await journal.recordCreated(
+        this.owned(plan, v.name, "volume", {
+          temporary: true,
+          memberName: v.memberName,
+          target: v.target,
+        }),
+      );
+    }
+    const ips = groupAddresses(subnetAddress(network), gatewayAddress(network));
+    const created: Array<{
+      id: string;
+      detail: Json;
+      member: (typeof members)[number];
+    }> = [];
+    for (const member of members) {
+      const memberVolumeName =
+        member.name === "gateway" ? stateVolumeName : volumeName;
+      const image = await this.groupImage(runtime, member.plan);
+      const nativeName = memberNativeName(name, member.name);
+      const priorContainer = objects.find(
+        (o) => o.kind === "container" && o.details?.memberName === member.name,
+      );
+      const labelsForMember = { ...labels, "io.hitchlet.member": member.name };
+      const container = priorContainer
+        ? { Id: priorContainer.id }
+        : await this.createNative(
+            journal,
+            runtime,
+            "container",
+            nativeName,
+            `containers/create?name=${encodeURIComponent(nativeName)}`,
+            groupContainerBody(
+              member.plan,
+              name,
+              memberVolumeName,
+              member.name,
+              ips[member.name],
+              labelsForMember,
+              member.name === "gateway"
+                ? plan.containerGroup!.gateway.environment
+                : undefined,
+            ),
+            member.name === "gateway" ? "container_gateway" : undefined,
+          );
+      const id = requiredString(container.Id, "Group member ID");
+      const detail = await this.request(
+        runtime,
+        "GET",
+        `containers/${encodeURIComponent(id)}/json`,
+      );
+      if (
+        detail.Id !== id ||
+        detail.Name !== `/${nativeName}` ||
+        !matchesOwnership(record(record(detail.Config).Labels), plan) ||
+        record(record(detail.Config).Labels)["io.hitchlet.member"] !==
+          member.name ||
+        containerIpv4(detail, name) !== ips[member.name] ||
+        !containerMatchesFrozen(
+          detail,
+          member.plan,
+          image.Id,
+          memberVolumeName,
+          name,
+          member.name === "gateway"
+            ? plan.containerGroup!.gateway.environment
+            : undefined,
+        )
+      )
+        throw new Error(
+          "Group member differs from frozen image, limits, mounts or network identity",
+        );
+      await journal.recordCreated(
+        this.owned(plan, id, "container", {
+          memberName: member.name,
+          ipv4: ips[member.name],
+          name: nativeName,
+          imageId: image.Id,
+          networkName: name,
+        }),
+      );
+      created.push({ id, detail, member });
+    }
+    const bindingResources = created.map((c) =>
+      this.owned(plan, c.id, "container", {
+        memberName: c.member.name,
+        ipv4: ips[c.member.name],
+      }),
+    );
+    const memberLinks = runtimeLinksForResources(plan, bindingResources);
+    if (!memberLinks) throw new Error("Group link bindings are incomplete");
+    // Persist the exact revocation input before any rule can be installed.
+    const boundNetwork = this.owned(plan, networkId, "network_policy", {
+      ...networkResource.details,
+      memberLinks,
+      publishedPorts: [],
+    });
+    await journal.recordCreated(boundNetwork);
+    const agentPlan = this.networkPlan(
+      plan,
+      runtime,
+      networkId,
+      name,
+      created.map((c) => c.id),
+      [],
+      undefined,
+      network,
+      memberLinks,
+    );
+    const ensured = await this.agentCommand(
+      plan,
+      runtime,
+      agentPlan,
+      "network.ensure",
+    );
+    assertNetworkResult(
+      ensured,
+      plan,
+      runtime,
+      "installed",
+      agentPlan.expectedRulesetHash,
+    );
+    const checked = await this.agentCommand(
+      plan,
+      runtime,
+      agentPlan,
+      "network.inspect",
+    );
+    assertNetworkResult(
+      checked,
+      plan,
+      runtime,
+      "present",
+      agentPlan.expectedRulesetHash,
+    );
+    for (const c of created) {
+      await journal.assertActive?.();
+      if (record(c.detail.State).Running !== true)
+        await this.request(
+          runtime,
+          "POST",
+          `containers/${encodeURIComponent(c.id)}/start`,
+          undefined,
+          [304],
+        );
+      const started = await this.request(
+        runtime,
+        "GET",
+        `containers/${encodeURIComponent(c.id)}/json`,
+      );
+      if (
+        started.Id !== c.id ||
+        record(started.State).Running !== true ||
+        containerIpv4(started, name) !== ips[c.member.name]
+      )
+        throw new Error("Group member start or assigned IP was not verified");
+      await journal.recordCreated(
+        this.owned(plan, c.id, "container", {
+          memberName: c.member.name,
+          ipv4: ips[c.member.name],
+          name: memberNativeName(name, c.member.name),
+          networkName: name,
+        }),
+      );
+    }
+    const references = this.storageReferences(plan);
+    for (const r of references) await journal.recordCreated(r);
+    const final = await this.inspect(plan);
+    if (final.presence !== "present")
+      throw new Error("Group inventory is incomplete after start");
+    // The bound link facts must survive cleanup after either container disappears.
+    return final.evidence.objects.map((o) =>
+      o.kind === "network_policy" ? boundNetwork : o,
+    );
+  }
+
+  private async readyGroup(
+    plan: ProvisionPlan,
+    _inventory: InventoryEvidence,
+  ): Promise<ReadyReceipt> {
+    await this.assertMounts(plan);
+    if (plan.resources.scratchEnforcement === "required")
+      throw new Error("Group scratch hard limits are unsupported");
+    const runtime = await this.runtime(plan, true);
+    const inspection = await this.inspect({
+      ...plan,
+      executionPhase: "provision",
+    });
+    if (inspection.presence !== "present")
+      throw new Error("Group inventory is unavailable");
+    const objects = inspection.evidence.objects;
+    const networkResource = objects.find((o) => o.kind === "network_policy"),
+      volume = objects.find(
+        (o) => o.kind === "volume" && o.details?.memberName === "workload",
+      );
+    const members = containerMembers(plan);
+    if (
+      !networkResource ||
+      !volume ||
+      objects.filter((o) => o.kind === "container").length !== members.length
+    )
+      throw new Error("Group owned membership is incomplete");
+    const architecture = dockerArchitecture(
+      (await this.request(runtime, "GET", "info")).Architecture,
+    );
+    for (const member of members) {
+      const owned = objects.find(
+        (o) => o.kind === "container" && o.details?.memberName === member.name,
+      );
+      const memberVolume = objects.find(
+        (o) => o.kind === "volume" && o.details?.memberName === member.name,
+      );
+      if (!owned || !memberVolume)
+        throw new Error("Group member or state volume is missing");
+      const detail = await this.request(
+        runtime,
+        "GET",
+        `containers/${encodeURIComponent(owned.id)}/json`,
+      );
+      const image = await this.inspectImage(
+        runtime,
+        member.plan.artifact.ref,
+        member.plan.artifact.digest,
+        architecture,
+      );
+      if (
+        !image ||
+        record(detail.State).Running !== true ||
+        !containerMatchesFrozen(
+          detail,
+          member.plan,
+          image.Id,
+          memberVolume.id,
+          resourceName(plan),
+          member.name === "gateway"
+            ? plan.containerGroup!.gateway.environment
+            : undefined,
+        )
+      )
+        throw new Error(
+          "Group readiness differs from its frozen resource contract",
+        );
+    }
+    const network = await this.request(
+      runtime,
+      "GET",
+      `networks/${encodeURIComponent(networkResource.id)}`,
+    );
+    const memberLinks = runtimeLinksForResources(plan, objects);
+    if (!memberLinks) throw new Error("Group link inventory is incomplete");
+    const networkPlan = this.networkPlan(
+      plan,
+      runtime,
+      networkResource.id,
+      resourceName(plan),
+      objects.filter((o) => o.kind === "container").map((o) => o.id),
+      [],
+      undefined,
+      network,
+      memberLinks,
+    );
+    const verified = await this.agentCommand(
+      plan,
+      runtime,
+      networkPlan,
+      "network.inspect",
+    );
+    assertNetworkResult(
+      verified,
+      plan,
+      runtime,
+      "present",
+      networkPlan.expectedRulesetHash,
+    );
+    return {
+      identity: plan.identity,
+      artifactDigest: plan.artifact.digest,
+      contractHash: plan.resolved.contractHash,
+      ...resourceManifest(plan, objects),
+      objectIds: objects.map((o) => o.id).sort(),
+      effectiveResources: {
+        limits: {
+          cpuMillis: plan.resources.limit.cpuMillis,
+          memoryMiB: plan.resources.limit.memoryMiB,
+          scratchMiB: 0,
+        },
+        cpuEnforcement: "hard",
+        memoryEnforcement: "hard",
+        scratchEnforcement: "best_effort",
+        acceleratorAssignments: [],
+      },
+      networkRevisionId: plan.resolved.network.revisionId,
+      networkContractHash: sha256(plan.resolved.network),
+      mountContractHash: sha256(plan.resolved.mounts),
+      accessProtocol: "none",
+      bootstrapComplete: true,
+      offlineLeaseEnforcement: "unsupported",
+    };
+  }
+
   private async createNative(
     journal: ResourceJournal,
     runtime: RuntimeAccess,
@@ -508,6 +944,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
     name: string,
     path: string,
     body: Json,
+    key?: CreateEffect["key"],
   ): Promise<Json> {
     if (!journal.beforeCreate)
       throw new Error(
@@ -517,6 +954,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
       kind,
       name,
       requestHash: sha256({ method: "POST", path, body }),
+      ...(key === undefined ? {} : { key }),
     });
     // A timeout, transport error or unclassified rejection remains unknown. Never infer non-execution from it.
     return this.request(runtime, "POST", path, body);
@@ -541,7 +979,17 @@ export class PortainerExecutionProvider implements ExecutionPort {
         const item = record(raw);
         const labels = record(item.Labels);
         const names = Array.isArray(item.Names) ? item.Names : [];
-        const expectedName = resourceName(plan);
+        const member = containerMembers(plan).find((m) =>
+          names.some(
+            (n) =>
+              typeof n === "string" &&
+              n.replace(/^\//, "") ===
+                memberNativeName(resourceName(plan), m.name),
+          ),
+        );
+        const expectedName = member
+          ? memberNativeName(resourceName(plan), member.name)
+          : resourceName(plan);
         const nameCandidate = names.some(
           (name) =>
             typeof name === "string" &&
@@ -563,6 +1011,11 @@ export class PortainerExecutionProvider implements ExecutionPort {
         if (
           detail.Id !== id ||
           detail.Name !== `/${expectedName}` ||
+          (plan.containerGroup !== undefined &&
+            (!member ||
+              record(detail.Config).Labels === undefined ||
+              record(record(detail.Config).Labels)["io.hitchlet.member"] !==
+                member.name)) ||
           !matchesOwnership(
             record(detail.Config && record(detail.Config).Labels),
             plan,
@@ -590,6 +1043,20 @@ export class PortainerExecutionProvider implements ExecutionPort {
             memorySwapBytes: Number(record(detail.HostConfig).MemorySwap),
             hostPort: ports[0]?.hostPort ?? null,
             hostAddress: ports[0]?.hostAddress ?? null,
+            ...(plan.containerGroup && member
+              ? {
+                  memberName: member.name,
+                  ipv4: containerIpv4(detail, resourceName(plan)),
+                  artifactDigest: member.plan.artifact.digest,
+                  resources: member.plan.resources.limit,
+                  mountBindings: member.plan.resolved.mounts.map((m) => ({
+                    grantId: m.grantId,
+                    revisionId: m.revisionId,
+                    target: m.target,
+                    mode: m.mode,
+                  })),
+                }
+              : {}),
           }),
         );
       }
@@ -642,11 +1109,20 @@ export class PortainerExecutionProvider implements ExecutionPort {
                 ]
               : [];
           });
+        const savedLinks = plan.cleanupResources?.find(
+          (r) => r.kind === "network_policy",
+        )?.details?.memberLinks;
+        const memberLinks =
+          runtimeLinksForResources(plan, owned) ??
+          (savedLinks === undefined
+            ? undefined
+            : runtimeMemberLinkSchema.array().parse(savedLinks));
         owned.push(
           this.owned(plan, networkId, "network_policy", {
             networkName: item.Name,
             ...networkFacts(detail, networkId),
             publishedPorts,
+            ...(memberLinks === undefined ? {} : { memberLinks }),
           }),
         );
       }
@@ -657,7 +1133,10 @@ export class PortainerExecutionProvider implements ExecutionPort {
       for (const raw of volumeList.Volumes) {
         const item = record(raw);
         const labels = record(item.Labels);
-        const expectedVolumeName = `${resourceName(plan)}-workspace`;
+        const gatewayVolume =
+          plan.containerGroup !== undefined &&
+          item.Name === `${resourceName(plan)}-gateway-state`;
+        const expectedVolumeName = `${resourceName(plan)}-${gatewayVolume ? "gateway-state" : "workspace"}`;
         if (
           hasPartialOwnership(labels, plan) &&
           !matchesOwnership(labels, plan)
@@ -675,7 +1154,10 @@ export class PortainerExecutionProvider implements ExecutionPort {
           );
           if (
             volumeDetail.Name !== expectedVolumeName ||
-            !matchesOwnership(record(volumeDetail.Labels), plan)
+            !matchesOwnership(record(volumeDetail.Labels), plan) ||
+            (plan.containerGroup !== undefined &&
+              record(volumeDetail.Labels)["io.hitchlet.member"] !==
+                (gatewayVolume ? "gateway" : "workload"))
           )
             return { presence: "unknown", reason: "inventory_incomplete" };
           owned.push(
@@ -683,7 +1165,17 @@ export class PortainerExecutionProvider implements ExecutionPort {
               plan,
               requiredString(item.Name, "Docker volume name"),
               "volume",
-              { temporary: true },
+              {
+                temporary: true,
+                ...(plan.containerGroup
+                  ? {
+                      memberName: gatewayVolume ? "gateway" : "workload",
+                      target: gatewayVolume
+                        ? plan.containerGroup.gateway.stateMountPath
+                        : "/workspace",
+                    }
+                  : {}),
+              },
             ),
           );
         }
@@ -729,6 +1221,23 @@ export class PortainerExecutionProvider implements ExecutionPort {
           integrity: { state: "lost", reason: "RESOURCE_OBJECT_MISSING" },
         };
       const firstContainer = containers[0]!;
+      if (plan.containerGroup) {
+        if (containers.length !== containerMembers(plan).length)
+          return {
+            presence: "present",
+            evidence,
+            integrity: { state: "lost", reason: "RESOURCE_OBJECT_MISSING" },
+          };
+        await this.readyGroup(
+          { ...plan, executionPhase: "provision" },
+          evidence,
+        );
+        return {
+          presence: "present",
+          evidence,
+          integrity: { state: "healthy" },
+        };
+      }
       const networkResource = networksOwned[0]!;
       const containerDetail = await this.request(
         runtime,
@@ -829,6 +1338,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
   ): Promise<ReadyReceipt> {
     const plan = _plan;
     assertDockerRecipe(plan);
+    if (plan.containerGroup) return this.readyGroup(plan, _inventory);
     await this.assertMounts(plan);
     if (plan.resources.scratchEnforcement === "required")
       throw new Error(
@@ -1619,6 +2129,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
     publishedPortsOverride?: RuntimeNetworkPlan["publishedPorts"],
     container?: Json,
     network?: Json,
+    memberLinks?: RuntimeNetworkPlan["memberLinks"],
   ): RuntimeNetworkPlan {
     const activeBindings = record(
       container && record(container.NetworkSettings).Ports,
@@ -1647,6 +2158,14 @@ export class PortainerExecutionProvider implements ExecutionPort {
         });
       });
     const n = plan.resolved.network;
+    const savedLinks = plan.cleanupResources?.find(
+      (r) => r.kind === "network_policy",
+    )?.details?.memberLinks;
+    const links =
+      memberLinks ??
+      (savedLinks === undefined
+        ? undefined
+        : runtimeMemberLinkSchema.array().parse(savedLinks));
     const allocatedSubnet = subnetAddress(network);
     if (!cidrContains(runtime.networkCidrBase, allocatedSubnet))
       throw new Error(
@@ -1664,6 +2183,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
       networkName,
       networkSubnet: allocatedSubnet,
       containerIds,
+      ...(links === undefined ? {} : { memberLinks: links }),
       bridgeInterface:
         typeof record(network?.Options)["com.docker.network.bridge.name"] ===
           "string" && record(network?.Options)["com.docker.network.bridge.name"]
@@ -1930,6 +2450,7 @@ function containerMatchesFrozen(
   imageId: unknown,
   volumeName: string,
   networkName: string,
+  environment?: Readonly<Record<string, string>>,
 ): boolean {
   const host = record(container.HostConfig);
   const actualCpu =
@@ -1940,14 +2461,22 @@ function containerMatchesFrozen(
   const mounts = Array.isArray(container.Mounts)
     ? container.Mounts.map(record)
     : [];
-  const workspace = mounts.find((mount) => mount.Destination === "/workspace");
+  const workspace = mounts.find(
+    (mount) => mount.Destination === (plan.ownedVolumeTarget ?? "/workspace"),
+  );
   const capAdd = Array.isArray(host.CapAdd) ? host.CapAdd : [];
   const expectedPorts = bindingsFor(plan);
   const actualPorts = record(host.PortBindings);
+  const configuredEnv = record(container.Config).Env;
+  const actualEnv = Array.isArray(configuredEnv) ? configuredEnv : [];
   return (
     container.Image === imageId &&
+    Object.entries(environment ?? {}).every(([key, value]) =>
+      actualEnv.includes(`${key}=${value}`),
+    ) &&
     (plan.accessProtocol !== "none" ||
-      record(container.Config).User === "1000:1000") &&
+      record(container.Config).User ===
+        (plan.containerRole === "gateway" ? "0" : "1000:1000")) &&
     host.NetworkMode === networkName &&
     actualCpu === plan.resources.limit.cpuMillis &&
     actualMemory === plan.resources.limit.memoryMiB &&
@@ -1955,6 +2484,9 @@ function containerMatchesFrozen(
     host.Privileged !== true &&
     record(host.Sysctls)["net.ipv6.conf.all.disable_ipv6"] === "1" &&
     record(host.Sysctls)["net.ipv6.conf.default.disable_ipv6"] === "1" &&
+    (plan.containerRole !== "gateway" ||
+      record(host.Sysctls)["net.ipv4.ip_forward"] ===
+        (plan.gatewayIpv4Forwarding ? "1" : undefined)) &&
     Array.isArray(host.Binds) &&
     host.Binds.length === 0 &&
     mounts.length === 1 + plan.resolved.mounts.length &&
@@ -1974,15 +2506,33 @@ function containerMatchesFrozen(
     JSON.stringify(actualPorts) === JSON.stringify(expectedPorts) &&
     Array.isArray(host.CapDrop) &&
     host.CapDrop.includes("ALL") &&
-    [
-      "CHOWN",
-      "DAC_OVERRIDE",
-      "FOWNER",
-      "SETGID",
-      "SETUID",
-      "SYS_CHROOT",
-      "NET_BIND_SERVICE",
-    ].every((cap) => capAdd.includes(cap))
+    (plan.containerRole === "gateway"
+      ? ["NET_ADMIN"]
+      : [
+          "CHOWN",
+          "DAC_OVERRIDE",
+          "FOWNER",
+          "SETGID",
+          "SETUID",
+          "SYS_CHROOT",
+          "NET_BIND_SERVICE",
+        ]
+    ).every((cap) => capAdd.includes(cap)) &&
+    (plan.containerRole === undefined ||
+      capAdd.length === (plan.containerRole === "gateway" ? 1 : 7)) &&
+    (plan.containerRole === undefined ||
+      JSON.stringify(Array.isArray(host.Devices) ? host.Devices : []) ===
+        JSON.stringify(
+          plan.containerRole === "gateway"
+            ? [
+                {
+                  PathOnHost: "/dev/net/tun",
+                  PathInContainer: "/dev/net/tun",
+                  CgroupPermissions: "rw",
+                },
+              ]
+            : [],
+        ))
   );
 }
 function sha256(value: unknown): string {
@@ -1991,7 +2541,15 @@ function sha256(value: unknown): string {
 function assertDockerRecipe(plan: ProvisionPlan) {
   if (
     plan.accessProtocol === "none" &&
-    supportsContainerEntrypoint({ bootstrap: plan.bootstrap }, plan.access)
+    supportsContainerEntrypoint(
+      {
+        bootstrap: plan.bootstrap,
+        ...(plan.containerGroup === undefined
+          ? {}
+          : { containerGroup: plan.containerGroup }),
+      },
+      plan.access,
+    )
   )
     return;
   if (

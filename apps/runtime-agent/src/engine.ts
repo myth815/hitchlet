@@ -353,6 +353,23 @@ export class LocalEngine {
       const attachments = Object.values(
         container.NetworkSettings?.Networks ?? {},
       ) as Json[];
+      for (const link of plan.memberLinks ?? []) {
+        const expected =
+          link.fromContainerId === id
+            ? link.fromIpv4
+            : link.toContainerId === id
+              ? link.toIpv4
+              : undefined;
+        if (!expected) continue;
+        const endpoint = (container.NetworkSettings?.Networks ?? {})[
+          plan.networkName
+        ];
+        const actual = runningIp(container, endpoint);
+        if (actual !== expected || !ipv4InSubnet(expected, plan.networkSubnet))
+          throw new Error(
+            "Member link address differs from local Engine allocation facts",
+          );
+      }
       const running = container.State?.Running === true;
       if (
         running &&
@@ -459,6 +476,22 @@ export class LocalEngine {
         "Published port bindings are missing, dynamic, or not fully described",
       );
   }
+}
+
+function runningIp(container: Json, endpoint: Json | undefined): unknown {
+  return container.State?.Running === true
+    ? endpoint?.IPAddress
+    : endpoint?.IPAMConfig?.IPv4Address;
+}
+function ipv4InSubnet(ip: string, subnet: string): boolean {
+  const [base, prefix] = subnet.split("/");
+  if (!isIPv4(ip) || !base || !isIPv4(base) || prefix === undefined)
+    return false;
+  const number = (value: string) =>
+    value.split(".").reduce((n, part) => (n * 256 + Number(part)) >>> 0, 0);
+  const bits = Number(prefix),
+    mask = bits === 0 ? 0 : (0xffffffff << (32 - bits)) >>> 0;
+  return (number(ip) & mask) === (number(base) & mask);
 }
 
 /** Disable only this verified Docker bridge, then require a successful sysctl readback. */

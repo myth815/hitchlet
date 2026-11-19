@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { networkDestinationSchema } from "./network-destination.js";
+import { runtimeMemberLinkSchema } from "./container-group.js";
 
 const id = z.string().min(1).max(200);
 const sha256 = z.string().regex(/^sha256:[a-f0-9]{64}$/);
@@ -39,6 +40,7 @@ export const runtimeNetworkPlanSchema = z
     networkName: id,
     networkSubnet: cidr,
     containerIds: z.array(id),
+    memberLinks: z.array(runtimeMemberLinkSchema).min(1).optional(),
     bridgeInterface: z.string().regex(/^[a-zA-Z0-9_.-]{1,15}$/),
     bridgeGateway: z.string().min(2).max(64),
     userlandProxy: z.boolean(),
@@ -53,6 +55,14 @@ export const runtimeNetworkPlanSchema = z
     expectedRulesetHash: sha256,
   })
   .strict();
+
+const linksBound = (v: { plan: z.infer<typeof runtimeNetworkPlanSchema> }) =>
+  v.plan.memberLinks === undefined ||
+  v.plan.memberLinks.every(
+    (l) =>
+      v.plan.containerIds.includes(l.fromContainerId) &&
+      v.plan.containerIds.includes(l.toContainerId),
+  );
 
 const envelope = z.object({
   installationId: id,
@@ -78,13 +88,15 @@ export const runtimeNetworkCommandSchema = z.discriminatedUnion("kind", [
     .refine(
       (value) => value.plan.containerIds.length > 0,
       "ensure needs container evidence",
-    ),
+    )
+    .refine(linksBound, "ensure needs all member link containers"),
   commandBase
     .extend({ kind: z.literal("network.inspect") })
     .refine(
       (value) => value.plan.containerIds.length > 0,
       "inspect needs container evidence",
-    ),
+    )
+    .refine(linksBound, "inspect needs all member link containers"),
   commandBase.extend({ kind: z.literal("network.revoke") }),
   commandBase
     .extend({ kind: z.literal("network.remove") })
@@ -321,6 +333,46 @@ export function runtimeNetworkRulesMaterial(
     }
   }
   if (!revoked) {
+    for (const link of plan.memberLinks ?? []) {
+      for (const port of link.ports) {
+        forwardRules.push([
+          "-i",
+          plan.bridgeInterface,
+          "-o",
+          plan.bridgeInterface,
+          "-s",
+          link.fromIpv4,
+          "-d",
+          link.toIpv4,
+          "-p",
+          "tcp",
+          "--dport",
+          String(port),
+          "-j",
+          "RETURN",
+        ]);
+        forwardRules.push([
+          "-i",
+          plan.bridgeInterface,
+          "-o",
+          plan.bridgeInterface,
+          "-s",
+          link.toIpv4,
+          "-d",
+          link.fromIpv4,
+          "-p",
+          "tcp",
+          "--sport",
+          String(port),
+          "-m",
+          "conntrack",
+          "--ctstate",
+          "ESTABLISHED,RELATED",
+          "-j",
+          "RETURN",
+        ]);
+      }
+    }
     forwardRules.push([
       "-i",
       plan.bridgeInterface,

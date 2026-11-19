@@ -8,6 +8,10 @@ import { z } from "zod";
 import { supportsContainerEntrypoint } from "./container-entrypoint.js";
 import { networkDestinationSchema } from "./network-destination.js";
 import {
+  containerGroupSchema,
+  containerGroupFromRequirements,
+} from "./container-group.js";
+import {
   StorageRequestSchema,
   ResourceContractSchema,
   RevokeRequestSchema,
@@ -45,6 +49,7 @@ const requirements = z
   .object({
     bootstrap,
     requiredCapabilities: z.array(z.string().min(1)).default([]),
+    containerGroup: containerGroupSchema.optional(),
   })
   .strict();
 const access = z
@@ -82,20 +87,41 @@ function validateDraftPlatform(
     guestOs: "linux" | "macos" | "windows";
     artifactRef: string;
     bootstrap?: unknown;
-    requirements?: { bootstrap: unknown };
+    requirements?: { bootstrap: unknown; containerGroup?: unknown };
+    containerGroup?: unknown;
     access: z.infer<typeof access>;
   },
   context: z.RefinementCtx,
 ) {
+  const requirements = value.requirements ?? {
+    bootstrap: value.bootstrap,
+    ...(value.containerGroup === undefined
+      ? {}
+      : { containerGroup: value.containerGroup }),
+  };
+  try {
+    const group = containerGroupFromRequirements(requirements);
+    if (
+      group &&
+      (value.backendKind !== "portainer" ||
+        value.kind !== "container" ||
+        !supportsContainerEntrypoint(requirements, value.access))
+    )
+      throw new Error("Container group requires the no-access Docker recipe");
+  } catch (error) {
+    context.addIssue({
+      code: "custom",
+      path: ["containerGroup"],
+      message:
+        error instanceof Error ? error.message : "Invalid container group",
+    });
+  }
   if (
     (!value.access.accessProtocols.length || !value.access.ports.length) &&
     !(
       value.backendKind === "portainer" &&
       value.kind === "container" &&
-      supportsContainerEntrypoint(
-        value.requirements ?? { bootstrap: value.bootstrap },
-        value.access,
-      )
+      supportsContainerEntrypoint(requirements, value.access)
     )
   )
     context.addIssue({
@@ -734,6 +760,7 @@ export const ImageDraftSchema = z
     minimumResources,
     bootstrap,
     access,
+    containerGroup: containerGroupSchema.optional(),
     authorizedConsumerIds: z.array(id).min(1),
   })
   .strict()

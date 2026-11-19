@@ -10,6 +10,12 @@ import {
 import type { Storage } from "../storage/index.js";
 import { ApplicationError } from "./errors.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
+import {
+  containerGroupFromRequirements,
+  expectedContainerKinds,
+  memberDetailsSchema,
+} from "@hitchlet/contracts/internal";
+import { groupInventory } from "./group-inventory.js";
 
 const Id = z.string().min(1).max(512),
   Hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -20,6 +26,7 @@ const ObjectRecord = z.object({
   ownership: z.literal("owned"),
   identity: Identity,
   contractHash: Hash,
+  details: memberDetailsSchema.nullish(),
 });
 // Account for every receipt entry; only owned entries belong to the public proof.
 const InventoryObject = z.discriminatedUnion("ownership", [
@@ -80,6 +87,7 @@ export const TICKET_READY_INVENTORY_SQL = `SELECT
  a.id AS allocationId,a.generation AS allocationGeneration,a.control_version AS controlVersion,
  a.desired_state AS desiredState,a.observed_state AS observedState,a.cleanup_status AS allocationCleanup,
  a.manifest_complete AS manifestComplete,a.manifest_id AS manifestId,r.contract_hash AS contractHash,
+ ia.requirements_json AS requirementsJson,ia.content_digest AS primaryDigest,
  json_extract(a.actual_resources_json,'$.executionMode') AS executionMode,
  json_object('identity',json_extract(a.actual_resources_json,'$.receipt.identity'),
  'contractHash',json_extract(a.actual_resources_json,'$.receipt.contractHash'),
@@ -88,6 +96,10 @@ export const TICKET_READY_INVENTORY_SQL = `SELECT
  'objectIds',json_extract(a.actual_resources_json,'$.receipt.objectIds')) AS readyJson,
  (SELECT json_group_array(json_object('id',json_extract(j.value,'$.id'),'kind',json_extract(j.value,'$.kind'),
  'ownership',json_extract(j.value,'$.ownership'),'identity',json_extract(j.value,'$.identity'),
+ 'details',CASE WHEN json_extract(j.value,'$.details.memberName') IS NOT NULL THEN
+ json_object('memberName',json_extract(j.value,'$.details.memberName'),
+ 'artifactDigest',json_extract(j.value,'$.details.artifactDigest'),'ipv4',json_extract(j.value,'$.details.ipv4'),
+ 'resources',json_extract(j.value,'$.details.resources'),'target',json_extract(j.value,'$.details.target'),'mountBindings',json_extract(j.value,'$.details.mountBindings')) ELSE NULL END,
  'contractHash',json_extract(j.value,'$.contractHash'))) FROM json_each(a.actual_resources_json,'$.objects') j) AS objectsJson,
  (SELECT json_group_array(json_object('id',COALESCE(m.provider_id,m.id),'kind',m.kind,'ownership',m.ownership,
  'state',m.observed_state,'identity',json(m.ownership_json))) FROM managed_resources m
@@ -104,6 +116,7 @@ export const TICKET_READY_INVENTORY_SQL = `SELECT
  FROM tickets t JOIN leases l ON l.ticket_id=t.id
  JOIN allocations a ON a.id=l.allocation_id AND a.ticket_id=t.id AND a.purpose='tenant'
  JOIN resolved_provision_contracts r ON r.id=a.resolved_provision_contract_id
+ JOIN image_artifacts ia ON ia.id=a.image_artifact_id
  JOIN operations p ON p.id=json_extract(a.actual_resources_json,'$.receipt.identity.operationId') AND p.allocation_id=a.id
  WHERE t.id=? AND t.consumer_id=? AND l.id=? AND l.generation=? AND a.generation=l.generation
  AND a.runtime_identity_id=json_extract(a.actual_resources_json,'$.receipt.identity.runtimeIdentityId')
@@ -140,12 +153,14 @@ export class TicketReadyInventoryReader {
     let check = "record_shape";
     try {
       const readAtMs = this.now(),
+        group = containerGroupFromRequirements(parse(row.requirementsJson)),
+        expectedKinds = expectedContainerKinds(group),
         ready = Ready.parse(parse(row.readyJson)),
         rawObjects = parse(row.objectsJson),
         inventory = z.array(InventoryObject).parse(rawObjects),
         objects = z
           .array(ObjectRecord)
-          .length(3)
+          .length(expectedKinds.length)
           .parse(inventory.filter((o) => o.ownership === "owned")),
         managed = z.array(ManagedObject).parse(parse(row.managedJson)),
         identity = ready.identity;
@@ -194,10 +209,8 @@ export class TicketReadyInventoryReader {
       );
       check = "manifest_membership";
       requireProof(
-        new Set(ids(objects)).size === 3 &&
-          ["container", "volume", "network_policy"].every(
-            (kind) => objects.filter((o) => o.kind === kind).length === 1,
-          ),
+        new Set(ids(objects)).size === expectedKinds.length &&
+          equal(objects.map((o) => o.kind).sort(), expectedKinds),
       );
       check = "owned_identity";
       requireProof(
@@ -236,7 +249,16 @@ export class TicketReadyInventoryReader {
         controlVersion: identity.controlVersion,
         manifest: { id: ready.manifestId, hash: ready.manifestHash },
         createIdentity: identity,
-        objects,
+        objects: objects.map(({ details: _details, ...o }) => o),
+        ...(group === undefined
+          ? {}
+          : {
+              containerGroup: groupInventory(
+                group,
+                row.primaryDigest,
+                inventory,
+              ),
+            }),
         completeness: "complete",
         ticketPhase: "ready",
         leaseState: "active",

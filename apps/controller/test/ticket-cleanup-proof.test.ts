@@ -37,7 +37,8 @@ function seed(referenceCount = 0) {
   dbs.push(db);
   db.exec(`CREATE TABLE tickets(id,consumer_id,phase,cleanup_status,request_json);
     CREATE TABLE leases(id,ticket_id,allocation_id,generation,state,revoked_at_ms,claimed_at_ms);
-    CREATE TABLE allocations(id,ticket_id,purpose,runtime_identity_id,generation,control_version,desired_state,observed_state,cleanup_status,manifest_complete,manifest_id,resolved_provision_contract_id,actual_resources_json);
+    CREATE TABLE allocations(id,ticket_id,purpose,runtime_identity_id,generation,control_version,desired_state,observed_state,cleanup_status,manifest_complete,manifest_id,resolved_provision_contract_id,actual_resources_json,image_artifact_id);
+    CREATE TABLE image_artifacts(id,requirements_json,content_digest);
     CREATE TABLE installations(singleton,installation_id);
     CREATE TABLE resolved_provision_contracts(id,contract_hash);
     CREATE TABLE managed_resources(id,provider_id,allocation_id,generation,kind,ownership,observed_state,ownership_json);
@@ -144,6 +145,7 @@ function seed(referenceCount = 0) {
   });
   insert("allocations", {
     id: ids.allocation,
+    image_artifact_id: "fixture-artifact",
     ticket_id: ids.ticket,
     purpose: "tenant",
     runtime_identity_id: ids.runtime,
@@ -158,6 +160,10 @@ function seed(referenceCount = 0) {
     actual_resources_json: JSON.stringify(ready),
   });
   insert("installations", { singleton: 1, installation_id: ids.installation });
+  insert("image_artifacts", {
+    id: "fixture-artifact",
+    requirements_json: "{}",
+  });
   insert("resolved_provision_contracts", {
     id: "contract",
     contract_hash: "a".repeat(64),

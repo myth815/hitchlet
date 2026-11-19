@@ -4,6 +4,7 @@ import {
   tartRuntimeFactsSchema,
   supportsContainerEntrypoint,
   networkDestinationSchema,
+  containerGroupFromRequirements,
 } from "@hitchlet/contracts/internal";
 import { createHash } from "node:crypto";
 import { isIP } from "node:net";
@@ -119,13 +120,27 @@ export function normalizeDraftRequirements(value: unknown) {
     )
   )
     throw new RangeError("Required capabilities must be named strings");
-  return { bootstrap, requiredCapabilities: capabilities as string[] };
+  const containerGroup = containerGroupFromRequirements({
+    ...input,
+    bootstrap,
+  });
+  return {
+    bootstrap,
+    requiredCapabilities: capabilities as string[],
+    ...(containerGroup === undefined ? {} : { containerGroup }),
+  };
 }
 export function validateBootstrapAndAccess(
   bootstrap: unknown,
   access: unknown,
+  containerGroup?: unknown,
 ) {
-  if (supportsContainerEntrypoint({ bootstrap }, access)) return;
+  const requirements = {
+    bootstrap,
+    ...(containerGroup === undefined ? {} : { containerGroup }),
+  };
+  containerGroupFromRequirements(requirements);
+  if (supportsContainerEntrypoint(requirements, access)) return;
   if (
     !bootstrap ||
     typeof bootstrap !== "object" ||

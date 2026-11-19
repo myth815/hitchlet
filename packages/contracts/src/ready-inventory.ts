@@ -1,5 +1,9 @@
 import { z } from "zod";
 import { CleanupProofIdentitySchema } from "./cleanup-proof.js";
+import {
+  validDockerOwnedKinds,
+  containerGroupInventorySchema,
+} from "./container-group.js";
 const Id = z.string().min(1).max(512);
 const Hash = z.string().regex(/^[a-f0-9]{64}$/);
 const Positive = z.number().int().positive();
@@ -40,6 +44,7 @@ export const TicketReadyInventorySchema = z
     controlVersion: Positive,
     manifest: z.object({ id: Id, hash: Hash }).strict(),
     createIdentity: CleanupProofIdentitySchema,
+    containerGroup: containerGroupInventorySchema.optional(),
     objects: z
       .array(
         z
@@ -52,7 +57,11 @@ export const TicketReadyInventorySchema = z
           })
           .strict(),
       )
-      .length(3),
+      .min(3)
+      .refine(
+        validDockerOwnedKinds,
+        "Incomplete or duplicate Docker owned inventory",
+      ),
     completeness: z.literal("complete"),
     ticketPhase: z.literal("ready"),
     leaseState: z.literal("active"),

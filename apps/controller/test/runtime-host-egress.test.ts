@@ -83,6 +83,7 @@ type Packet = {
   destination: string;
   protocol: string;
   port: number;
+  sourcePort?: number;
   state: string;
 };
 const packet = (destination = "203.0.113.10", port = 8443): Packet => ({
@@ -141,6 +142,9 @@ function verdict(rules: readonly (readonly string[])[], p: Packet) {
           break;
         case "--dport":
           match = p.port === Number(value);
+          break;
+        case "--sport":
+          match = p.sourcePort === Number(value);
           break;
         case "--ctstate":
           match = value.split(",").includes(p.state);
@@ -356,76 +360,196 @@ class MemoryRunner extends IptablesRunner {
   }
 }
 
-it("pairs Controller commands with Runtime ensure/readback/restart/revoke/remove and rejects changed grants", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "hitchlet-host-egress-"));
-  try {
-    const p = hostPlan(),
-      runner = new MemoryRunner(),
-      firewall = new IptablesFirewall(runner);
-    const unrelated = ["-p", "tcp", "--dport", "8080", "-j", "UNRELATED"];
-    runner.chains.set("UNRELATED", []);
-    runner.chains.get("INPUT")!.push(unrelated);
-    const engine = {
-      assertEngine: async () => p.nativeEngineId,
-      inspectAllocation: async () => ({
-        bridge: p.bridgeInterface,
-        gateway: p.bridgeGateway,
-        subnet: p.networkSubnet,
-        containers: [],
-      }),
-      assertAllocationAbsent: async () => {},
-    } as unknown as LocalEngine;
-    const path = join(dir, "journal.json");
-    const worker = () =>
-      new NetworkWorker(
-        {
-          installationId: p.installationId,
-          runtimeIdentityId: p.runtimeIdentityId,
-          agentId: "fixture-agent",
-        },
-        new FileJournal(path),
-        engine,
-        firewall,
+it.each([false, true])(
+  "pairs Controller commands with Runtime ensure/readback/restart/revoke/remove and rejects changed grants (group=%s)",
+  async (group) => {
+    const dir = await mkdtemp(join(tmpdir(), "hitchlet-host-egress-"));
+    try {
+      const base = hostPlan();
+      const p = group
+        ? buildRuntimeNetworkPlan({
+            ...base,
+            containerIds: ["workload", "gateway"],
+            memberLinks: [
+              {
+                fromContainerId: "gateway",
+                toContainerId: "workload",
+                fromIpv4: "172.30.77.3",
+                toIpv4: "172.30.77.2",
+                protocol: "tcp",
+                ports: [3000],
+              },
+              {
+                fromContainerId: "workload",
+                toContainerId: "gateway",
+                fromIpv4: "172.30.77.2",
+                toIpv4: "172.30.77.3",
+                protocol: "tcp",
+                ports: [18080],
+              },
+            ],
+          })
+        : base;
+      const runner = new MemoryRunner(),
+        firewall = new IptablesFirewall(runner);
+      const unrelated = ["-p", "tcp", "--dport", "8080", "-j", "UNRELATED"];
+      runner.chains.set("UNRELATED", []);
+      runner.chains.get("INPUT")!.push(unrelated);
+      const engine = {
+        assertEngine: async () => p.nativeEngineId,
+        inspectAllocation: async () => ({
+          bridge: p.bridgeInterface,
+          gateway: p.bridgeGateway,
+          subnet: p.networkSubnet,
+          containers: [],
+        }),
+        assertAllocationAbsent: async () => {},
+      } as unknown as LocalEngine;
+      const path = join(dir, "journal.json");
+      const worker = () =>
+        new NetworkWorker(
+          {
+            installationId: p.installationId,
+            runtimeIdentityId: p.runtimeIdentityId,
+            agentId: "fixture-agent",
+          },
+          new FileJournal(path),
+          engine,
+          firewall,
+        );
+      const execute = async (
+        kind: RuntimeNetworkCommand["kind"],
+        material = p,
+      ) => {
+        const sent = command(material, kind);
+        const received = runtimeNetworkCommandSchema.parse(
+          JSON.parse(JSON.stringify(sent)),
+        );
+        const result = await worker().execute(received);
+        assertRuntimeNetworkResponse(sent, result);
+        return result;
+      };
+      expect((await execute("network.ensure")).status).toBe("installed");
+      expect((await execute("network.inspect")).status).toBe("present");
+      const set = compileRules(p, p.bridgeInterface, p.bridgeGateway);
+      expect(verdict(runner.chains.get(set.inputHost)!, packet())).toBe(
+        "ACCEPT",
       );
-    const execute = async (
-      kind: RuntimeNetworkCommand["kind"],
-      material = p,
-    ) => {
-      const sent = command(material, kind);
-      const received = runtimeNetworkCommandSchema.parse(
-        JSON.parse(JSON.stringify(sent)),
+      const changed = command(p, "network.ensure");
+      const changedScope = { ...p, egress: endpoints };
+      expect(hashRuntimeNetworkRules(changedScope)).not.toBe(
+        p.expectedRulesetHash,
       );
-      const result = await worker().execute(received);
-      assertRuntimeNetworkResponse(sent, result);
-      return result;
+      await expect(
+        worker().execute({ ...changed, plan: changedScope }),
+      ).rejects.toThrow("content hash mismatch");
+      await expect(
+        worker().execute(command(changedScope, "network.ensure")),
+      ).rejects.toThrow("Expected ruleset hash mismatch");
+      expect((await execute("network.revoke")).status).toBe("revoked");
+      expect(verdict(runner.chains.get(set.inputHost)!, packet())).toBe("DROP");
+      await expect(
+        worker().execute(command(p, "network.ensure")),
+      ).rejects.toThrow("cannot be re-enabled");
+      expect(
+        (await execute("network.remove", { ...p, containerIds: [] })).status,
+      ).toBe("removed");
+      expect(runner.chains.has(set.inputHost)).toBe(false);
+      expect(runner.chains.get("INPUT")).toEqual([unrelated]);
+      expect(runner.flushed).toContain(p.networkSubnet + ":0.0.0.0/0");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  },
+);
+
+it("binds member links to exact same-lease addresses and TCP ports, with stateful replies only", () => {
+  const base = hostPlan();
+  const memberLinks = [
+    {
+      fromContainerId: "gateway",
+      toContainerId: "workload",
+      fromIpv4: "172.30.77.3",
+      toIpv4: "172.30.77.2",
+      protocol: "tcp" as const,
+      ports: [3000],
+    },
+    {
+      fromContainerId: "workload",
+      toContainerId: "gateway",
+      fromIpv4: "172.30.77.2",
+      toIpv4: "172.30.77.3",
+      protocol: "tcp" as const,
+      ports: [18080],
+    },
+  ];
+  const p = buildRuntimeNetworkPlan({
+    ...base,
+    containerIds: ["workload", "gateway"],
+    memberLinks,
+  });
+  expect(
+    runtimeNetworkCommandSchema.safeParse(command(p, "network.ensure")).success,
+  ).toBe(true);
+  const compiled = compileRules(p, p.bridgeInterface, p.bridgeGateway);
+  const rules = compiled.rules[compiled.forward]!;
+  for (const link of memberLinks) {
+    const request = {
+      ...packet(link.toIpv4, link.ports[0]),
+      source: link.fromIpv4,
+      output: p.bridgeInterface,
     };
-    expect((await execute("network.ensure")).status).toBe("installed");
-    expect((await execute("network.inspect")).status).toBe("present");
-    const set = compileRules(p, p.bridgeInterface, p.bridgeGateway);
-    expect(verdict(runner.chains.get(set.inputHost)!, packet())).toBe("ACCEPT");
-    const changed = command(p, "network.ensure");
-    const changedScope = { ...p, egress: endpoints };
-    expect(hashRuntimeNetworkRules(changedScope)).not.toBe(
-      p.expectedRulesetHash,
-    );
-    await expect(
-      worker().execute({ ...changed, plan: changedScope }),
-    ).rejects.toThrow("content hash mismatch");
-    await expect(
-      worker().execute(command(changedScope, "network.ensure")),
-    ).rejects.toThrow("Expected ruleset hash mismatch");
-    expect((await execute("network.revoke")).status).toBe("revoked");
-    expect(verdict(runner.chains.get(set.inputHost)!, packet())).toBe("DROP");
-    await expect(
-      worker().execute(command(p, "network.ensure")),
-    ).rejects.toThrow("cannot be re-enabled");
-    expect(
-      (await execute("network.remove", { ...p, containerIds: [] })).status,
-    ).toBe("removed");
-    expect(runner.chains.has(set.inputHost)).toBe(false);
-    expect(runner.chains.get("INPUT")).toEqual([unrelated]);
-    expect(runner.flushed).toContain(p.networkSubnet + ":0.0.0.0/0");
-  } finally {
-    await rm(dir, { recursive: true, force: true });
+    expect(verdict(rules, request)).toBe("RETURN");
+    const reply = {
+      ...request,
+      source: request.destination,
+      destination: request.source,
+      port: 50000,
+      sourcePort: request.port,
+      state: "ESTABLISHED",
+    };
+    expect(verdict(rules, reply)).toBe("RETURN");
+    expect(verdict(rules, { ...reply, state: "NEW" })).toBe("DROP");
+    for (const change of [
+      { port: request.port + 1 },
+      { source: "172.30.77.4" },
+      { protocol: "udp" },
+    ])
+      expect(verdict(rules, { ...request, ...change })).toBe("DROP");
+    expect(verdict(rules, { ...request, source: "172.30.78.2" })).toBe("DROP");
+    const revoked = compileRules(p, p.bridgeInterface, p.bridgeGateway, true);
+    expect(verdict(revoked.rules[revoked.forward]!, request)).toBe("DROP");
+    expect(verdict(revoked.rules[revoked.forward]!, reply)).toBe("DROP");
   }
+  expect(verdict(compiled.rules[compiled.inputHost]!, packet())).toBe("ACCEPT");
+  expect(verdict(rules, packet())).toBe("DROP");
+  const denied = buildRuntimeNetworkPlan({
+    ...p,
+    managementDeny: [
+      { cidr: "172.30.77.2/32", protocol: "tcp", ports: [3000] },
+    ],
+  });
+  const deniedSet = compileRules(
+    denied,
+    denied.bridgeInterface,
+    denied.bridgeGateway,
+  );
+  expect(
+    verdict(deniedSet.rules[deniedSet.forward]!, {
+      ...packet("172.30.77.2", 3000),
+      source: "172.30.77.3",
+      output: p.bridgeInterface,
+    }),
+  ).toBe("DROP");
+  const altered = {
+    ...p,
+    memberLinks: [
+      { ...memberLinks[0]!, toIpv4: "172.30.77.4" },
+      memberLinks[1]!,
+    ],
+  };
+  expect(hashRuntimeNetworkRules(altered)).not.toBe(p.expectedRulesetHash);
+  expect(() =>
+    command({ ...p, containerIds: ["workload"] }, "network.ensure"),
+  ).toThrow(/all member link containers/);
 });

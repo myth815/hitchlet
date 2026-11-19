@@ -408,7 +408,7 @@ export class SQLiteOperationStore {
     effect: CreateEffect;
     now: number;
   }) {
-    const path = `$.createEffects.${input.effect.kind}`;
+    const path = `$.createEffects.${input.effect.key ?? input.effect.kind}`;
     const result = await this.db.run(
       "UPDATE operations SET result_json=json_set(COALESCE(result_json,'{}'),?,json(?)) WHERE id=? AND kind='allocation.provision' AND owner_token=? AND version=? AND state='running' AND locked_until_ms>? AND deadline_ms>? AND EXISTS(SELECT 1 FROM system_maintenance WHERE paused=0 AND disk_state='healthy' AND recovery_json IS NULL) AND NOT EXISTS(SELECT 1 FROM allocations a JOIN nodes n ON n.id=a.node_id WHERE a.id=operations.allocation_id AND json_extract(n.config_json,'$.executionMode')='portainer' AND NOT EXISTS(SELECT 1 FROM system_maintenance s,json_each(s.runtime_disks_json) d WHERE d.key=n.id AND json_extract(d.value,'$.state')='healthy' AND json_extract(d.value,'$.observedAtMs')<=? AND json_extract(d.value,'$.observedAtMs')+30000>=? AND json_extract(d.value,'$.availableMiB')-json_extract(d.value,'$.reserveMiB')>=json_extract(a.resource_contract_json,'$.request.scratchMiB'))) AND controller_epoch=(SELECT controller_epoch FROM installations WHERE singleton=1) AND json_extract(result_json,'$.createJournalVersion')=1 AND json_type(result_json,?) IS NULL AND EXISTS(SELECT 1 FROM allocations a WHERE a.id=operations.allocation_id AND a.desired_state='present' AND a.control_version=operations.control_version)",
       [
@@ -518,7 +518,13 @@ export class SQLiteOperationStore {
       input.ownership === "owned" &&
       ["network_policy", "volume", "container", "vm"].includes(input.kind)
     ) {
-      const path = `$.createEffects.${input.kind}`;
+      const member = JSON.parse(input.detailsJson).memberName;
+      const key =
+        member === "gateway" &&
+        (input.kind === "container" || input.kind === "volume")
+          ? `${input.kind}_gateway`
+          : input.kind;
+      const path = `$.createEffects.${key}`;
       statements.push({
         kind: "run",
         sql: "UPDATE operations SET result_json=json_set(result_json,?,'observed',?,?,?,?) WHERE id=json_extract(?,'$.operationId') AND allocation_id=? AND generation=? AND runtime_identity_id=json_extract(?,'$.runtimeIdentityId') AND connection_revision_id=json_extract(?,'$.connectionRevisionId') AND kind='allocation.provision' AND json_extract(result_json,?)=json_extract(?,'$.nativeName') AND (json_extract(result_json,?)='unknown' OR (json_extract(result_json,?)='observed' AND json_extract(result_json,?)=?)) AND EXISTS(SELECT 1 FROM allocations a JOIN resolved_provision_contracts c ON c.id=a.resolved_provision_contract_id WHERE a.id=operations.allocation_id AND c.contract_hash=json_extract(?,'$.contractHash'))",

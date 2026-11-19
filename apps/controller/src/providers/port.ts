@@ -3,6 +3,7 @@ import type {
   ResolvedStorageMount,
   EffectiveResources,
   NetworkDestination,
+  ContainerGroup,
 } from "@hitchlet/contracts/internal";
 
 export type PortainerEvidence = Readonly<{
@@ -60,6 +61,11 @@ export type ProvisionPlan = Readonly<{
     architecture?: "amd64" | "arm64";
   }>;
   resources: ResourceContract;
+  containerGroup?: ContainerGroup;
+  /** Derived only from the registered group; not a consumer privilege switch. */
+  containerRole?: "workload" | "gateway";
+  ownedVolumeTarget?: string;
+  gatewayIpv4Forwarding?: boolean;
   resolved: Readonly<{
     id: string;
     contractHash: string;
@@ -209,6 +215,7 @@ export type CreateEffect = Readonly<{
   kind: "network_policy" | "volume" | "container" | "vm";
   name: string;
   requestHash: string;
+  key?: "container_gateway" | "volume_gateway";
 }>;
 
 export interface ResourceJournal {

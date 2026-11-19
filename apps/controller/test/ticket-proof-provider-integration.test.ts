@@ -24,6 +24,7 @@ import type {
   RuntimeNetworkCommand,
   RuntimeNetworkResult,
   NetworkDestination,
+  ContainerGroup,
 } from "@hitchlet/contracts/internal";
 
 vi.mock("../src/providers/ssh-readiness.js", () => ({
@@ -47,12 +48,19 @@ function hostKeyArchive() {
   return Buffer.concat([header, text, Buffer.alloc(512 - text.length + 1024)]);
 }
 
-function dockerTransport(artifactRef: string, digest: string, starts = true) {
+function dockerTransport(
+  artifactRef: string,
+  digest: string,
+  starts = true,
+  gateway?: { artifactRef: string; digest: string },
+  faults = { loseGatewayCreateResponse: false },
+) {
   type Json = Record<string, any>;
-  let network: Json | undefined,
-    volume: Json | undefined,
-    container: Json | undefined;
-  let sequence = 0;
+  const networks = new Map<string, Json>(),
+    volumes = new Map<string, Json>(),
+    containers = new Map<string, Json>();
+  let networkSequence = 0,
+    containerSequence = 0;
   const deletes: string[] = [];
   const fetcher = vi.fn(
     async (input: URL | RequestInfo, init?: RequestInit) => {
@@ -60,6 +68,11 @@ function dockerTransport(artifactRef: string, digest: string, starts = true) {
         path = url.pathname.split("/docker/")[1] ?? "",
         method = init?.method ?? "GET";
       const json = (value: unknown) => Response.json(value);
+      const parts = path.split("/"),
+        id = decodeURIComponent(parts[1] ?? "");
+      const container = containers.get(id),
+        network =
+          networks.get(id) ?? [...networks.values()].find((n) => n.Name === id);
       if (url.pathname === "/api/system/version")
         return json({ ServerVersion: "2.45.2" });
       if (path === "info")
@@ -70,43 +83,71 @@ function dockerTransport(artifactRef: string, digest: string, starts = true) {
         });
       if (method === "DELETE") {
         deletes.push(path);
-        if (path.startsWith("containers/")) container = undefined;
-        else if (path.startsWith("volumes/")) volume = undefined;
-        else if (path.startsWith("networks/")) network = undefined;
+        if (path.startsWith("containers/")) containers.delete(id);
+        else if (path.startsWith("volumes/")) volumes.delete(id);
+        else if (path.startsWith("networks/"))
+          networks.delete(network?.Id ?? id);
         else throw new Error("Unexpected synthetic delete");
         return new Response(null, { status: 204 });
       }
       if (method === "POST" && path === "networks/create") {
-        const body = JSON.parse(String(init!.body));
-        network = {
+        const body = JSON.parse(String(init!.body)),
+          sequence = ++networkSequence;
+        const n = {
           ...body,
-          Id: "a".repeat(63) + String(++sequence),
-          Options: { "com.docker.network.bridge.name": "br-aaaaaaaaaaaa" },
+          Id: "a".repeat(63) + String(sequence),
+          Options: {
+            "com.docker.network.bridge.name": "br-fixture" + sequence,
+          },
           IPAM: {
-            Config: [{ Subnet: "172.30.1.0/24", Gateway: "172.30.1.1" }],
+            Config: [
+              {
+                Subnet: `172.30.${sequence}.0/24`,
+                Gateway: `172.30.${sequence}.1`,
+              },
+            ],
           },
         };
-        return json({ Id: network.Id });
+        networks.set(n.Id, n);
+        return json({ Id: n.Id });
       }
       if (method === "POST" && path === "volumes/create") {
-        volume = JSON.parse(String(init!.body));
-        return json({ Name: volume!.Name });
+        const v = JSON.parse(String(init!.body));
+        volumes.set(v.Name, v);
+        return json({ Name: v.Name });
       }
       if (method === "POST" && path === "containers/create") {
         const body = JSON.parse(String(init!.body));
-        container = {
-          Id: "synthetic-container-" + sequence,
+        const image =
+          gateway && body.Image === gateway.artifactRef
+            ? "synthetic-gateway-image"
+            : "synthetic-image";
+        const c = {
+          Id: "synthetic-container-" + ++containerSequence,
           Name: "/" + url.searchParams.get("name"),
-          Image: "synthetic-image",
+          Image: image,
           Config: body,
           HostConfig: body.HostConfig,
           State: { Running: false, Status: "created" },
           NetworkSettings: {
             Ports: Object.fromEntries(
-              Object.keys(body.ExposedPorts).map((port) => [
-                port,
-                body.HostConfig.PortBindings[port],
+              Object.keys(body.ExposedPorts).map((p) => [
+                p,
+                body.HostConfig.PortBindings[p],
               ]),
+            ),
+            Networks: Object.fromEntries(
+              Object.entries(body.NetworkingConfig.EndpointsConfig).map(
+                ([name, endpoint]) => {
+                  const n = [...networks.values()].find(
+                    (x) => x.Name === name,
+                  )!;
+                  return [
+                    name,
+                    { ...(endpoint as Json), NetworkID: n.Id, IPAddress: "" },
+                  ];
+                },
+              ),
             ),
           },
           Mounts: body.HostConfig.Mounts.map((m: Json) => ({
@@ -118,13 +159,27 @@ function dockerTransport(artifactRef: string, digest: string, starts = true) {
             Propagation: "rprivate",
           })),
         };
-        return json({ Id: container.Id });
+        containers.set(c.Id, c);
+        if (
+          body.Labels["io.hitchlet.member"] === "gateway" &&
+          faults.loseGatewayCreateResponse
+        ) {
+          faults.loseGatewayCreateResponse = false;
+          throw new Error(
+            "Synthetic lost create response after Engine committed gateway",
+          );
+        }
+        return json({ Id: c.Id });
       }
       if (method === "POST" && path.endsWith("/start")) {
         container!.State = {
           Running: starts,
           Status: starts ? "running" : "exited",
         };
+        for (const endpoint of Object.values(
+          container!.NetworkSettings.Networks,
+        ) as Json[])
+          endpoint.IPAddress = endpoint.IPAMConfig?.IPv4Address ?? "172.30.1.2";
         return new Response(null, { status: 204 });
       }
       if (method === "POST" && path.endsWith("/stop")) {
@@ -137,50 +192,63 @@ function dockerTransport(artifactRef: string, digest: string, starts = true) {
           : new Response(null, { status: 200 });
       if (path === "containers/json")
         return json(
-          container
-            ? [
-                {
-                  Id: container.Id,
-                  Names: [container.Name],
-                  Labels: container.Config.Labels,
-                },
-              ]
-            : [],
+          [...containers.values()].map((c) => ({
+            Id: c.Id,
+            Names: [c.Name],
+            Labels: c.Config.Labels,
+          })),
         );
-      if (path === "networks") return json(network ? [network] : []);
-      if (path === "volumes") return json({ Volumes: volume ? [volume] : [] });
+      if (path === "networks") return json([...networks.values()]);
+      if (path === "volumes") return json({ Volumes: [...volumes.values()] });
       if (path.startsWith("networks/"))
         return network
           ? json({
               ...network,
-              Containers: container ? { [container.Id]: {} } : {},
+              Containers: Object.fromEntries(
+                [...containers.values()]
+                  .filter((c) => c.HostConfig.NetworkMode === network.Name)
+                  .map((c) => [
+                    c.Id,
+                    {
+                      Name: c.Name.slice(1),
+                      IPv4Address: Object.values(
+                        c.NetworkSettings.Networks as Json,
+                      )[0].IPAddress,
+                    },
+                  ]),
+              ),
             })
           : new Response(null, { status: 404 });
       if (path.startsWith("volumes/"))
-        return volume ? json(volume) : new Response(null, { status: 404 });
+        return volumes.has(id)
+          ? json(volumes.get(id))
+          : new Response(null, { status: 404 });
       if (path.endsWith("/json") && path.startsWith("containers/"))
         return container
           ? json(container)
           : new Response(null, { status: 404 });
+      const isGateway =
+        gateway && decodeURIComponent(path).includes(gateway.digest);
+      const wanted = isGateway ? gateway! : { artifactRef, digest };
       if (path.startsWith("distribution/"))
         return json({
           Descriptor: {
-            digest,
+            digest: wanted.digest,
             mediaType: "application/vnd.docker.distribution.manifest.v2+json",
           },
           Platforms: [{ architecture: "amd64", os: "linux" }],
         });
       if (path.startsWith("images/"))
         return json({
-          Id: "synthetic-image",
-          RepoDigests: [artifactRef],
+          Id: isGateway ? "synthetic-gateway-image" : "synthetic-image",
+          RepoDigests: [wanted.artifactRef],
           Architecture: "amd64",
           Os: "linux",
         });
       throw new Error(`Unexpected synthetic Docker request ${method} ${path}`);
     },
   );
-  return { fetcher, deletes };
+  return { fetcher, deletes, containers, networks };
 }
 
 async function fixture(
@@ -188,6 +256,8 @@ async function fixture(
   accessMode: "ssh" | "none" = "ssh",
   starts = true,
   networkEgress: readonly NetworkDestination[] = [],
+  containerGroup?: ContainerGroup,
+  faults = { loseGatewayCreateResponse: false },
 ) {
   vi.clearAllMocks();
   const dir = await mkdtemp(join(tmpdir(), "hitchlet-proof-provider-"));
@@ -205,8 +275,9 @@ async function fixture(
   const installation = (await storage.get<{ installation_id: string }>(
     "SELECT installation_id FROM installations WHERE singleton=1",
   ))!;
-  const now = Date.now(),
-    clock = () => now;
+  let now = Date.now();
+  const clock = () => now;
+  const losesResponse = faults.loseGatewayCreateResponse;
   const networkProfile = networkEgress.length
     ? await new SQLiteProfileStore(storage, clock).createProfile("network", {
         name: "synthetic explicit host endpoints",
@@ -228,7 +299,7 @@ async function fixture(
       config: {
         sourceRef: "/approved",
         allowedSubpaths: ["mounts"],
-        allowedModes: ["read_write"],
+        allowedModes: ["read_write", "read_only"],
       },
       authorizedConsumerIds: [consumerId],
     },
@@ -263,13 +334,15 @@ async function fixture(
       digest,
       JSON.stringify({
         bootstrap: {
-          mechanism:
-            accessMode === "none"
+          mechanism: containerGroup
+            ? "hitchlet-container-group-entrypoint-v1"
+            : accessMode === "none"
               ? "hitchlet-container-entrypoint-v1"
               : "hitchlet-node-ssh-v1",
           contractVersion: "1",
           identityReset: true,
         },
+        ...(containerGroup === undefined ? {} : { containerGroup }),
       }),
       JSON.stringify({
         accessProtocols: accessMode === "none" ? [] : ["ssh"],
@@ -284,7 +357,13 @@ async function fixture(
       }),
     ],
   );
-  const transport = dockerTransport(artifactRef, digest, starts);
+  const transport = dockerTransport(
+    artifactRef,
+    digest,
+    starts,
+    containerGroup?.gateway,
+    faults,
+  );
   vi.stubGlobal("fetch", transport.fetcher);
   const networkResult = vi.fn(
     async (command: RuntimeNetworkCommand): Promise<RuntimeNetworkResult> => ({
@@ -377,16 +456,19 @@ async function fixture(
     ...(accessMode === "none" ? { access: { protocol: "none" as const } } : {}),
     storage: Array.from({ length: referenceCount }, (_, n) => ({
       storageProfileId: profile.id,
-      authorizedSubpath: "mounts/borrow/" + (n === 0 ? "project" : "home"),
-      mountPath: n === 0 ? "/work" : "/persist/home",
-      mode: "read_write",
+      authorizedSubpath:
+        "mounts/borrow/" +
+        (n === 0 ? "project" : n === 1 ? "home" : "gateway-config"),
+      mountPath:
+        n === 0 ? "/work" : n === 1 ? "/persist/home" : "/persist/gateway",
+      mode: n === 2 ? "read_only" : "read_write",
     })),
   });
   await tickets.reserveNext();
   await worker.reconcile();
   const queries = new TicketQueries(storage, clock),
     ready = await queries.get(consumerId, receipt.ticketId);
-  if (starts)
+  if (starts && !losesResponse)
     expect(
       ready?.phase,
       JSON.stringify({
@@ -400,6 +482,9 @@ async function fixture(
   return {
     storage,
     clock,
+    advance: (ms: number) => {
+      now += ms;
+    },
     tickets,
     worker,
     queries,
@@ -552,6 +637,131 @@ it("does not mark an exited entrypoint ready and still reclaims its actual owned
   expect(f.transport.deletes).toHaveLength(3);
 });
 
+const groupRecipe: ContainerGroup = {
+  gateway: {
+    artifactRef: "docker.io/example/gateway@sha256:" + "b".repeat(64),
+    digest: "sha256:" + "b".repeat(64),
+    resources: { cpuMillis: 100, memoryMiB: 128, scratchMiB: 0 },
+    mountPaths: ["/persist/gateway"],
+    stateMountPath: "/var/lib/gateway",
+    networkCapability: "tun",
+    ipv4Forwarding: true,
+    environment: {
+      GATEWAY_CONFIG_FILE: "/persist/gateway/gateway.json",
+      GATEWAY_KEY_FILE: "/persist/gateway/setup-key",
+    },
+  },
+  links: [
+    { from: "gateway", to: "workload", protocol: "tcp", ports: [3000] },
+    { from: "workload", to: "gateway", protocol: "tcp", ports: [18080] },
+  ],
+};
+it("delivers a two-member lease before claim and proves complete group cleanup without deleting persistent references", async () => {
+  const f = await fixture(3, "none", true, [], groupRecipe);
+  const query = {
+    leaseId: f.ready.lease!.id,
+    generation: f.ready.lease!.generation,
+  };
+  const inventory = await new TicketReadyInventoryReader(
+    f.storage,
+    f.clock,
+  ).read(f.consumerId, f.ready.id, query);
+  expect(inventory!.objects).toHaveLength(5);
+  expect(inventory!.objects.filter((o) => o.kind === "container")).toHaveLength(
+    2,
+  );
+  expect(f.ready.lease!.claimedAt).toBeNull();
+  const native = [...f.transport.containers.values()];
+  expect(
+    native.map((c) => c.Config.Labels["io.hitchlet.member"]).sort(),
+  ).toEqual(["gateway", "workload"]);
+  expect(native.reduce((n, c) => n + c.HostConfig.CpuQuota, 0)).toBe(50000);
+  expect(native.reduce((n, c) => n + c.HostConfig.Memory, 0)).toBe(
+    512 * 1024 * 1024,
+  );
+  expect(
+    native.every(
+      (c) => !c.HostConfig.Privileged && c.HostConfig.NetworkMode !== "host",
+    ),
+  ).toBe(true);
+  const gateway = native.find(
+    (c) => c.Config.Labels["io.hitchlet.member"] === "gateway",
+  )!;
+  const workload = native.find(
+    (c) => c.Config.Labels["io.hitchlet.member"] === "workload",
+  )!;
+  expect(gateway.HostConfig.CapAdd).toEqual(["NET_ADMIN"]);
+  expect(gateway.HostConfig.Devices).toEqual([
+    {
+      PathOnHost: "/dev/net/tun",
+      PathInContainer: "/dev/net/tun",
+      CgroupPermissions: "rw",
+    },
+  ]);
+  expect(
+    gateway.Mounts.find(
+      (m: { Destination: string }) => m.Destination === "/persist/gateway",
+    ),
+  ).toMatchObject({ Type: "bind", RW: false });
+  expect(
+    workload.Mounts.some(
+      (m: { Destination: string }) => m.Destination === "/persist/gateway",
+    ),
+  ).toBe(false);
+  expect(
+    inventory!.containerGroup!.members.find((m) => m.name === "gateway"),
+  ).toMatchObject({
+    artifactDigest: groupRecipe.gateway.digest,
+    stateVolume: { target: "/var/lib/gateway", ownership: "owned" },
+  });
+  const ensured = f.networkResult.mock.calls.find(
+    ([c]) => c.kind === "network.ensure",
+  )![0].plan;
+  expect(ensured.containerIds).toHaveLength(2);
+  expect(ensured.memberLinks).toMatchObject([
+    { fromIpv4: "172.30.1.3", toIpv4: "172.30.1.2", ports: [3000] },
+    { fromIpv4: "172.30.1.2", toIpv4: "172.30.1.3", ports: [18080] },
+  ]);
+  expect(f.getOrCreate).not.toHaveBeenCalled();
+  expect(probeSsh).not.toHaveBeenCalled();
+  const leases = new LeaseService(f.storage, f.clock);
+  await leases.renew(f.consumerId, f.ready.id, "group-auto-claim", {
+    generation: query.generation,
+    expectedLeaseVersion: f.ready.lease!.version,
+  });
+  await leases.reconcilePending();
+  await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+    expectedGeneration: query.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect((await f.queries.get(f.consumerId, f.ready.id))!.phase).toBe(
+    "released",
+  );
+  expect(
+    (await new TicketCleanupProofReader(f.storage, f.clock).read(
+      f.consumerId,
+      f.ready.id,
+      query,
+    ))!.receipts,
+  ).toHaveLength(5);
+  expect(f.transport.deletes).toHaveLength(5);
+  expect(f.transport.containers.size).toBe(0);
+  expect(f.transport.networks.size).toBe(0);
+});
+
+it("reclaims both group members when startup fails without claiming ready or waiting for business registration", async () => {
+  const f = await fixture(3, "none", false, [], groupRecipe);
+  expect(f.ready.phase).not.toBe("ready");
+  await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_cancel", {
+    expectedGeneration: f.ready.lease!.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect((await f.queries.get(f.consumerId, f.ready.id))!.phase).toBe(
+    "released",
+  );
+  expect(f.transport.deletes).toHaveLength(5);
+});
+
 it("freezes explicit host scope through Provider and cleanup despite a newer empty profile revision", async () => {
   const endpoints: NetworkDestination[] = [
     {
@@ -649,97 +859,302 @@ it("freezes explicit host scope through Provider and cleanup despite a newer emp
   expect(f.transport.deletes).toHaveLength(3);
 });
 
-it("registers, validates and publishes an entrypoint artifact through the ordinary image path", async () => {
-  const f = await fixture(0, "none");
-  await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
-    expectedGeneration: f.ready.lease!.generation,
-  });
-  await f.worker.reconcileCleanupLane();
-  const adminId = (await f.storage.get<{ id: string }>(
-    "SELECT id FROM consumers WHERE role='admin'",
-  ))!.id;
-  const nodeId = (await f.storage.get<{ id: string }>("SELECT id FROM nodes"))!
-    .id;
-  await f.storage.run(
-    "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.capacity',json(?))",
-    [JSON.stringify({ cpuMillis: 3000, memoryMiB: 4096, scratchMiB: 8192 })],
-  );
-  const admin = new AdminService(
-    f.storage,
-    async () => {
-      throw new Error("Unexpected external discovery");
-    },
-    f.clock,
-  );
-  const draft = await admin.createDraft({
-    name: "synthetic entrypoint publication",
-    version: "1",
-    architecture: "amd64",
-    artifactRef: "docker.io/example/node@sha256:" + "a".repeat(64),
-    digest: "sha256:" + "a".repeat(64),
-    minimumResources: { cpuMillis: 100, memoryMiB: 128, scratchMiB: 0 },
-    bootstrap: {
-      mechanism: "hitchlet-container-entrypoint-v1",
-      contractVersion: "1",
-      identityReset: true,
-    },
-    access: {
-      accessProtocols: [],
-      ports: [],
-      account: "workspace",
-      allowedSourceCidrs: [],
-      discovery: "none",
-      readiness: "container-running",
-    },
-    authorizedConsumerIds: [adminId, f.consumerId],
-  });
-  const run = await admin.scheduleValidation({
-    versionId: draft.versionId,
-    requestedBy: adminId,
-    imageArtifactId: draft.artifactId,
-    nodeId,
-    networkProfileId: f.networkId,
-    storage: [],
-    deadlineSeconds: 120,
-    resources: {
-      request: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
-      limit: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
-      isolation: "shared_kernel",
-      scratchEnforcement: "best_effort",
-      accelerators: [],
-    },
-  });
-  expect(run).toMatchObject({ scheduler: "queued" });
-  await f.worker.reconcile();
-  await f.worker.reconcileCleanupLane();
-  expect(
-    await f.storage.get(
-      "SELECT state,test_outcome,cleanup_status FROM image_validations WHERE id=?",
-      [run.validationId],
-    ),
-    JSON.stringify(
-      await f.storage.all(
-        "SELECT kind,state,result_json FROM operations WHERE allocation_id IN(SELECT id FROM allocations WHERE image_validation_id=?)",
+it.each([false, true])(
+  "registers, validates and publishes an entrypoint artifact through the ordinary image path (group=%s)",
+  async (group) => {
+    const validationGroup = {
+      ...groupRecipe,
+      gateway: { ...groupRecipe.gateway, mountPaths: [] },
+    };
+    const f = await fixture(
+      0,
+      "none",
+      true,
+      [],
+      group ? validationGroup : undefined,
+    );
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+      expectedGeneration: f.ready.lease!.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    const adminId = (await f.storage.get<{ id: string }>(
+      "SELECT id FROM consumers WHERE role='admin'",
+    ))!.id;
+    const nodeId = (await f.storage.get<{ id: string }>(
+      "SELECT id FROM nodes",
+    ))!.id;
+    await f.storage.run(
+      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.capacity',json(?))",
+      [JSON.stringify({ cpuMillis: 3000, memoryMiB: 4096, scratchMiB: 8192 })],
+    );
+    const admin = new AdminService(
+      f.storage,
+      async () => {
+        throw new Error("Unexpected external discovery");
+      },
+      f.clock,
+    );
+    if (group) {
+      const companion = await admin.createDraft({
+        name: "synthetic gateway source",
+        version: "1",
+        architecture: "amd64",
+        artifactRef: validationGroup.gateway.artifactRef,
+        digest: validationGroup.gateway.digest,
+        minimumResources: { cpuMillis: 100, memoryMiB: 128, scratchMiB: 0 },
+        bootstrap: {
+          mechanism: "hitchlet-container-entrypoint-v1",
+          contractVersion: "1",
+          identityReset: true,
+        },
+        access: {
+          accessProtocols: [],
+          ports: [],
+          account: "workspace",
+          allowedSourceCidrs: [],
+          discovery: "none",
+          readiness: "container-running",
+        },
+        authorizedConsumerIds: [adminId, f.consumerId],
+      });
+      Object.assign(validationGroup.gateway, {
+        imageVersionId: companion.versionId,
+        imageArtifactId: companion.artifactId,
+      });
+    }
+    const draft = await admin.createDraft({
+      name: "synthetic entrypoint publication",
+      ...(group ? { containerGroup: validationGroup } : {}),
+      version: "1",
+      architecture: "amd64",
+      artifactRef: "docker.io/example/node@sha256:" + "a".repeat(64),
+      digest: "sha256:" + "a".repeat(64),
+      minimumResources: { cpuMillis: 100, memoryMiB: 128, scratchMiB: 0 },
+      bootstrap: {
+        mechanism: group
+          ? "hitchlet-container-group-entrypoint-v1"
+          : "hitchlet-container-entrypoint-v1",
+        contractVersion: "1",
+        identityReset: true,
+      },
+      access: {
+        accessProtocols: [],
+        ports: [],
+        account: "workspace",
+        allowedSourceCidrs: [],
+        discovery: "none",
+        readiness: "container-running",
+      },
+      authorizedConsumerIds: [adminId, f.consumerId],
+    });
+    const run = await admin.scheduleValidation({
+      versionId: draft.versionId,
+      requestedBy: adminId,
+      imageArtifactId: draft.artifactId,
+      nodeId,
+      networkProfileId: f.networkId,
+      storage: [],
+      deadlineSeconds: 120,
+      resources: {
+        request: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+        limit: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+        isolation: "shared_kernel",
+        scratchEnforcement: "best_effort",
+        accelerators: [],
+      },
+    });
+    expect(run).toMatchObject({ scheduler: "queued" });
+    await f.worker.reconcile();
+    await f.worker.reconcileCleanupLane();
+    expect(
+      await f.storage.get(
+        "SELECT state,test_outcome,cleanup_status FROM image_validations WHERE id=?",
         [run.validationId],
       ),
+      JSON.stringify(
+        await f.storage.all(
+          "SELECT kind,state,result_json FROM operations WHERE allocation_id IN(SELECT id FROM allocations WHERE image_validation_id=?)",
+          [run.validationId],
+        ),
+      ),
+    ).toMatchObject({
+      state: "succeeded",
+      test_outcome: "passed",
+      cleanup_status: "complete",
+    });
+    const entity = (await f.storage.get<{ entity_version: bigint }>(
+      "SELECT entity_version FROM image_versions WHERE id=?",
+      [draft.versionId],
+    ))!;
+    // The publication store is real; only its authenticated external Engine probe is synthetic.
+    expect(
+      await new SQLiteImagePublicationStore(f.storage, f.clock).publish(
+        draft.versionId,
+        Number(entity.entity_version),
+        async () => true,
+      ),
+    ).toMatchObject({ status: "published" });
+    expect(f.getOrCreate).not.toHaveBeenCalled();
+    expect(probeSsh).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps another two-member lease running when one line returns", async () => {
+  const f = await fixture(3, "none", true, [], groupRecipe);
+  const accepted = await f.storage.get<{ request_json: string }>(
+    "SELECT request_json FROM tickets WHERE id=?",
+    [f.ready.id],
+  );
+  const request = JSON.parse(accepted!.request_json);
+  request.storage = request.storage.map((m: Record<string, unknown>) => ({
+    ...m,
+    authorizedSubpath: String(m.authorizedSubpath).replace(
+      "borrow/",
+      "borrow-b/",
     ),
-  ).toMatchObject({
-    state: "succeeded",
-    test_outcome: "passed",
-    cleanup_status: "complete",
+  }));
+  const second = await f.tickets.acquire(f.consumerId, "second-group-line", {
+    image: { versionId: f.ready.pinnedImageVersionId },
+    resources: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+    access: { protocol: "none" },
+    networkProfileId: f.networkId,
+    lease: { requestedSeconds: 900, maximumLifetimeSeconds: 3600 },
+    storage: request.storage,
   });
-  const entity = (await f.storage.get<{ entity_version: bigint }>(
-    "SELECT entity_version FROM image_versions WHERE id=?",
-    [draft.versionId],
-  ))!;
-  // The publication store is real; only its authenticated external Engine probe is synthetic.
+  await f.tickets.reserveNext();
+  await f.worker.reconcile();
+  const b = (await f.queries.get(f.consumerId, second.ticketId))!;
+  expect(b.phase).toBe("ready");
+  const reader = new TicketReadyInventoryReader(f.storage, f.clock);
+  const aQuery = {
+    leaseId: f.ready.lease!.id,
+    generation: f.ready.lease!.generation,
+  };
+  const bQuery = { leaseId: b.lease!.id, generation: b.lease!.generation };
+  const aInventory = (await reader.read(f.consumerId, f.ready.id, aQuery))!;
+  const bInventory = (await reader.read(f.consumerId, b.id, bQuery))!;
   expect(
-    await new SQLiteImagePublicationStore(f.storage, f.clock).publish(
-      draft.versionId,
-      Number(entity.entity_version),
-      async () => true,
+    aInventory.containerGroup!.members.every((a) =>
+      bInventory.containerGroup!.members.every(
+        (b) =>
+          a.containerId !== b.containerId &&
+          a.ipv4 !== b.ipv4 &&
+          a.stateVolume.id !== b.stateVolume.id,
+      ),
     ),
-  ).toMatchObject({ status: "published" });
-  expect(f.getOrCreate).not.toHaveBeenCalled();
-  expect(probeSsh).not.toHaveBeenCalled();
+  ).toBe(true);
+  await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+    expectedGeneration: aQuery.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect(await reader.read(f.consumerId, b.id, bQuery)).toMatchObject({
+    completeness: "complete",
+  });
+  expect(f.transport.containers.size).toBe(2);
+  expect(
+    [...f.transport.containers.values()].every((c) => c.State.Running),
+  ).toBe(true);
+  expect(f.transport.networks.size).toBe(1);
+  await f.tickets.cancel(b.id, f.consumerId, "consumer_release", {
+    expectedGeneration: bQuery.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect(
+    (await new TicketCleanupProofReader(f.storage, f.clock).read(
+      f.consumerId,
+      b.id,
+      bQuery,
+    ))!.receipts,
+  ).toHaveLength(5);
+  expect(f.transport.deletes).toHaveLength(10);
+  expect(f.transport.containers.size).toBe(0);
+});
+
+it("recovers a committed gateway whose create response was lost without duplicating it", async () => {
+  const f = await fixture(3, "none", true, [], groupRecipe, {
+    loseGatewayCreateResponse: true,
+  });
+  expect(f.ready.phase).not.toBe("ready");
+  expect(f.transport.containers.size).toBe(2);
+  f.advance(10000);
+  await f.worker.reconcile();
+  const ready = (await f.queries.get(f.consumerId, f.ready.id))!;
+  expect(
+    ready.phase,
+    JSON.stringify(
+      await f.storage.all("SELECT state,result_json FROM operations"),
+    ),
+  ).toBe("ready");
+  expect(
+    f.transport.fetcher.mock.calls.filter(
+      ([input, init]) =>
+        new URL(String(input)).pathname.endsWith("/containers/create") &&
+        JSON.parse(String(init!.body)).Labels["io.hitchlet.member"] ===
+          "gateway",
+    ),
+  ).toHaveLength(1);
+  const query = {
+    leaseId: ready.lease!.id,
+    generation: ready.lease!.generation,
+  };
+  expect(
+    await new TicketReadyInventoryReader(f.storage, f.clock).read(
+      f.consumerId,
+      ready.id,
+      query,
+    ),
+  ).toMatchObject({ completeness: "complete" });
+  await f.tickets.cancel(ready.id, f.consumerId, "consumer_release", {
+    expectedGeneration: query.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect(
+    (await new TicketCleanupProofReader(f.storage, f.clock).read(
+      f.consumerId,
+      ready.id,
+      query,
+    ))!.receipts,
+  ).toHaveLength(5);
+});
+
+it("rejects mutated member image, role and state facts from the actual persisted Provider inventory", async () => {
+  const f = await fixture(3, "none", true, [], groupRecipe);
+  const query = {
+    leaseId: f.ready.lease!.id,
+    generation: f.ready.lease!.generation,
+  };
+  const original = (await f.storage.get<{ actual_resources_json: string }>(
+    "SELECT actual_resources_json FROM allocations WHERE ticket_id=?",
+    [f.ready.id],
+  ))!.actual_resources_json;
+  const reader = new TicketReadyInventoryReader(f.storage, f.clock);
+  for (const change of [
+    { artifactDigest: "sha256:" + "c".repeat(64) },
+    { memberName: "workload" },
+    { ipv4: "172.30.1.77" },
+  ]) {
+    const altered = JSON.parse(original);
+    const object = altered.objects.find(
+      (o: any) => o.kind === "container" && o.details?.memberName === "gateway",
+    );
+    Object.assign(object.details, change);
+    await f.storage.run(
+      "UPDATE allocations SET actual_resources_json=? WHERE ticket_id=?",
+      [JSON.stringify(altered), f.ready.id],
+    );
+    await expect(
+      reader.read(f.consumerId, f.ready.id, query),
+    ).rejects.toMatchObject({ code: "conflict" });
+  }
+  await f.storage.run(
+    "UPDATE allocations SET actual_resources_json=? WHERE ticket_id=?",
+    [original, f.ready.id],
+  );
+  expect(await reader.read(f.consumerId, f.ready.id, query)).toMatchObject({
+    completeness: "complete",
+  });
+  await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+    expectedGeneration: query.generation,
+  });
+  await f.worker.reconcileCleanupLane();
 });

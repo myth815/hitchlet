@@ -1,4 +1,8 @@
 import { z } from "zod";
+import {
+  validDockerOwnedKinds,
+  containerGroupInventorySchema,
+} from "./container-group.js";
 
 const Id = z.string().min(1).max(512);
 const Hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -65,9 +69,13 @@ export const TicketCleanupProofSchema = z
     cleanupControlVersion: Positive,
     manifest: z.object({ id: Id, hash: Hash }).strict(),
     createIdentity: CleanupProofIdentitySchema,
+    containerGroup: containerGroupInventorySchema.optional(),
     cleanupIdentity: CleanupProofIdentitySchema,
-    objects: z.array(CleanupProofObjectSchema).length(3),
-    receipts: z.array(CleanupProofReceiptSchema).length(3),
+    objects: z
+      .array(CleanupProofObjectSchema)
+      .min(3)
+      .refine(validDockerOwnedKinds),
+    receipts: z.array(CleanupProofReceiptSchema).min(3),
     after: z
       .object({
         presence: z.literal("absent"),

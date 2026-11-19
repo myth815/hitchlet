@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Storage } from "./index.js";
 import type { ImageValidationRequest } from "@hitchlet/contracts/internal";
+import { containerGroupFromRequirements } from "@hitchlet/contracts/internal";
 import {
   hash,
   integer,
@@ -76,10 +77,15 @@ export class SQLiteImageValidationStore {
     };
     bootstrap: unknown;
     access: unknown;
+    containerGroup?: unknown;
     authorizedConsumerIds: readonly string[];
   }) {
     const platform = draftPlatform(input);
-    validateBootstrapAndAccess(input.bootstrap, input.access);
+    validateBootstrapAndAccess(
+      input.bootstrap,
+      input.access,
+      input.containerGroup,
+    );
     if (
       !Object.values(input.minimumResources).every(Number.isSafeInteger) ||
       input.minimumResources.cpuMillis < 1 ||
@@ -94,7 +100,11 @@ export class SQLiteImageValidationStore {
     const requirements = {
       bootstrap: input.bootstrap,
       requiredCapabilities: [] as string[],
+      ...(input.containerGroup === undefined
+        ? {}
+        : { containerGroup: input.containerGroup }),
     };
+    await verifyGatewaySource(this.db, requirements, input.architecture);
     const manifest = {
       requirements,
       access: input.access,
@@ -201,7 +211,12 @@ export class SQLiteImageValidationStore {
   }) {
     const platform = draftPlatform(input);
     const requirements = normalizeDraftRequirements(input.requirements);
-    validateBootstrapAndAccess(requirements.bootstrap, input.access);
+    validateBootstrapAndAccess(
+      requirements.bootstrap,
+      input.access,
+      requirements.containerGroup,
+    );
+    await verifyGatewaySource(this.db, requirements, input.architecture);
     const image = await this.db.get<Row>(
       "SELECT id FROM images WHERE id=? AND status='active'",
       [input.imageId],
@@ -284,7 +299,12 @@ export class SQLiteImageValidationStore {
   ) {
     const platform = draftPlatform(input);
     const requirements = normalizeDraftRequirements(input.requirements);
-    validateBootstrapAndAccess(requirements.bootstrap, input.access);
+    validateBootstrapAndAccess(
+      requirements.bootstrap,
+      input.access,
+      requirements.containerGroup,
+    );
+    await verifyGatewaySource(this.db, requirements, input.architecture);
     const version = await this.db.get<Row>(
       "SELECT status,entity_version FROM image_versions WHERE id=?",
       [versionId],
@@ -580,4 +600,34 @@ function draftPlatform(input: {
       "VM drafts require a matching local OS/architecture template, backend guest bootstrap and SSH-only access; Tart requires zero scratch minimum",
     );
   return { backendKind, kind, guestOs } as const;
+}
+
+/** Optional catalog identifiers are provenance, not a separate lease or approval. */
+async function verifyGatewaySource(
+  db: Storage,
+  requirements: unknown,
+  architecture: string,
+) {
+  const group = containerGroupFromRequirements(requirements);
+  if (!group) return;
+  const g = group.gateway;
+  validateArtifact(g.artifactRef, g.digest);
+  if (!g.imageArtifactId) return;
+  const source = await db.get<Row>(
+    "SELECT image_version_id,artifact_ref,content_digest,backend_kind,environment_kind,architecture,guest_os FROM image_artifacts WHERE id=?",
+    [g.imageArtifactId],
+  );
+  if (
+    !source ||
+    source.image_version_id !== g.imageVersionId ||
+    source.artifact_ref !== g.artifactRef ||
+    source.content_digest !== g.digest ||
+    source.backend_kind !== "portainer" ||
+    source.environment_kind !== "container" ||
+    source.architecture !== architecture ||
+    source.guest_os !== "linux"
+  )
+    throw new RangeError(
+      "Gateway catalog provenance differs from its frozen artifact",
+    );
 }

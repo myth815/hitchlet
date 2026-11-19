@@ -2,6 +2,7 @@ import {
   resolvedStorageMountSchema,
   supportsContainerEntrypoint,
   networkDestinationSchema,
+  containerGroupFromRequirements,
 } from "@hitchlet/contracts/internal";
 import { admissionOpen } from "./maintenance.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
@@ -739,6 +740,7 @@ export class OperationWorker {
         identityReset: true,
       },
     );
+    const containerGroup = containerGroupFromRequirements(requirementsRow);
     const accessRecipe = objectValue(
       parseObject(stringField(val(row, "access_recipe_json"))),
     );
@@ -820,6 +822,7 @@ export class OperationWorker {
       resources,
       network: networkContract,
       mounts,
+      ...(containerGroup === undefined ? {} : { containerGroup }),
     };
     let contractHash = createHash("sha256")
       .update(JSON.stringify(contractPayload))
@@ -844,6 +847,7 @@ export class OperationWorker {
       },
       artifact,
       resources,
+      ...(containerGroup === undefined ? {} : { containerGroup }),
       resolved: {
         id:
           typeof row.resolved_provision_contract_id === "string"

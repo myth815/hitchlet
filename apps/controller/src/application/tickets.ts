@@ -15,6 +15,7 @@ import { supportsNodeSshRecipe } from "../domain/docker-recipe.js";
 import {
   supportsContainerEntrypoint,
   networkDestinationSchema,
+  containerGroupFromRequirements,
 } from "@hitchlet/contracts/internal";
 import {
   leaseDeadline,
@@ -887,6 +888,17 @@ export class TicketService {
       const requirements = object(
         parseJson(candidate.requirements_json, "artifact requirements"),
       );
+      const group = containerGroupFromRequirements(requirements);
+      if (
+        group &&
+        (contract.resources.request.cpuMillis <=
+          group.gateway.resources.cpuMillis ||
+          contract.resources.request.memoryMiB <=
+            group.gateway.resources.memoryMiB ||
+          contract.resources.request.scratchMiB <
+            group.gateway.resources.scratchMiB)
+      )
+        hardReasons.add("image_minimum_resources_unmet");
       if (
         stringListOptional(
           requirements.requiredCapabilities,

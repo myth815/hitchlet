@@ -13,6 +13,12 @@ import {
 import type { Storage } from "../storage/index.js";
 import { ApplicationError } from "./errors.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
+import {
+  containerGroupFromRequirements,
+  expectedContainerKinds,
+  memberDetailsSchema,
+} from "@hitchlet/contracts/internal";
+import { groupInventory } from "./group-inventory.js";
 
 const Id = z.string().min(1).max(512),
   Hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -22,6 +28,7 @@ const Owned = z.object({
   ownership: z.literal("owned"),
   identity: CleanupProofIdentitySchema,
   contractHash: Hash,
+  details: memberDetailsSchema.nullish(),
   evidence: z.object({
     artifactDigest: Id,
     resourcesHash: Id,
@@ -71,8 +78,8 @@ const Evidence = z.object({
     runtime: CleanupProofRuntimeSchema,
     identity: CleanupProofIdentitySchema,
   }),
-  resources: z.array(CleanupProofObjectSchema).length(3),
-  destructionReceipts: z.array(CleanupProofReceiptSchema).length(3),
+  resources: z.array(CleanupProofObjectSchema).min(3),
+  destructionReceipts: z.array(CleanupProofReceiptSchema).min(3),
 });
 const Operation = z.object({
   id: Id,
@@ -119,6 +126,7 @@ function identityWithoutControl(
 // effects. Any additional result metadata remains unresolved.
 export const TICKET_CLEANUP_PROOF_SQL = `SELECT
  t.id AS ticketId,t.consumer_id AS consumerId,t.phase AS ticketPhase,t.cleanup_status AS ticketCleanup,
+ ia.requirements_json AS requirementsJson,ia.content_digest AS primaryDigest,
  json_extract(t.request_json,'$.access.protocol') AS accessProtocol,
  l.id AS leaseId,l.generation AS generation,l.state AS leaseState,l.revoked_at_ms AS revokedAtMs,
  a.id AS allocationId,a.generation AS allocationGeneration,a.control_version AS controlVersion,
@@ -132,7 +140,11 @@ export const TICKET_CLEANUP_PROOF_SQL = `SELECT
    'objectIds',json_extract(a.actual_resources_json,'$.receipt.objectIds')) AS readyJson,
  (SELECT json_group_array(json_object('id',json_extract(j.value,'$.id'),'kind',json_extract(j.value,'$.kind'),
    'ownership',json_extract(j.value,'$.ownership'),'identity',json_extract(j.value,'$.identity'),
-   'contractHash',json_extract(j.value,'$.contractHash'),'evidence',json_extract(j.value,'$.evidence')))
+   'details',CASE WHEN json_extract(j.value,'$.details.memberName') IS NOT NULL THEN
+ json_object('memberName',json_extract(j.value,'$.details.memberName'),
+ 'artifactDigest',json_extract(j.value,'$.details.artifactDigest'),'ipv4',json_extract(j.value,'$.details.ipv4'),
+ 'resources',json_extract(j.value,'$.details.resources'),'target',json_extract(j.value,'$.details.target'),'mountBindings',json_extract(j.value,'$.details.mountBindings')) ELSE NULL END,
+ 'contractHash',json_extract(j.value,'$.contractHash'),'evidence',json_extract(j.value,'$.evidence')))
    FROM json_each(a.actual_resources_json,'$.objects') j) AS objectsJson,
  (SELECT json_group_array(json_object('id',COALESCE(m.provider_id,m.id),'kind',m.kind,'ownership',m.ownership,
    'state',m.observed_state,'identity',json_remove(json(m.ownership_json),'$.referenceKey'))) FROM managed_resources m
@@ -158,6 +170,7 @@ export const TICKET_CLEANUP_PROOF_SQL = `SELECT
      FROM json_each(COALESCE(p.result_json,'{}'),'$.createEffects') e WHERE json_extract(e.value,'$.state')='unknown'))) AS unresolvedOperations
  FROM tickets t JOIN leases l ON l.ticket_id=t.id JOIN allocations a ON a.id=l.allocation_id AND a.ticket_id=t.id AND a.purpose='tenant'
  JOIN resolved_provision_contracts r ON r.id=a.resolved_provision_contract_id
+ JOIN image_artifacts ia ON ia.id=a.image_artifact_id
  WHERE t.id=? AND t.consumer_id=? AND l.id=? AND l.generation=? AND a.generation=l.generation
  AND a.runtime_identity_id=json_extract(a.actual_resources_json,'$.receipt.identity.runtimeIdentityId')
  AND json_extract(a.actual_resources_json,'$.receipt.identity.installationId')=(SELECT installation_id FROM installations WHERE singleton=1)`;
@@ -208,12 +221,14 @@ export class TicketCleanupProofReader {
           number(row.unresolvedOperations) === 0,
       );
       const readyRaw = json(row.readyJson),
-        objectsRaw = json(row.objectsJson);
+        objectsRaw = json(row.objectsJson),
+        group = containerGroupFromRequirements(json(row.requirementsJson)),
+        expectedKinds = expectedContainerKinds(group);
       const ready = Ready.parse(readyRaw),
         inventory = z.array(InventoryObject).parse(objectsRaw),
         objects = z
           .array(Owned)
-          .length(3)
+          .length(expectedKinds.length)
           .parse(inventory.filter((o) => o.ownership === "owned"));
       const managed = z.array(ManagedObject).parse(json(row.managedJson));
       const operations = z
@@ -233,10 +248,8 @@ export class TicketCleanupProofReader {
       );
       const set = ids(objects);
       requireProof(
-        new Set(set).size === 3 &&
-          ["container", "volume", "network_policy"].every(
-            (kind) => objects.filter((o) => o.kind === kind).length === 1,
-          ),
+        new Set(set).size === expectedKinds.length &&
+          equal(objects.map((o) => o.kind).sort(), expectedKinds),
       );
       requireProof(
         inventory.every(
@@ -341,6 +354,15 @@ export class TicketCleanupProofReader {
         manifest: { id: manifest.manifestId, hash: manifest.manifestHash },
         createIdentity: create,
         cleanupIdentity: cleanup,
+        ...(group === undefined
+          ? {}
+          : {
+              containerGroup: groupInventory(
+                group,
+                row.primaryDigest,
+                inventory,
+              ),
+            }),
         objects: objects.map(({ id, kind, ownership }) => ({
           id,
           kind,

@@ -1,3 +1,7 @@
+import {
+  CONTAINER_GROUP_BOOTSTRAP,
+  containerGroupFromRequirements,
+} from "./container-group.js";
 /** Fixed resource-delivery recipe with no interactive access endpoint. */
 export function supportsContainerEntrypoint(
   requirements: unknown,
@@ -9,8 +13,19 @@ export function supportsContainerEntrypoint(
       : {};
   const bootstrap = record(record(requirements).bootstrap),
     recipe = record(access);
+  let mechanismMatches =
+    bootstrap.mechanism === "hitchlet-container-entrypoint-v1";
+  try {
+    const group = containerGroupFromRequirements(requirements);
+    mechanismMatches =
+      group !== undefined
+        ? bootstrap.mechanism === CONTAINER_GROUP_BOOTSTRAP
+        : mechanismMatches;
+  } catch {
+    return false;
+  }
   return (
-    bootstrap.mechanism === "hitchlet-container-entrypoint-v1" &&
+    mechanismMatches &&
     bootstrap.contractVersion === "1" &&
     bootstrap.identityReset === true &&
     Array.isArray(recipe.accessProtocols) &&
