@@ -32,11 +32,11 @@ afterEach(() => {
   for (const db of dbs.splice(0)) db.close();
 });
 type Fixture = ReturnType<typeof seed>;
-function seed() {
+function seed(referenceCount = 0) {
   const db = new DatabaseSync(":memory:");
   dbs.push(db);
   db.exec(`CREATE TABLE tickets(id,consumer_id,phase,cleanup_status);
-    CREATE TABLE leases(id,ticket_id,allocation_id,generation,state,revoked_at_ms);
+    CREATE TABLE leases(id,ticket_id,allocation_id,generation,state,revoked_at_ms,claimed_at_ms);
     CREATE TABLE allocations(id,ticket_id,purpose,runtime_identity_id,generation,control_version,desired_state,observed_state,cleanup_status,manifest_complete,manifest_id,resolved_provision_contract_id,actual_resources_json);
     CREATE TABLE installations(singleton,installation_id);
     CREATE TABLE resolved_provision_contracts(id,contract_hash);
@@ -54,7 +54,7 @@ function seed() {
     connectionRevisionId: ids.revision,
   };
   const cleanup = { ...create, controlVersion: 2 };
-  const objects = (["container", "volume", "network_policy"] as const).map(
+  const owned = (["container", "volume", "network_policy"] as const).map(
     (kind) => ({
       id: "native-" + kind,
       kind,
@@ -71,6 +71,17 @@ function seed() {
       details: { privateExample: "DO_NOT_DISCLOSE" },
     }),
   );
+  const objects = [
+    ...owned,
+    ...Array.from({ length: referenceCount }, (_, n) => ({
+      id: "storage:fixture-" + n,
+      kind: "storage_reference" as const,
+      ownership: "reference" as const,
+      identity: create,
+      contractHash: "a".repeat(64),
+      details: { privateExample: "DO_NOT_DISCLOSE" },
+    })),
+  ];
   const manifest = resourceManifest(
     { identity: create, resolved: { contractHash: "a".repeat(64) } },
     objects,
@@ -93,12 +104,12 @@ function seed() {
   const evidence = {
     verifiedAbsentAtMs: 4000,
     inventory: { completeness: "complete", runtime, identity: cleanup },
-    resources: objects.map(({ id, kind, ownership }) => ({
+    resources: owned.map(({ id, kind, ownership }) => ({
       id,
       kind,
       ownership,
     })),
-    destructionReceipts: objects.map((o) => ({
+    destructionReceipts: owned.map((o) => ({
       resourceId: o.id,
       kind: o.kind,
       presence: "absent",
@@ -128,6 +139,7 @@ function seed() {
     generation: 1,
     state: "revoked",
     revoked_at_ms: 5000,
+    claimed_at_ms: null,
   });
   insert("allocations", {
     id: ids.allocation,
@@ -156,7 +168,7 @@ function seed() {
       allocation_id: ids.allocation,
       generation: 1,
       kind: o.kind,
-      ownership: "owned",
+      ownership: o.ownership,
       observed_state: "absent",
       ownership_json: JSON.stringify(create),
     });
@@ -215,6 +227,66 @@ function updateEvidence(f: Fixture) {
 }
 
 describe("owner-bound immutable cleanup proof", () => {
+  it.each([1, 2, 4])(
+    "accounts for %i detached references without claiming their destruction for a never-claimed lease",
+    async (referenceCount) => {
+      const f = seed(referenceCount),
+        proof = await read(reader(f).service);
+      expect(f.db.prepare("SELECT claimed_at_ms FROM leases").get()).toEqual({
+        claimed_at_ms: null,
+      });
+      expect(f.ready.receipt.objectIds).toHaveLength(3 + referenceCount);
+      expect(proof!.objects).toHaveLength(3);
+      expect(proof!.receipts).toHaveLength(3);
+      expect(proof!.manifest).toEqual({
+        id: f.manifest.manifestId,
+        hash: f.manifest.manifestHash,
+      });
+      expect(JSON.stringify(proof)).not.toContain("storage:fixture-");
+      expect(JSON.stringify(proof)).not.toContain("DO_NOT_DISCLOSE");
+    },
+  );
+
+  it.each([
+    "missing receipt reference",
+    "extra receipt ID",
+    "duplicate receipt ID",
+    "missing managed reference",
+    "foreign reference identity",
+    "foreign managed reference identity",
+    "owned object mislabeled as reference",
+    "reference substituted for destruction receipt",
+  ])("still rejects %s with storage references", async (kind) => {
+    const f = seed(2);
+    if (kind === "missing receipt reference") f.ready.receipt.objectIds.pop();
+    else if (kind === "extra receipt ID")
+      f.ready.receipt.objectIds.push("unaccounted");
+    else if (kind === "duplicate receipt ID")
+      f.ready.receipt.objectIds[4] = f.ready.receipt.objectIds[3]!;
+    else if (kind === "missing managed reference")
+      f.db.exec("DELETE FROM managed_resources WHERE ownership='reference'");
+    else if (kind === "foreign reference identity") {
+      const ref = f.ready.objects[3]!;
+      f.ready.objects[3] = {
+        ...ref,
+        identity: { ...ref.identity, generation: 2 },
+      };
+    } else if (kind === "foreign managed reference identity")
+      f.db.exec(
+        "UPDATE managed_resources SET ownership_json=json_set(ownership_json,'$.generation',2) WHERE ownership='reference'",
+      );
+    else if (kind === "owned object mislabeled as reference")
+      Object.assign(f.ready.objects[0]!, { ownership: "reference" });
+    else {
+      f.evidence.destructionReceipts[0]!.resourceId = "storage:fixture-0";
+      updateEvidence(f);
+    }
+    updateReady(f);
+    await expect(read(reader(f).service)).rejects.toMatchObject({
+      code: "conflict",
+    });
+  });
+
   it.each([
     ['{"code":"lease_or_authorization_changed"}', true],
     ['{"code":"decision_deadline_expired"}', true],

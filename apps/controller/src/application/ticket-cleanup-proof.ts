@@ -30,12 +30,20 @@ const Owned = z.object({
     accessProtocol: z.literal("ssh"),
   }),
 });
+// References are accounted for, but never require a destruction receipt.
+const InventoryObject = z.discriminatedUnion("ownership", [
+  Owned,
+  Owned.omit({ evidence: true }).extend({
+    kind: z.literal("storage_reference"),
+    ownership: z.literal("reference"),
+  }),
+]);
 const Ready = z.object({
   identity: CleanupProofIdentitySchema,
   contractHash: Hash,
   manifestId: Id,
   manifestHash: Hash,
-  objectIds: z.array(Id).length(3),
+  objectIds: z.array(Id).min(3),
 });
 const Managed = z.object({
   id: Id,
@@ -44,6 +52,13 @@ const Managed = z.object({
   state: z.literal("absent"),
   identity: CleanupProofIdentitySchema,
 });
+const ManagedObject = z.discriminatedUnion("ownership", [
+  Managed,
+  Managed.extend({
+    kind: z.literal("storage_reference"),
+    ownership: z.literal("reference"),
+  }),
+]);
 const Evidence = z.object({
   verifiedAbsentAtMs: z.number().int().positive(),
   noExternalCreate: z
@@ -193,8 +208,12 @@ export class TicketCleanupProofReader {
       const readyRaw = json(row.readyJson),
         objectsRaw = json(row.objectsJson);
       const ready = Ready.parse(readyRaw),
-        objects = z.array(Owned).length(3).parse(objectsRaw);
-      const managed = z.array(Managed).length(3).parse(json(row.managedJson));
+        inventory = z.array(InventoryObject).parse(objectsRaw),
+        objects = z
+          .array(Owned)
+          .length(3)
+          .parse(inventory.filter((o) => o.ownership === "owned"));
+      const managed = z.array(ManagedObject).parse(json(row.managedJson));
       const operations = z
           .array(Operation)
           .length(1)
@@ -218,7 +237,7 @@ export class TicketCleanupProofReader {
           ),
       );
       requireProof(
-        objects.every(
+        inventory.every(
           (o) =>
             equal(o.identity, create) && o.contractHash === ready.contractHash,
         ),
@@ -226,7 +245,7 @@ export class TicketCleanupProofReader {
       // Producer hashes JSON property order, not a normalized DTO. Both raw values
       // are runtime validated above; retain their original identity key order.
       const rawReady = readyRaw as z.infer<typeof Ready>,
-        rawObjects = objectsRaw as z.infer<typeof Owned>[];
+        rawObjects = objectsRaw as z.infer<typeof InventoryObject>[];
       const manifest = resourceManifest(
         {
           identity: rawReady.identity,
@@ -237,8 +256,12 @@ export class TicketCleanupProofReader {
       requireProof(
         manifest.manifestId === ready.manifestId &&
           manifest.manifestHash === ready.manifestHash &&
-          equal([...ready.objectIds].sort(), objects.map((o) => o.id).sort()) &&
-          equal(ids(managed), set),
+          new Set(ready.objectIds).size === inventory.length &&
+          equal(
+            [...ready.objectIds].sort(),
+            inventory.map((o) => o.id).sort(),
+          ) &&
+          equal(ids(managed), ids(inventory)),
       );
       const cleanup = { ...create, controlVersion: number(row.controlVersion) };
       requireProof(

@@ -21,12 +21,20 @@ const ObjectRecord = z.object({
   identity: Identity,
   contractHash: Hash,
 });
+// Account for every receipt entry; only owned entries belong to the public proof.
+const InventoryObject = z.discriminatedUnion("ownership", [
+  ObjectRecord,
+  ObjectRecord.extend({
+    kind: z.literal("storage_reference"),
+    ownership: z.literal("reference"),
+  }),
+]);
 const Ready = z.object({
   identity: Identity,
   contractHash: Hash,
   manifestId: Id,
   manifestHash: Hash,
-  objectIds: z.array(Id).length(3),
+  objectIds: z.array(Id).min(3),
 });
 // managed ownership_json also contains internal referenceKey; strip it, never expose it.
 const Managed = z.object({
@@ -36,6 +44,13 @@ const Managed = z.object({
   state: z.literal("present"),
   identity: z.object(Identity.shape),
 });
+const ManagedObject = z.discriminatedUnion("ownership", [
+  Managed,
+  Managed.extend({
+    kind: z.literal("storage_reference"),
+    ownership: z.literal("reference"),
+  }),
+]);
 type Row = Record<string, string | number | bigint | null>;
 const requireProof = (value: unknown): void => {
   if (!value) throw new ApplicationError("conflict");
@@ -126,8 +141,12 @@ export class TicketReadyInventoryReader {
       const readAtMs = this.now(),
         ready = Ready.parse(parse(row.readyJson)),
         rawObjects = parse(row.objectsJson),
-        objects = z.array(ObjectRecord).length(3).parse(rawObjects),
-        managed = z.array(Managed).length(3).parse(parse(row.managedJson)),
+        inventory = z.array(InventoryObject).parse(rawObjects),
+        objects = z
+          .array(ObjectRecord)
+          .length(3)
+          .parse(inventory.filter((o) => o.ownership === "owned")),
+        managed = z.array(ManagedObject).parse(parse(row.managedJson)),
         identity = ready.identity;
       check = "ticket_lease_identity";
       requireProof(
@@ -181,15 +200,15 @@ export class TicketReadyInventoryReader {
       );
       check = "owned_identity";
       requireProof(
-        objects.every(
+        inventory.every(
           (o) =>
             equal(o.identity, identity) &&
             o.contractHash === ready.contractHash,
         ) &&
           managed.every((o) => equal(o.identity, identity)) &&
-          equal(ids(objects), ids(managed)) &&
-          new Set(ready.objectIds).size === 3 &&
-          equal([...ready.objectIds].sort(), objects.map((o) => o.id).sort()),
+          equal(ids(inventory), ids(managed)) &&
+          new Set(ready.objectIds).size === inventory.length &&
+          equal([...ready.objectIds].sort(), inventory.map((o) => o.id).sort()),
       );
       // Preserve producer key order when recomputing the existing manifest.
       const rawReady = parse(row.readyJson) as typeof ready;
@@ -198,7 +217,7 @@ export class TicketReadyInventoryReader {
           identity: rawReady.identity,
           resolved: { contractHash: ready.contractHash },
         },
-        rawObjects as z.infer<typeof ObjectRecord>[],
+        rawObjects as z.infer<typeof InventoryObject>[],
       );
       check = "manifest_digest";
       requireProof(
