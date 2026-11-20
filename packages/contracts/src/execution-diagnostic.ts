@@ -64,3 +64,26 @@ export type ExecutionFailure =
 export const RuntimeConflictSchema = z
   .object({ error: RuntimeFailureSchema })
   .strict();
+
+/** Safe historical projection for existing scoped operation readers. */
+const operationFailureFields = {
+  operationId: z.string().min(1).max(200),
+  observedAtMs: z.number().int().nonnegative(),
+  attempt: z.number().int().nonnegative(),
+  operation: z.enum(["provision", "cleanup"]),
+};
+export const OperationFailureSchema = z.union([
+  PortainerFailureSchema.extend(operationFailureFields),
+  RuntimeFailureSchema.omit({ message: true, requestId: true }).extend({
+    ...operationFailureFields,
+    statusCode: z.number().int().min(100).max(599),
+  }),
+  z
+    .object({
+      provider: z.literal("execution"),
+      stage: z.enum(["provision", "cleanup"]),
+      category: z.literal("unclassified_error"),
+      ...operationFailureFields,
+    })
+    .strict(),
+]);

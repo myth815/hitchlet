@@ -931,3 +931,212 @@ it("identifies an invalid local resource field without reflecting the request or
   );
   expect(paths).toEqual(["/v1/catalog"]);
 });
+
+it("keeps a slow optional preview editable and discards its obsolete result", async () => {
+  let finish!: (response: Response) => void;
+  const acquire = vi.fn();
+  const client = new HitchletClient("https://controller.test", {
+    fetch: async (input) =>
+      new URL(String(input)).pathname === "/v1/catalog"
+        ? Response.json(catalog)
+        : new Promise<Response>((resolve) => {
+            finish = resolve;
+          }),
+  });
+  const { element } = await mount(
+    <AuthorizedAcquire
+      client={client}
+      canOperate
+      busy={false}
+      blocked={false}
+      onAcquire={acquire}
+    />,
+  );
+  await click(element, "可行性预检");
+  const cpu = element.querySelector<HTMLInputElement>('input[type="number"]')!;
+  expect(cpu.disabled).toBe(false);
+  expect(element.querySelector("fieldset")!.disabled).toBe(false);
+  expect(
+    element.querySelector<HTMLButtonElement>(".primary-button")!.disabled,
+  ).toBe(false);
+  await change(cpu, "750");
+  await submit(element.querySelector("form")!);
+  expect(acquire).toHaveBeenCalledWith(
+    expect.objectContaining({
+      resources: expect.objectContaining({ cpuMillis: 750 }),
+    }),
+  );
+  await act(async () => {
+    finish(
+      Response.json({
+        observedAtMs: 2,
+        capacityGuaranteed: false,
+        availability: "unsupported",
+        eligibleNodeIds: [],
+        reasons: ["obsolete-preview"],
+      }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(element.textContent).not.toContain("obsolete-preview");
+  expect(element.textContent).not.toContain("当前没有对应环境能力");
+});
+
+it("allows unrelated retries despite overview failure and eight unknown commands, retaining only the original intent", async () => {
+  const ops = [version, network].map((opId) => ({
+    id: opId,
+    ticketId: null,
+    nodeId: null,
+    runtimeIdentityId: null,
+    connectionRevisionId: null,
+    kind: "allocation.cleanup",
+    state: "failed",
+    attemptCount: 2,
+    version: 3,
+    nextCheckAtMs: 1,
+    updatedAtMs: 1,
+    errorCode: "operation_pending",
+    retryable: true,
+    firstExecutionFailure: {
+      provider: "portainer",
+      stage: "manifest",
+      category: "connection_refused",
+      statusCode: 500,
+      operationId: opId,
+      observedAtMs: 1,
+      attempt: 1,
+      operation: "provision",
+    },
+  }));
+  const saved = Array.from({ length: 8 }, (_, i) => ({
+    kind: "management",
+    idempotencyKey: `old-${i}`,
+    method: "POST",
+    path: "/v1/admin/policies",
+    body: { name: `Old policy ${i}` },
+  }));
+  sessionStorage.setItem(
+    `hitchlet.management.requests.${id}`,
+    JSON.stringify(saved),
+  );
+  sessionStorage.setItem(
+    `hitchlet.management.pending.${id}`,
+    JSON.stringify(
+      saved.map((c) => ({
+        key: c.idempotencyKey,
+        label: "Other unknown",
+        page: "consumers",
+        path: `POST ${c.path}`,
+      })),
+    ),
+  );
+  const writes: { path: string; key: string | null }[] = [];
+  const client = new HitchletClient("https://controller.test", {
+    auth: { kind: "cookie", csrfToken: "csrf" },
+    fetch: async (input, init) => {
+      const path = new URL(String(input)).pathname;
+      if (path === "/v1/admin/overview")
+        return Response.json(
+          {
+            error: {
+              code: "storage_unavailable",
+              message: "unavailable",
+              requestId: id,
+              details: {},
+              retryable: true,
+            },
+          },
+          { status: 503 },
+        );
+      if (path === "/v1/admin/operations") return Response.json(ops);
+      if (path === "/v1/admin/tickets")
+        return Response.json({ observedAtMs: 1, items: [], nextCursor: null });
+      if (path.endsWith("/retry")) {
+        writes.push({
+          path,
+          key: new Headers(init?.headers).get("Idempotency-Key"),
+        });
+        throw new TypeError("synthetic lost reply");
+      }
+      return Response.json([]);
+    },
+  });
+  const { element } = await mount(
+    <ManagementConsole
+      client={client}
+      principal={principal}
+      onCredentialIssued={() => {}}
+    />,
+  );
+  expect(element.textContent).toContain("storage_unavailable");
+  await click(element, "Ticket 与操作");
+  expect(element.textContent).toContain(
+    "历史首错：manifest / connection_refused / HTTP 500；当前状态仍为 failed",
+  );
+  await change(
+    [...element.querySelectorAll("label")]
+      .find((l) => l.textContent?.startsWith("重试理由"))!
+      .querySelector("input")!,
+    "Retry original failed cleanup",
+  );
+  const buttons = [...element.querySelectorAll("button")].filter((b) =>
+    b.textContent?.includes("重试已失败的原操作"),
+  );
+  expect(buttons).toHaveLength(2);
+  expect(buttons[0]!.disabled, element.textContent ?? "").toBe(false);
+  await act(async () => {
+    buttons[0]!.click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(writes).toHaveLength(1);
+  await act(async () => {
+    buttons[0]!.click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(writes).toHaveLength(1);
+  expect(element.textContent).toContain("同一对象的原意图尚未确认");
+  await act(async () => {
+    buttons[1]!.click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  expect(writes).toHaveLength(2);
+  expect(writes[0]!.path).not.toBe(writes[1]!.path);
+  expect(
+    JSON.parse(sessionStorage.getItem(`hitchlet.management.requests.${id}`)!),
+  ).toHaveLength(10);
+});
+
+it("keeps unknown revoke intent on its original key without blocking another Ticket", async () => {
+  const { saveManagementPrepared } = await import("./management-prepared.js");
+  const writes: string[] = [];
+  const client = new HitchletClient("https://controller.test", {
+    auth: { kind: "cookie", csrfToken: "csrf" },
+    onManagementPrepared: (c) => saveManagementPrepared(id, c),
+    fetch: async (input) => {
+      writes.push(new URL(String(input)).pathname);
+      throw new TypeError("synthetic unknown write");
+    },
+  });
+  const body = {
+    expectedTicketVersion: 1,
+    generation: null,
+    reason: "Original authorized revoke",
+  };
+  await expect(
+    client.admin.management.revoke(version, body, "original-revoke-key"),
+  ).rejects.toMatchObject({ code: "NETWORK_RESULT_UNKNOWN" });
+  await expect(
+    client.admin.management.revoke(version, body, "replacement-key"),
+  ).rejects.toMatchObject({ code: "MANAGEMENT_INTENT_PENDING" });
+  await expect(
+    client.admin.management.revoke(network, body, "different-ticket-key"),
+  ).rejects.toMatchObject({ code: "NETWORK_RESULT_UNKNOWN" });
+  expect(writes).toEqual([
+    `/v1/tickets/${version}/revoke`,
+    `/v1/tickets/${network}/revoke`,
+  ]);
+  await expect(
+    client.admin.management.revoke(version, body, "original-revoke-key"),
+  ).rejects.toMatchObject({ code: "NETWORK_RESULT_UNKNOWN" });
+  expect(writes.at(-1)).toBe(`/v1/tickets/${version}/revoke`);
+});

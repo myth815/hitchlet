@@ -808,3 +808,95 @@ describe("HitchletClient consumer surface", () => {
     });
   });
 });
+
+describe("original-key preparation and rejection boundaries", () => {
+  it.each([14_000, 16_000])(
+    "claim and renew still submit after a %i ms Ticket read",
+    async (delay) => {
+      for (const kind of ["claim", "renew"] as const) {
+        let now = Date.parse(at);
+        const writes: { key: string | null; body: unknown }[] = [];
+        let prepared: PreparedTicketCommand | undefined;
+        const client = new HitchletClient("http://localhost", {
+          now: () => now,
+          fetch: async (input, init) => {
+            if (String(input).endsWith("/renew")) {
+              writes.push({
+                key: new Headers(init?.headers).get("Idempotency-Key"),
+                body: JSON.parse(String(init?.body)),
+              });
+              return response(pendingRenewal("confirmed").confirmedReceipt);
+            }
+            now += delay;
+            return response(ticket("ready"));
+          },
+        });
+        const options = {
+          idempotencyKey: "original-delayed-key",
+          onPrepared: async (command: PreparedTicketCommand) => {
+            prepared = command;
+            now += 16_000;
+          },
+        };
+        const result =
+          kind === "claim"
+            ? await client.tickets.claim(ids.ticket, options)
+            : await client.tickets.renew(ids.ticket, {}, options);
+        expect(result.leaseVersion).toBe(2);
+        expect(writes).toEqual([
+          {
+            key: "original-delayed-key",
+            body: { generation: 1, expectedLeaseVersion: 1 },
+          },
+        ]);
+        expect(prepared).toMatchObject({
+          kind: "renew",
+          idempotencyKey: "original-delayed-key",
+          request: writes[0]!.body,
+        });
+      }
+    },
+  );
+  it("does not infer no Ticket from an ordinary 422 or unrelated rejection marker", async () => {
+    const fetcher = vi.fn(async () =>
+      response(
+        {
+          error: {
+            code: "invalid_request",
+            message: "invalid",
+            details: {},
+            retryable: false,
+            requestId: ids.renewal,
+          },
+        },
+        422,
+      ),
+    );
+    const client = new HitchletClient("http://localhost", { fetch: fetcher });
+    await expect(
+      client.tickets.acquire(acquireRequest(), { idempotencyKey: "same" }),
+    ).rejects.toMatchObject({
+      code: "invalid_request",
+      operationOutcome: null,
+    });
+    const unrelated = new HitchletClient("http://localhost", {
+      fetch: async () =>
+        response(
+          {
+            error: {
+              code: "invalid_request",
+              message: "invalid",
+              details: {},
+              retryable: false,
+              requestId: ids.renewal,
+              operationOutcome: "rejected",
+            },
+          },
+          422,
+        ),
+    });
+    await expect(unrelated.tickets.get(ids.ticket)).rejects.toMatchObject({
+      operationOutcome: null,
+    });
+  });
+});

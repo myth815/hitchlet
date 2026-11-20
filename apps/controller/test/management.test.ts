@@ -1599,3 +1599,278 @@ describe("D24 management and safe consumer directory", () => {
     ).toBe(0);
   });
 });
+
+// Use the built SDK and ordinary HTTP/SQLite boundary, not a mocked outcome.
+async function acquireSdk(
+  f: Awaited<ReturnType<typeof fixture>>,
+  fetchOverride?: (
+    input: RequestInfo | URL,
+    init?: RequestInit,
+  ) => Promise<Response>,
+) {
+  const { HitchletClient: BuiltClient } = await import(
+    "../../../packages/sdk/dist/index.js"
+  );
+  const fetcher = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new URL(String(input));
+    const r = await f.app.inject({
+      method: (init?.method ?? "GET") as "GET" | "POST",
+      url: url.pathname + url.search,
+      headers: Object.fromEntries(new Headers(init?.headers)),
+      ...(init?.body ? { payload: String(init.body) } : {}),
+    });
+    return new Response(r.body, {
+      status: r.statusCode,
+      headers: { "content-type": "application/json" },
+    });
+  };
+  return {
+    sdk: new BuiltClient("https://controller.test", {
+      auth: { kind: "bearer", token: f.token },
+      fetch: fetchOverride ?? fetcher,
+    }),
+    fetcher,
+  };
+}
+function ordinaryRequest(f: Awaited<ReturnType<typeof fixture>>) {
+  return {
+    image: { versionId: f.versionId },
+    networkProfileId: f.networkId,
+    resources: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 1 },
+  };
+}
+
+it("exposes a durable acquire-key rejection through the built SDK and keeps it rejected after configuration recovery", async () => {
+  const f = await fixture();
+  const { sdk } = await acquireSdk(f);
+  const key = randomUUID();
+  const request = {
+    ...ordinaryRequest(f),
+    resources: {
+      cpuMillis: f.owner.quota.maxResources.cpuMillis + 1,
+      memoryMiB: 512,
+      scratchMiB: 1,
+    },
+  };
+  const failure = await sdk.tickets
+    .acquire(request, { idempotencyKey: key })
+    .catch((e) => e);
+  expect(failure).toMatchObject({
+    operationOutcome: "rejected",
+    statusCode: 422,
+    code: "invalid_request",
+    recovery: { idempotencyKey: key },
+  });
+  await f.db.run(
+    "UPDATE consumers SET quota_json=json_set(quota_json,'$.maxResources.cpuMillis',?) WHERE id=?",
+    [request.resources.cpuMillis, f.consumerId],
+  );
+  await expect(
+    sdk.tickets.resume(failure.recovery.command),
+  ).rejects.toMatchObject({
+    operationOutcome: "rejected",
+    code: "invalid_request",
+  });
+  expect(
+    await f.db.get("SELECT count(*) n FROM tickets WHERE consumer_id=?", [
+      f.consumerId,
+    ]),
+  ).toEqual({ n: 0n });
+  expect(
+    await f.db.get(
+      "SELECT ticket_id FROM idempotency_keys WHERE consumer_id=? AND idempotency_key=?",
+      [f.consumerId, key],
+    ),
+  ).toEqual({ ticket_id: null });
+});
+
+it("returns the existing Ticket rather than rejection when the same acquire key already succeeded", async () => {
+  const f = await fixture();
+  const { sdk } = await acquireSdk(f);
+  const key = randomUUID(),
+    request = ordinaryRequest(f);
+  const accepted = await sdk.tickets.acquire(request, { idempotencyKey: key });
+  await f.db.run(
+    "UPDATE consumers SET quota_json=json_set(quota_json,'$.maxResources.cpuMillis',100) WHERE id=?",
+    [f.consumerId],
+  );
+  const second = await acquireSdk(f);
+  expect(
+    (await second.sdk.tickets.acquire(request, { idempotencyKey: key })).ticket
+      .id,
+  ).toBe(accepted.ticket.id);
+  const changed = await acquireSdk(f);
+  await expect(
+    changed.sdk.tickets.acquire(
+      { ...request, resources: { ...request.resources, cpuMillis: 501 } },
+      { idempotencyKey: key },
+    ),
+  ).rejects.toMatchObject({
+    operationOutcome: null,
+    code: "idempotency_key_reused",
+  });
+  expect(
+    await f.db.get("SELECT count(*) n FROM tickets WHERE consumer_id=?", [
+      f.consumerId,
+    ]),
+  ).toEqual({ n: 1n });
+});
+
+it.each(["rejection", "creation"] as const)(
+  "fences concurrent same-key acquire so %s wins without a contradictory outcome",
+  async (winner) => {
+    const f = await fixture();
+    const { SQLiteTicketStore } = await import(
+      "../src/storage/ticket-store.js"
+    );
+    const request = ordinaryRequest(f),
+      key = randomUUID();
+    const originalQuota = JSON.stringify(f.owner.quota);
+    let release!: () => void, started!: () => void;
+    const gate = new Promise<void>((r) => (release = r)),
+      entered = new Promise<void>((r) => (started = r));
+    const name =
+      winner === "rejection" ? "schedulingCandidates" : "rejectAcquire";
+    const original = SQLiteTicketStore.prototype[name];
+    const spy = vi
+      .spyOn(SQLiteTicketStore.prototype, name)
+      .mockImplementationOnce(async function (...args: any[]) {
+        started();
+        await gate;
+        return (original as Function).apply(this, args);
+      });
+    try {
+      if (winner === "creation")
+        await f.db.run(
+          "UPDATE consumers SET quota_json=json_set(quota_json,'$.maxResources.cpuMillis',100) WHERE id=?",
+          [f.consumerId],
+        );
+      const first = await acquireSdk(f);
+      const pending = first.sdk.tickets
+        .acquire(request, { idempotencyKey: key })
+        .then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        );
+      await entered;
+      await f.db.run("UPDATE consumers SET quota_json=? WHERE id=?", [
+        winner === "rejection"
+          ? JSON.stringify({
+              ...f.owner.quota,
+              maxResources: { ...f.owner.quota.maxResources, cpuMillis: 100 },
+            })
+          : originalQuota,
+        f.consumerId,
+      ]);
+      const other = await acquireSdk(f);
+      const second = await other.sdk.tickets
+        .acquire(request, { idempotencyKey: key })
+        .then(
+          (value) => ({ value }),
+          (error) => ({ error }),
+        );
+      await f.db.run("UPDATE consumers SET quota_json=? WHERE id=?", [
+        originalQuota,
+        f.consumerId,
+      ]);
+      release();
+      const one = await pending;
+      if (winner === "rejection") {
+        expect(one).toMatchObject({ error: { operationOutcome: "rejected" } });
+        expect(second).toMatchObject({
+          error: { operationOutcome: "rejected" },
+        });
+      } else {
+        expect(one).toHaveProperty("value");
+        expect(second).toHaveProperty("value");
+        expect((one as any).value.ticket.id).toBe(
+          (second as any).value.ticket.id,
+        );
+      }
+      expect(
+        await f.db.get("SELECT count(*) n FROM tickets WHERE consumer_id=?", [
+          f.consumerId,
+        ]),
+      ).toEqual({ n: winner === "rejection" ? 0n : 1n });
+    } finally {
+      release();
+      spy.mockRestore();
+    }
+  },
+);
+
+it("keeps a lost acquire and failed original-key lookup unknown, then recovers the one original Ticket", async () => {
+  const f = await fixture();
+  const base = await acquireSdk(f);
+  let mode = "lost";
+  let saved: any;
+  const { sdk } = await acquireSdk(f, async (input, init) => {
+    if (mode === "offline") throw new TypeError("synthetic unreachable");
+    const result = await base.fetcher(input, init);
+    if (mode === "lost") throw new TypeError("synthetic lost reply");
+    return result;
+  });
+  await expect(
+    sdk.tickets.acquire(ordinaryRequest(f), {
+      idempotencyKey: "lost-original",
+      onPrepared: (c) => {
+        saved = c;
+      },
+    }),
+  ).rejects.toMatchObject({
+    operationOutcome: null,
+    code: "NETWORK_RESULT_UNKNOWN",
+  });
+  mode = "offline";
+  await expect(sdk.tickets.resume(saved)).rejects.toMatchObject({
+    operationOutcome: null,
+    code: "NETWORK_RESULT_UNKNOWN",
+  });
+  mode = "online";
+  const recovered = await sdk.tickets.resume(saved);
+  expect(recovered).toHaveProperty("ticket.id");
+  expect(
+    await f.db.get("SELECT count(*) n FROM tickets WHERE consumer_id=?", [
+      f.consumerId,
+    ]),
+  ).toEqual({ n: 1n });
+});
+
+it("does not claim rejection if the original-key fence cannot be persisted", async () => {
+  const f = await fixture();
+  const { SQLiteTicketStore } = await import("../src/storage/ticket-store.js");
+  const fail = vi
+    .spyOn(SQLiteTicketStore.prototype, "rejectAcquire")
+    .mockRejectedValue(new Error("synthetic unavailable ledger"));
+  try {
+    await f.db.run(
+      "UPDATE consumers SET quota_json=json_set(quota_json,'$.maxResources.cpuMillis',100) WHERE id=?",
+      [f.consumerId],
+    );
+    const { sdk } = await acquireSdk(f);
+    await expect(
+      sdk.tickets.acquire(ordinaryRequest(f), {
+        idempotencyKey: "unfenced-key",
+      }),
+    ).rejects.toMatchObject({ operationOutcome: null, statusCode: 500 });
+    expect(
+      await f.db.get(
+        "SELECT ticket_id FROM idempotency_keys WHERE idempotency_key='unfenced-key'",
+      ),
+    ).toBeUndefined();
+  } finally {
+    fail.mockRestore();
+  }
+  await f.db.run("UPDATE consumers SET quota_json=? WHERE id=?", [
+    JSON.stringify(f.owner.quota),
+    f.consumerId,
+  ]);
+  const { sdk } = await acquireSdk(f);
+  expect(
+    (
+      await sdk.tickets.acquire(ordinaryRequest(f), {
+        idempotencyKey: "unfenced-key",
+      })
+    ).ticket.id,
+  ).toEqual(expect.any(String));
+});

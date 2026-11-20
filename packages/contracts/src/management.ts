@@ -1,3 +1,4 @@
+import { OperationFailureSchema } from "./execution-diagnostic.js";
 import { z } from "zod";
 import {
   AcquireRequestSchema,
@@ -187,6 +188,7 @@ export const ManagementOperationSchema = z
     nextCheckAtMs: time,
     updatedAtMs: time,
     errorCode: z.string().nullable(),
+    firstExecutionFailure: OperationFailureSchema.optional(),
     retryable: z.boolean(),
   })
   .strict();

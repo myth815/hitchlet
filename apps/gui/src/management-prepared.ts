@@ -1,5 +1,6 @@
 import {
   PreparedManagementRequestSchema,
+  ComputeClientError,
   type PreparedManagementRequest,
 } from "@hitchlet/sdk";
 const storageKey = (consumerId: string) =>
@@ -24,8 +25,20 @@ export function saveManagementPrepared(
     original = existing.find((c) => c.idempotencyKey === parsed.idempotencyKey);
   if (original && JSON.stringify(original) !== JSON.stringify(parsed))
     throw new Error("Original management command changed");
-  if (!original && existing.length >= 8)
-    throw new Error("Management recovery store full");
+  if (
+    !original &&
+    existing.some(
+      (c) =>
+        c.method === parsed.method &&
+        c.path === parsed.path &&
+        c.expectedVersion === parsed.expectedVersion &&
+        canonical(c.body) === canonical(parsed.body),
+    )
+  )
+    throw new ComputeClientError({
+      code: "MANAGEMENT_INTENT_PENDING",
+      message: "同一对象的原意图尚未确认；请恢复已保存的原命令键。",
+    });
   sessionStorage.setItem(
     storageKey(consumerId),
     JSON.stringify(original ? existing : [...existing, parsed]),
@@ -38,4 +51,14 @@ export function forgetManagementPrepared(consumerId: string, key: string) {
       managementPrepared(consumerId).filter((c) => c.idempotencyKey !== key),
     ),
   );
+}
+
+function canonical(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+  if (value && typeof value === "object")
+    return `{${Object.entries(value)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`)
+      .join(",")}}`;
+  return JSON.stringify(value) ?? "null";
 }

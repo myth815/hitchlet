@@ -33,6 +33,7 @@ import {
 } from "../providers/execution-registry.js";
 import {
   ApplicationError,
+  AcquireRejectedError,
   conflict,
   notFound,
   preconditionFailed,
@@ -75,14 +76,61 @@ export class TicketService {
   ): Promise<AcquireResult> {
     if (!key || key.length > 200)
       throw new RangeError("Invalid idempotency key");
-    const parsed = AcquireRequestSchema.parse(input);
-    const request = parsed as unknown as AcquireRequest;
-    if ((request.resources.accelerators?.length ?? 0) > 0)
-      throw new RangeError("Accelerator requests are not supported");
-    const canonical = stable(request);
-    const hash = digest(canonical);
+    const request = AcquireRequestSchema.parse(
+      input,
+    ) as unknown as AcquireRequest;
+    const hash = digest(stable(request));
+    try {
+      return await this.acquireChecked(consumerId, key, request, hash);
+    } catch (error) {
+      if (error instanceof AcquireRejectedError) throw error;
+      const code =
+        error instanceof RangeError
+          ? "invalid_request"
+          : error instanceof ApplicationError &&
+              [
+                "invalid_request",
+                "environment_unsupported",
+                "not_found",
+                "queue_limit_exceeded",
+              ].includes(error.code)
+            ? (error.code as
+                | "invalid_request"
+                | "environment_unsupported"
+                | "not_found"
+                | "queue_limit_exceeded")
+            : undefined;
+      if (!code) throw error;
+      const status =
+        code === "not_found"
+          ? 404
+          : code === "queue_limit_exceeded"
+            ? 429
+            : 422;
+      return this.replay(
+        await this.store.rejectAcquire(
+          consumerId,
+          key,
+          hash,
+          code,
+          status,
+          this.now(),
+        ),
+        hash,
+        error instanceof RangeError ? error.message : undefined,
+      );
+    }
+  }
+  private async acquireChecked(
+    consumerId: string,
+    key: string,
+    request: AcquireRequest,
+    hash: string,
+  ): Promise<AcquireResult> {
     const existing = await this.store.idempotency(consumerId, key);
     if (existing) return this.replay(existing, hash);
+    if ((request.resources.accelerators?.length ?? 0) > 0)
+      throw new RangeError("Accelerator requests are not supported");
 
     const {
       consumer,
@@ -1006,10 +1054,29 @@ export class TicketService {
       reasonCodes: [...reasons],
     };
   }
-  private replay(row: Row, hash: string): AcquireResult {
+  private replay(
+    row: Row,
+    hash: string,
+    rejectionMessage?: string,
+  ): AcquireResult {
     if (row.request_hash !== hash) throw conflict("idempotency_key_reused");
-    if (typeof row.ticket_id !== "string")
+    if (typeof row.ticket_id !== "string") {
+      const receipt =
+        typeof row.safe_response_json === "string"
+          ? JSON.parse(row.safe_response_json)
+          : null;
+      if (
+        receipt?.operationOutcome === "rejected" &&
+        [
+          "invalid_request",
+          "environment_unsupported",
+          "not_found",
+          "queue_limit_exceeded",
+        ].includes(receipt.code)
+      )
+        throw new AcquireRejectedError(receipt.code, rejectionMessage);
       throw new Error("Idempotent response is incomplete");
+    }
     return { ticketId: row.ticket_id, phase: "queued", replayed: true };
   }
 }

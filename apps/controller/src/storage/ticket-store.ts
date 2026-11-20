@@ -71,9 +71,35 @@ export class SQLiteTicketStore {
 
   idempotency(consumerId: string, key: string): Promise<Row | undefined> {
     return this.storage.get<Row>(
-      "SELECT request_hash,ticket_id FROM idempotency_keys WHERE consumer_id=? AND route_scope='tickets.acquire' AND idempotency_key=?",
+      "SELECT request_hash,ticket_id,response_status,safe_response_json FROM idempotency_keys WHERE consumer_id=? AND route_scope='tickets.acquire' AND idempotency_key=?",
       [consumerId, key],
     );
+  }
+  async rejectAcquire(
+    consumerId: string,
+    key: string,
+    hash: string,
+    code: string,
+    status: number,
+    now: number,
+  ) {
+    // The same PK is inserted by createQueuedTicket inside its Ticket transaction.
+    // A rejection that wins here prevents an in-flight same-key Ticket commit.
+    await this.storage.run(
+      "INSERT INTO idempotency_keys(consumer_id,route_scope,idempotency_key,request_hash,response_status,safe_response_json,created_at_ms,retain_until_ms) VALUES(?,'tickets.acquire',?,?,?,?,?,?) ON CONFLICT(consumer_id,route_scope,idempotency_key) DO NOTHING",
+      [
+        consumerId,
+        key,
+        hash,
+        status,
+        JSON.stringify({ operationOutcome: "rejected", code }),
+        now,
+        now + 180 * 86400000,
+      ],
+    );
+    const result = await this.idempotency(consumerId, key);
+    if (!result) throw new Error("Acquire rejection receipt unavailable");
+    return result;
   }
   consumer(consumerId: string): Promise<Row | undefined> {
     return this.storage.get<Row>(

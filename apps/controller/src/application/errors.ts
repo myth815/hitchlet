@@ -45,3 +45,20 @@ export class AuthFailure extends Error {
     super(code);
   }
 }
+
+/** Constructed only after the original acquire key is durably fenced as rejected. */
+export class AcquireRejectedError extends ApplicationError {
+  readonly operationOutcome = "rejected" as const;
+  constructor(
+    code:
+      | "invalid_request"
+      | "environment_unsupported"
+      | "not_found"
+      | "queue_limit_exceeded",
+    message?: string,
+  ) {
+    super(code);
+    this.name = "AcquireRejectedError";
+    if (message) this.message = message;
+  }
+}

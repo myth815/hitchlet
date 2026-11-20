@@ -31,7 +31,10 @@ function fileHashes(paths, root) {
 }
 
 export function manifestFingerprint(manifest) {
-  return hash(JSON.stringify(manifest));
+  const content = { ...manifest };
+  // This optional caller-supplied label is provenance, not a content check.
+  delete content.gitRevision;
+  return hash(JSON.stringify(content));
 }
 
 export function inputHashes(packageName, repoRoot = REPO_ROOT) {

@@ -1,3 +1,4 @@
+import { OperationFailureSchema } from "@hitchlet/contracts/internal";
 import {
   AuthorizedCatalogSchema,
   ManagementOperationSchema,
@@ -238,6 +239,28 @@ export class ManagementService {
     return ticket;
   }
   private operation(row: Row) {
+    let firstExecutionFailure;
+    try {
+      const f = JSON.parse(String(row.first_failure));
+      if (f && typeof f === "object") {
+        const safe = OperationFailureSchema.safeParse({
+          provider: f.provider,
+          stage: f.stage,
+          category: f.category,
+          operationId: f.operationId,
+          observedAtMs: f.observedAtMs,
+          attempt: f.attempt,
+          operation: f.operation,
+          ...(typeof f.statusCode === "number"
+            ? { statusCode: f.statusCode }
+            : {}),
+        });
+        if (safe.success && safe.data.operationId === row.id)
+          firstExecutionFailure = safe.data;
+      }
+    } catch {
+      /* Optional diagnostics must not block the existing operation read. */
+    }
     return ManagementOperationSchema.parse({
       id: row.id,
       ticketId: row.ticket_id,
@@ -251,6 +274,7 @@ export class ManagementService {
       nextCheckAtMs: integer(row.next_check_at_ms),
       updatedAtMs: integer(row.updated_at_ms),
       errorCode: typeof row.error_code === "string" ? row.error_code : null,
+      ...(firstExecutionFailure ? { firstExecutionFailure } : {}),
       retryable:
         row.state === "failed" &&
         ["allocation.cleanup", "allocation.provision"].includes(

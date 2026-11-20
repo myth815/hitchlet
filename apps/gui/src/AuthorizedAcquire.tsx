@@ -116,6 +116,8 @@ export function AuthorizedAcquire({
     ...(clientRef.trim() ? { clientRef: clientRef.trim() } : {}),
   };
   const fingerprint = JSON.stringify(request);
+  const currentFingerprint = React.useRef(fingerprint);
+  currentFingerprint.current = fingerprint;
   React.useEffect(() => setPreview(null), [fingerprint]);
   const unavailable =
     !canOperate || busy || blocked || !!catalog.error || !catalog.data;
@@ -123,9 +125,11 @@ export function AuthorizedAcquire({
     setPreviewing(true);
     setError("");
     try {
-      setPreview(await client.preview(request));
+      const result = await client.preview(request);
+      if (currentFingerprint.current === fingerprint) setPreview(result);
     } catch (error) {
-      setError(`预检失败：${managementError(error, true)}`);
+      if (currentFingerprint.current === fingerprint)
+        setError(`预检失败：${managementError(error, true)}`);
     } finally {
       setPreviewing(false);
     }
@@ -149,11 +153,10 @@ export function AuthorizedAcquire({
         className="acquire-form"
         onSubmit={(e) => {
           e.preventDefault();
-          if (!unavailable && !previewing && versionId && network)
-            onAcquire(request);
+          if (!unavailable && versionId && network) onAcquire(request);
         }}
       >
-        <fieldset disabled={unavailable || previewing}>
+        <fieldset disabled={unavailable}>
           <div className="admin-grid">
             <label>
               授权镜像与不可变版本
@@ -551,7 +554,7 @@ export function AuthorizedAcquire({
           </label>
           <button
             type="button"
-            disabled={!versionId || !network}
+            disabled={previewing || !versionId || !network}
             onClick={() => void preflight()}
           >
             {previewing ? "正在预检…" : "可行性预检（不预留）"}
@@ -578,7 +581,7 @@ export function AuthorizedAcquire({
           ) : null}
           <button
             className="primary-button"
-            disabled={unavailable || previewing || !versionId || !network}
+            disabled={unavailable || !versionId || !network}
           >
             保存请求并申请 →
           </button>

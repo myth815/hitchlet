@@ -2340,6 +2340,64 @@ it.each(["create", "start"] as const)(
       category: "http_error",
     });
     expect(row.result_json).not.toContain("PRIVATE_RUNTIME_TEXT");
+    const app = await buildApp(
+      loadConfig({
+        DATA_DIR: f.dir,
+        LOG_LEVEL: "silent",
+        EXECUTION_MODE: "portainer",
+        HITCHLET_SECRET_KEY_FILE: join(f.dir, "synthetic-unused.key"),
+      }),
+      { storage: f.storage },
+    );
+    try {
+      const sdk = new HitchletClient("https://controller.test", {
+        auth: { kind: "bearer", token: f.adminToken },
+        fetch: async (input, init) => {
+          const url = new URL(String(input));
+          const reply = await app.inject({
+            method: "GET",
+            url: url.pathname + url.search,
+            headers: Object.fromEntries(new Headers(init?.headers)),
+          });
+          return new Response(reply.body, {
+            status: reply.statusCode,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+      const operations = await sdk.admin.management.operations();
+      const actual = operations.find(
+        (o) => o.ticketId === f.ready.id && o.kind === "allocation.provision",
+      )!;
+      expect(actual).toMatchObject({
+        state: "unknown",
+        firstExecutionFailure: result.firstExecutionFailure,
+      });
+      const timeline = await sdk.admin.management.timeline(f.ready.id);
+      expect(timeline.operations.find((o) => o.id === actual.id)).toMatchObject(
+        { firstExecutionFailure: actual.firstExecutionFailure },
+      );
+      expect(JSON.stringify(actual)).not.toContain("PRIVATE_RUNTIME_TEXT");
+      // Historical failure remains useful after retry success, separately from state.
+      await f.storage.run(
+        "UPDATE operations SET state='succeeded' WHERE id=?",
+        [actual.id],
+      );
+      expect(
+        (await sdk.admin.management.operations()).find(
+          (o) => o.id === actual.id,
+        ),
+      ).toMatchObject({
+        state: "succeeded",
+        firstExecutionFailure: actual.firstExecutionFailure,
+      });
+      await f.storage.run("UPDATE operations SET state='unknown' WHERE id=?", [
+        actual.id,
+      ]);
+    } finally {
+      await app.close();
+    }
+
     expect(result.createEffects.container.state).toBe(
       stage === "create" ? "unknown" : "observed",
     );

@@ -29,7 +29,7 @@ const scopeParams = (scope: ManagementReadScope) => [
   scope === null ? 1 : 0,
 ];
 const operationProjection =
-  "o.id,o.image_artifact_id,a.ticket_id,COALESCE(o.node_id,a.node_id) AS node_id,o.runtime_identity_id,o.connection_revision_id,o.kind,o.state,o.attempt_count,o.version,o.next_check_at_ms,o.updated_at_ms,json_extract(o.result_json,'$.code') AS error_code";
+  "o.id,o.image_artifact_id,a.ticket_id,COALESCE(o.node_id,a.node_id) AS node_id,o.runtime_identity_id,o.connection_revision_id,o.kind,o.state,o.attempt_count,o.version,o.next_check_at_ms,o.updated_at_ms,json_extract(o.result_json,'$.code') AS error_code,json_extract(o.result_json,'$.firstExecutionFailure') AS first_failure";
 const parse = (value: unknown): unknown => JSON.parse(String(value));
 
 /** Administrative configuration and safe directory queries. No provider side effects or Ticket rewriting. */

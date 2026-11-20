@@ -347,6 +347,7 @@ export const ApiErrorResponseSchema: z.ZodType<ApiErrorResponse> = z
         details: z.record(z.string(), z.json()),
         retryable: z.boolean(),
         requestId: id,
+        operationOutcome: z.literal("rejected").optional(),
       })
       .strict(),
   })

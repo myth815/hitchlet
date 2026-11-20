@@ -79,6 +79,8 @@ export interface ApiErrorResponse {
     readonly retryable: boolean;
     /** 本次 HTTP 调用的追踪 ID；网络重试可有新 requestId，但复用幂等键。 */
     readonly requestId: Id;
+    /** Durable original acquire-key rejection; HTTP status alone is not evidence. */
+    readonly operationOutcome?: "rejected" | undefined;
   };
 }
 

@@ -194,7 +194,6 @@ export class TicketCommands {
     body: unknown,
     intent: unknown,
     onPrepared?: ClientWriteOptions["onPrepared"],
-    deadlineAt?: number,
   ): Promise<Extract<PreparedTicketCommand, { kind: K }>> {
     const scope = this.scope(kind, ticketId, key);
     const fingerprint = stable({ ticketId, intent });
@@ -234,39 +233,13 @@ export class TicketCommands {
       });
     }
     if (onPrepared) {
-      let persistenceTimedOut = false;
       try {
-        const persistence = onPrepared(command);
-        if (deadlineAt === undefined) {
-          await persistence;
-        } else {
-          const remaining = deadlineAt - this.http.now();
-          if (remaining <= 0) {
-            persistenceTimedOut = true;
-            throw new Error("Renewal preparation deadline exceeded");
-          }
-          let timer: ReturnType<typeof setTimeout> | undefined;
-          try {
-            await Promise.race([
-              persistence,
-              new Promise<never>((_, reject) => {
-                timer = setTimeout(() => {
-                  persistenceTimedOut = true;
-                  reject(new Error("Renewal preparation deadline exceeded"));
-                }, remaining);
-              }),
-            ]);
-          } finally {
-            if (timer !== undefined) clearTimeout(timer);
-          }
-        }
+        await onPrepared(command);
       } catch (error) {
         throw new ComputeClientError({
-          code: persistenceTimedOut
-            ? "RENEWAL_PREPARATION_TIMEOUT"
-            : "PREPARED_COMMAND_SAVE_FAILED",
+          code: "PREPARED_COMMAND_SAVE_FAILED",
           message:
-            "The prepared command was not sent because it could not be persisted before the deadline.",
+            "The prepared command was not sent because it could not be persisted.",
           retryable: true,
           recovery: { command, ticketId, idempotencyKey: key },
           cause: error,
@@ -295,7 +268,6 @@ export class TicketCommands {
 
   private async send(
     command: PreparedTicketCommand,
-    deadlineAt?: number,
   ): Promise<TicketCommandResult<typeof command>> {
     const context = this.context(command);
     switch (command.kind) {
@@ -320,10 +292,9 @@ export class TicketCommands {
         } as TicketCommandResult<typeof command>;
       }
       case "renew":
-        return (await this.submitRenewal(
-          command,
-          deadlineAt ?? this.http.now() + 15_000,
-        )) as TicketCommandResult<typeof command>;
+        return (await this.submitRenewal(command)) as TicketCommandResult<
+          typeof command
+        >;
       case "release":
         return (await this.http.request(
           `/v1/tickets/${encodeURIComponent(command.ticketId)}/release`,
@@ -353,20 +324,10 @@ export class TicketCommands {
 
   private async submitRenewal(
     command: Extract<PreparedTicketCommand, { kind: "renew" }>,
-    deadlineAt: number,
   ): Promise<RenewReceipt> {
-    const remainingBeforePost = deadlineAt - this.http.now();
-    if (remainingBeforePost <= 0)
-      throw new ComputeClientError({
-        code: "RENEWAL_PREPARATION_TIMEOUT",
-        message: "The renewal deadline elapsed before the write was sent.",
-        retryable: true,
-        recovery: {
-          command,
-          ticketId: command.ticketId,
-          idempotencyKey: command.idempotencyKey,
-        },
-      });
+    // Bound the response/poll wait after submission starts, never the caller's
+    // read or durable command preparation. The server owns lease deadlines.
+    const deadlineAt = this.http.now() + 15_000;
     let renewalResponseStatus: number | null = null;
     const submission = await this.http.request(
       `/v1/tickets/${encodeURIComponent(command.ticketId)}/renew`,
@@ -390,7 +351,7 @@ export class TicketCommands {
       {
         ...this.context(command),
         acceptedStatuses: [409],
-        timeoutMilliseconds: remainingBeforePost,
+        timeoutMilliseconds: 15_000,
       },
     );
     if (submission.kind === "receipt") return freezeDeep(submission.receipt);
@@ -466,7 +427,6 @@ export class TicketCommands {
   async resume<C extends PreparedTicketCommand>(
     command: C,
   ): Promise<TicketCommandResult<C>> {
-    const deadlineAt = this.http.now() + 15_000;
     let parsed: PreparedTicketCommand;
     try {
       const validated = read(PreparedTicketCommandSchema, command);
@@ -500,7 +460,7 @@ export class TicketCommands {
         },
       });
     this.prepared.set(scope, { intent, command: parsed });
-    return (await this.send(parsed, deadlineAt)) as TicketCommandResult<C>;
+    return (await this.send(parsed)) as TicketCommandResult<C>;
   }
 
   async acquire(
@@ -720,26 +680,14 @@ export class TicketCommands {
     ticketId: Id,
     options: ClientWriteOptions = {},
   ): Promise<RenewReceipt> {
-    return this.renewTicket(
-      ticketId,
-      {},
-      options,
-      true,
-      this.http.now() + 15_000,
-    );
+    return this.renewTicket(ticketId, {}, options, true);
   }
   async renew(
     ticketId: Id,
     request: ClientRenewRequest = {},
     options: ClientWriteOptions = {},
   ): Promise<RenewReceipt> {
-    return this.renewTicket(
-      ticketId,
-      request,
-      options,
-      false,
-      this.http.now() + 15_000,
-    );
+    return this.renewTicket(ticketId, request, options, false);
   }
 
   private async renewTicket(
@@ -747,7 +695,6 @@ export class TicketCommands {
     request: ClientRenewRequest,
     options: ClientWriteOptions,
     initial: boolean,
-    deadlineAt: number,
   ): Promise<RenewReceipt> {
     if (
       typeof request !== "object" ||
@@ -769,22 +716,13 @@ export class TicketCommands {
     const key = options.idempotencyKey ?? randomKey();
     const intent = { requestedTtlSec: checkedRequest.requestedTtlSec };
     const saved = this.cached("renew", ticketId, key, intent);
-    if (saved) return this.submitRenewal(saved, deadlineAt);
-    const remainingBeforeRead = deadlineAt - this.http.now();
-    if (remainingBeforeRead <= 0)
-      throw new ComputeClientError({
-        code: "RENEWAL_PREPARATION_TIMEOUT",
-        message:
-          "The renewal deadline elapsed before the Ticket could be read.",
-        retryable: true,
-        recovery: { ticketId, idempotencyKey: key },
-      });
+    if (saved) return this.submitRenewal(saved);
     const ticket = await this.http.request(
       `/v1/tickets/${encodeURIComponent(ticketId)}`,
       "GET",
       undefined,
       (value) => readResponse(TicketViewSchema, value),
-      { ticketId, timeoutMilliseconds: remainingBeforeRead },
+      { ticketId },
     );
     if (!ticket.lease)
       throw new ComputeClientError({
@@ -818,9 +756,8 @@ export class TicketCommands {
       body,
       intent,
       options.onPrepared,
-      deadlineAt,
     );
-    return (await this.submitRenewal(command, deadlineAt)) as RenewReceipt;
+    return (await this.submitRenewal(command)) as RenewReceipt;
   }
   async getRenewal(ticketId: Id, renewalId: Id): Promise<LeaseRenewalView> {
     return this.http.request(

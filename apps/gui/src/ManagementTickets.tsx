@@ -115,6 +115,17 @@ export function ManagementTickets({
               {new Date(o.nextCheckAtMs).toLocaleString()}
             </small>
             <p>{o.errorCode ?? "无错误码"}；未知/历史不证明成功。</p>
+            {o.firstExecutionFailure && (
+              <p>
+                历史首错：{o.firstExecutionFailure.stage} /{" "}
+                {o.firstExecutionFailure.category}
+                {"statusCode" in o.firstExecutionFailure &&
+                o.firstExecutionFailure.statusCode
+                  ? ` / HTTP ${o.firstExecutionFailure.statusCode}`
+                  : ""}
+                ；当前状态仍为 {o.state}。
+              </p>
+            )}
             {o.ticketId ? (
               <button
                 onClick={() =>
@@ -365,12 +376,23 @@ export function ManagementTickets({
                 {new Date(o.nextCheckAtMs).toLocaleString()}
               </small>
               <p>{o.errorCode ?? "未记录错误码"}</p>
+              {o.firstExecutionFailure && (
+                <p>
+                  历史首错：{o.firstExecutionFailure.stage} /{" "}
+                  {o.firstExecutionFailure.category}
+                  {"statusCode" in o.firstExecutionFailure &&
+                  o.firstExecutionFailure.statusCode
+                    ? ` / HTTP ${o.firstExecutionFailure.statusCode}`
+                    : ""}
+                  ；当前状态仍为 {o.state}。
+                </p>
+              )}
               <button
                 disabled={
                   disabled || !!timeline.error || !o.retryable || !reason.trim()
                 }
                 onClick={() =>
-                  void action("重试原操作", (key) =>
+                  void action(`重试原操作 ${o.id}`, (key) =>
                     client.admin.management.retryOperation(
                       o.id,
                       { expectedVersion: o.version, reason },

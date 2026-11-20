@@ -277,7 +277,12 @@ export class HttpTransport {
       );
       try {
         await this.options.onManagementPrepared(prepared);
-      } catch {
+      } catch (error) {
+        if (
+          error instanceof ComputeClientError &&
+          error.code === "MANAGEMENT_INTENT_PENDING"
+        )
+          throw error;
         throw new ComputeClientError({
           code: "PREPARED_MANAGEMENT_SAVE_FAILED",
           message:
@@ -418,6 +423,13 @@ export class HttpTransport {
           requestId: payload.requestId,
           retryable: payload.retryable,
           statusCode: response.status,
+          operationOutcome:
+            path === "/v1/tickets" &&
+            method === "POST" &&
+            !!context.key &&
+            payload.operationOutcome === "rejected"
+              ? "rejected"
+              : null,
           recovery,
         });
       }

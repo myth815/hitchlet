@@ -1,3 +1,4 @@
+import { AcquireRejectedError } from "./application/errors.js";
 import { TicketReadyInventoryReader } from "./application/ticket-ready-inventory.js";
 import { registerReadyInventoryRoute } from "./http/ready-inventory-route.js";
 import { configuredExecutionModes } from "./providers/execution-registry.js";
@@ -255,7 +256,13 @@ export async function buildApp(
       },
       "request failed",
     );
-    return reply.code(status).send(apiError(request.id, code, status === 503));
+    const envelope = apiError(request.id, code, status === 503);
+    if (error instanceof AcquireRejectedError)
+      return reply.code(status).send({
+        ...envelope,
+        error: { ...envelope.error, operationOutcome: "rejected" },
+      });
+    return reply.code(status).send(envelope);
   });
   app.get("/healthz", async () =>
     HealthResponseSchema.parse({

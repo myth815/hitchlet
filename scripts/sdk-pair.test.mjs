@@ -167,7 +167,7 @@ test("paired versions and exact workspace source dependency are required", () =>
   }
 });
 
-test("pair provenance cannot mix supplied Git revisions", () => {
+test("matching content accepts distinct provenance labels without rebuilding dependencies", () => {
   const { root, cleanup } = fixture();
   try {
     const contractsManifest = resolve(
@@ -179,16 +179,13 @@ test("pair provenance cannot mix supplied Git revisions", () => {
     const manifest = JSON.parse(readFileSync(contractsManifest, "utf8"));
     manifest.gitRevision = "a".repeat(40);
     writeFileSync(contractsManifest, JSON.stringify(manifest));
-    const sdkManifestPath = resolve(
-      root,
-      PACKAGE_DIRS["@hitchlet/sdk"],
-      "dist",
-      ".hitchlet-build.json",
+    assert.equal(
+      manifestFingerprint(manifest),
+      readBuildManifestFingerprint(root),
     );
-    const sdkManifest = JSON.parse(readFileSync(sdkManifestPath, "utf8"));
-    sdkManifest.contractsFingerprint = manifestFingerprint(manifest);
-    writeFileSync(sdkManifestPath, JSON.stringify(sdkManifest));
-    assert.throws(() => validatePair(root), /different Git revisions/);
+    const pair = validatePair(root);
+    assert.equal(pair.contracts.gitRevision, "a".repeat(40));
+    assert.equal(pair.sdk.gitRevision, null);
   } finally {
     cleanup();
   }
@@ -262,7 +259,25 @@ test("pair preparation packs both fixture packages and records their hashes", ()
       execFileSync("tar", ["-czf", tarball, "package"], { cwd: destination });
       return tarball;
     };
+    for (const [name, label] of [
+      ["@hitchlet/contracts", "contracts-label"],
+      ["@hitchlet/sdk", "sdk-label"],
+    ]) {
+      const path = resolve(
+        root,
+        PACKAGE_DIRS[name],
+        "dist",
+        ".hitchlet-build.json",
+      );
+      const manifest = JSON.parse(readFileSync(path, "utf8"));
+      manifest.gitRevision = label;
+      writeFileSync(path, JSON.stringify(manifest));
+    }
     const result = preparePair(output, root, fakePack);
+    assert.deepEqual(
+      result.packages.map((p) => p.gitRevision),
+      ["contracts-label", "sdk-label"],
+    );
     assert.equal(result.packages.length, 2);
     for (const pkg of result.packages) {
       assert.match(pkg.sha256, /^[a-f0-9]{64}$/);
@@ -273,3 +288,17 @@ test("pair preparation packs both fixture packages and records their hashes", ()
     cleanup();
   }
 });
+
+function readBuildManifestFingerprint(root) {
+  return JSON.parse(
+    readFileSync(
+      resolve(
+        root,
+        PACKAGE_DIRS["@hitchlet/sdk"],
+        "dist",
+        ".hitchlet-build.json",
+      ),
+      "utf8",
+    ),
+  ).contractsFingerprint;
+}

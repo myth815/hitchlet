@@ -80,7 +80,7 @@ export function ManagementConsole({
       return [];
     }
   });
-  const lock = React.useRef(false),
+  const lock = React.useRef(new Set<string>()),
     mounted = React.useRef(true);
   React.useEffect(() => {
     mounted.current = true;
@@ -133,25 +133,27 @@ export function ManagementConsole({
   const canWrite =
     ["admin", "operator"].includes(principal.role) &&
     principal.scopes.includes("tickets:revoke");
-  const disabled = !canWrite || busy || !!overview.error || !overview.data;
+  const disabled = !canWrite;
   const remember = (records: Pending[]) => {
     sessionStorage.setItem(storageKey, JSON.stringify(records));
     pendingRef.current = records;
     setPending(records);
   };
   const action: ManagementUI["action"] = async (label, work, recovery) => {
-    if (disabled || lock.current) return false;
-    if (pending.some((p) => p.label === label)) {
+    if (disabled || lock.current.has(label)) return false;
+    // Prepared DTOs use the exact request fence; one-shot commands retain their
+    // original target-bearing intent label because they cannot be safely replayed.
+    if (
+      !recovery &&
+      pendingRef.current.some(
+        (p) => p.label === label && !p.path && !p.recovery,
+      )
+    ) {
       setMessage(
         "这项原命令尚未确认。先检查原回执和目标状态；其他回收与维护仍可操作。",
       );
       return false;
     }
-    if (pending.length >= 8) {
-      setMessage("此标签页已有8项未决管理命令。请先调查原操作；不会丢弃旧键。");
-      return false;
-    }
-    lock.current = true;
     setBusy(true);
     setMessage("");
     const record = {
@@ -160,10 +162,11 @@ export function ManagementConsole({
       page: tab,
       ...(recovery ? { recovery } : {}),
     };
+    lock.current.add(label);
     try {
-      remember([...pending, record]);
+      remember([...pendingRef.current, record]);
       await work(record.key);
-      remember(pending);
+      remember(pendingRef.current.filter((p) => p.key !== record.key));
       if (mounted.current) {
         setMessage("请求已由服务端确认；以刷新后的状态和清理证据为准。");
         void overview.refresh();
@@ -179,7 +182,7 @@ export function ManagementConsole({
           (e.statusCode ?? 0) >= 500);
       if (!unknown) {
         forgetManagementPrepared(principal.consumerId, record.key);
-        remember(pending);
+        remember(pendingRef.current.filter((p) => p.key !== record.key));
       }
       if (mounted.current)
         setMessage(
@@ -189,8 +192,8 @@ export function ManagementConsole({
         );
       return false;
     } finally {
-      lock.current = false;
-      if (mounted.current) setBusy(false);
+      lock.current.delete(label);
+      if (mounted.current) setBusy(lock.current.size > 0);
     }
   };
   const savedRequest = (key: string) => {
@@ -214,7 +217,7 @@ export function ManagementConsole({
       );
       if (receipt?.state === "completed") {
         forgetManagementPrepared(principal.consumerId, record.key);
-        remember(pending.filter((p) => p.key !== record.key));
+        remember(pendingRef.current.filter((p) => p.key !== record.key));
         setMessage(
           `原命令返回 HTTP ${receipt.status}。刷新对应目录核对结果；受理不等于实际清理完成。`,
         );
@@ -256,7 +259,7 @@ export function ManagementConsole({
         reason,
       });
       forgetManagementPrepared(principal.consumerId, record.key);
-      remember(pending.filter((p) => p.key !== record.key));
+      remember(pendingRef.current.filter((p) => p.key !== record.key));
       setMessage(
         "人工调查已审计。原命令真实状态未被改写，原键仍不能重复执行；请继续使用已查实的资源/Operation处理后续工作。",
       );
@@ -309,7 +312,9 @@ export function ManagementConsole({
                   .resumeManagement(command)
                   .then(() => {
                     forgetManagementPrepared(principal.consumerId, record.key);
-                    remember(pending.filter((p) => p.key !== record.key));
+                    remember(
+                      pendingRef.current.filter((p) => p.key !== record.key),
+                    );
                     setMessage(
                       "已按原方法、原body、原CAS和原key恢复。请刷新实际状态。",
                     );
@@ -344,7 +349,9 @@ export function ManagementConsole({
                     record.key,
                   )
                   .then(() => {
-                    remember(pending.filter((p) => p.key !== record.key));
+                    remember(
+                      pendingRef.current.filter((p) => p.key !== record.key),
+                    );
                     setMessage("已用原key恢复撤销；请刷新Ticket与清理状态。");
                   })
                   .catch((e) => setMessage(managementError(e)));

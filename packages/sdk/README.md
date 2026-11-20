@@ -22,7 +22,9 @@ For a browser login, `client.session.create(bearerToken)` exchanges the supplied
 
 Consumer Ticket writes are prepared and deeply frozen before sending. Persist the `PreparedTicketCommand` in `onPrepared` to recover across process restarts with `client.tickets.resume(command)`. Saving only an idempotency key is insufficient because renewals also bind the lease generation and version observed before the first attempt. The callback is awaited before the first network send and if it fails the write is not sent. A network retry reuses the same body and key. Same-key requests that change command kind, target, or intent are rejected locally.
 
-`renew` and `claim` return only an immutable confirmed receipt. Their 15-second local deadline covers the initial Ticket read, prepared-command persistence, write request, and polling of the original renewal ID. If it remains pending, `ComputeClientError.recovery` carries the saved command, ticket and renewal IDs, and idempotency key; that error does not imply the lease was extended. `409` and `412` version conflicts are surfaced without preparing a second proposal.
+`renew` and `claim` return only an immutable confirmed receipt. Their 15-second local response/poll wait starts when the prepared renewal is submitted; reading the Ticket and awaiting durable command preparation do not consume it. The server still checks the actual claim, lease and renewal decision deadlines. If it remains pending, `ComputeClientError.recovery` carries the saved command, ticket and renewal IDs, and idempotency key; that error does not imply the lease was extended. `409` and `412` version conflicts are surfaced without preparing a second proposal.
+
+An acquire failure is conclusively rejected only when `ComputeClientError.operationOutcome === "rejected"`. Controller writes this outcome under the original consumer/acquire key before returning it, so an in-flight request with that key cannot later commit a different Ticket. A lost response, a generic `422`, or an empty list is inconclusive: retain the original command and resume it. Reusing the key with a changed body remains a conflict.
 
 `waitUntilReady` and `waitUntilReleased` poll with bounded backoff (60 minutes and 5 minutes by default). Their timeout or `isCancelled` callback stops only local waiting; it does not cancel a ticket or release a lease. No background lease renewal or automatic release is performed.
 
@@ -68,3 +70,7 @@ allocation.cleanup查实删除前Claim仍保留；NAS源与共享输出不删除
 `managementRequestContract` 白名单；当前权限与CSRF会在重放前再次检查。
 一次性凭据、access、Host配对、系统/电源等各自专用协议不属于此通用恢复白名单；
 不能把Ticket的 `onPrepared`/`tickets.resume` 当成所有写入的统一机制。
+
+Existing scoped `admin.management.operations()` and `timeline(ticketId)` expose optional `firstExecutionFailure` metadata: provider, fixed stage/category, HTTP status when present, original operation ID, observation time and attempt. This historical failure is independent of the current operation state; no raw request, target URL, provider response or credentials are projected.
+
+Local SDK pair preparation compares source/output hashes, exact package versions and the SDK's contracts content fingerprint. Caller-supplied `HITCHLET_BUILD_REVISION` labels are recorded separately for each package and do not block matching content.

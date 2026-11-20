@@ -55,10 +55,6 @@ export function validatePair(repoRoot = REPO_ROOT) {
   );
   if (contracts.version !== sdk.version)
     throw new Error("Contracts and SDK versions must match exactly");
-  if (contracts.gitRevision !== sdk.gitRevision)
-    throw new Error(
-      "Contracts and SDK were built from different Git revisions",
-    );
   if (
     sdkPkg.dependencies?.["@hitchlet/contracts"] !==
     `workspace:${contracts.version}`
@@ -164,11 +160,11 @@ export function preparePair(
     publishedFiles.push(sdkOutput);
     const result = {
       format: 1,
-      gitRevision: pair.contracts.gitRevision,
       packages: [
         {
           name: "@hitchlet/contracts",
           version: pair.contracts.version,
+          gitRevision: pair.contracts.gitRevision,
           file: contractsName,
           sha256: sha256(readFileSync(contractsOutput)),
           buildFingerprint: manifestFingerprint(pair.contracts),
@@ -176,6 +172,7 @@ export function preparePair(
         {
           name: "@hitchlet/sdk",
           version: pair.sdk.version,
+          gitRevision: pair.sdk.gitRevision,
           file: sdkName,
           sha256: sha256(readFileSync(sdkOutput)),
           buildFingerprint: manifestFingerprint(pair.sdk),

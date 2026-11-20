@@ -122,10 +122,8 @@ export function Observation({
       role={error ? "alert" : "status"}
       className={error ? "error-inline" : "muted"}
     >
-      {error
-        ? `实时更新断开；以下为历史观测，写入已禁用。${error}`
-        : "最近服务端快照"}{" "}
-      · {at === null ? "尚未读取" : new Date(at).toLocaleString()}
+      {error ? `实时更新断开；以下为历史观测。${error}` : "最近服务端快照"} ·{" "}
+      {at === null ? "尚未读取" : new Date(at).toLocaleString()}
     </p>
   );
 }
