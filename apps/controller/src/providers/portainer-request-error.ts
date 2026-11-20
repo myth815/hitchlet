@@ -9,11 +9,18 @@ export class PortainerRequestError extends Error {
   }
 }
 
-export function requestStage(path: string): PortainerFailure["stage"] {
+export function requestStage(
+  path: string,
+  method = "GET",
+): PortainerFailure["stage"] {
   if (path.startsWith("distribution/")) return "manifest";
   if (path.startsWith("images/")) return "image_inspect";
   if (path.startsWith("containers/create")) return "container_create";
   if (/^containers\/[^/]+\/start$/.test(path)) return "container_start";
+  if (method === "GET" && /^containers\/[^/]+\/json$/.test(path))
+    return "container_inspect";
+  if (method === "GET" && /^networks\/[^/?]+$/.test(path))
+    return "network_inspect";
   return "docker_request";
 }
 

@@ -9,6 +9,8 @@ export const PortainerFailureSchema = z
       "image_inspect",
       "container_create",
       "container_start",
+      "container_inspect",
+      "network_inspect",
       "docker_request",
       "node_probe",
     ]),
@@ -23,6 +25,19 @@ export const PortainerFailureSchema = z
       "evidence_missing",
       "credential_unavailable",
     ]),
+    reasonCode: z
+      .enum([
+        "bridge_contract_mismatch",
+        "container_identity_mismatch",
+        "container_network_mode_mismatch",
+        "container_network_attachment_mismatch",
+        "container_network_id_mismatch",
+        "container_network_address_mismatch",
+        "container_privilege_mismatch",
+        "container_published_port_mismatch",
+        "bridge_membership_mismatch",
+      ])
+      .optional(),
     statusCode: z.number().int().min(100).max(599).optional(),
   })
   .strict();

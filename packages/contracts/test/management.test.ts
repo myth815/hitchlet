@@ -115,3 +115,24 @@ describe("D24 configuration contract", () => {
     ).toBe(false);
   });
 });
+
+it("keeps safe created/running bridge reasons bounded without requiring a fabricated HTTP status", async () => {
+  const { OperationFailureSchema } = await import("../src/admin.js");
+  const v = {
+    provider: "portainer",
+    stage: "container_create",
+    category: "configuration_mismatch",
+    reasonCode: "container_network_id_mismatch",
+    operationId: id,
+    observedAtMs: 1,
+    attempt: 1,
+    operation: "provision",
+  };
+  expect(OperationFailureSchema.parse(v)).toEqual(v);
+  expect(
+    OperationFailureSchema.safeParse({
+      ...v,
+      reasonCode: "PRIVATE_ENDPOINT_BODY",
+    }).success,
+  ).toBe(false);
+});

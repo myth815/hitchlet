@@ -10,7 +10,8 @@ it.each([
   ["images/private/json", "image_inspect"],
   ["containers/create?name=PRIVATE_NAME", "container_create"],
   ["containers/PRIVATE_ID/start", "container_start"],
-  ["networks/PRIVATE_ID", "docker_request"],
+  ["networks/PRIVATE_ID", "network_inspect"],
+  ["containers/PRIVATE_ID/json", "container_inspect"],
 ])("reduces private request %s to a fixed stage", (path, stage) => {
   expect(requestStage(path)).toBe(stage);
 });
@@ -90,3 +91,11 @@ it.each(["http", "transport", "json"] as const)(
     }
   },
 );
+
+it.each([
+  ["networks/PRIVATE_ID", "DELETE"],
+  ["networks/create", "POST"],
+  ["containers/PRIVATE_ID/json", "POST"],
+])("does not label a non-GET %s request as inspect", (path, method) => {
+  expect(requestStage(path, method)).toBe("docker_request");
+});

@@ -1,4 +1,5 @@
 import React from "react";
+import { OperationFailureSchema } from "@hitchlet/sdk";
 import type {
   HitchletClient,
   AuthorizedCatalog,
@@ -151,6 +152,9 @@ export function ValidationEvidence({
     setView(null);
     setError("");
   }, [id]);
+  const failure = view
+    ? OperationFailureSchema.safeParse(view.checks.firstExecutionFailure)
+    : null;
   const scalar = (v: unknown) =>
     typeof v === "string" || typeof v === "number" || typeof v === "boolean"
       ? String(v)
@@ -178,6 +182,18 @@ export function ValidationEvidence({
               ? "未确认"
               : new Date(view.evidenceExpiresAtMs).toLocaleString()}
           </p>
+          {failure?.success && (
+            <p>
+              历史首错：{failure.data.stage} / {failure.data.category}
+              {"reasonCode" in failure.data && failure.data.reasonCode
+                ? ` / ${failure.data.reasonCode}`
+                : ""}
+              {"statusCode" in failure.data && failure.data.statusCode
+                ? ` / HTTP ${failure.data.statusCode}`
+                : ""}{" "}
+              · operation {failure.data.operationId}；当前状态 {view.state}。
+            </p>
+          )}
           <ul>
             {Object.entries(view.checks).map(([key, value]) => (
               <li key={key}>

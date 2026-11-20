@@ -1,4 +1,5 @@
 import { OperationFailureSchema } from "./execution-diagnostic.js";
+export { OperationFailureSchema };
 import { z } from "zod";
 import {
   AcquireRequestSchema,

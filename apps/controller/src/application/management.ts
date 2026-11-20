@@ -251,6 +251,9 @@ export class ManagementService {
           observedAtMs: f.observedAtMs,
           attempt: f.attempt,
           operation: f.operation,
+          ...(f.provider === "portainer" && typeof f.reasonCode === "string"
+            ? { reasonCode: f.reasonCode }
+            : {}),
           ...(typeof f.statusCode === "number"
             ? { statusCode: f.statusCode }
             : {}),

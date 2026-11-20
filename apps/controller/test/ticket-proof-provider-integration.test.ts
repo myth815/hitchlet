@@ -65,6 +65,14 @@ function dockerTransport(
     skipProvision?: boolean;
     skipReserve?: boolean;
     dockerBridge?: boolean;
+    createdEmptyNetworkId?: boolean;
+    createdMissingNetworkId?: boolean;
+    createdForeignNetworkId?: boolean;
+    networkModeAsId?: boolean;
+    wrongNetworkMode?: boolean;
+    createdWrongNetworkKey?: boolean;
+    startedNetworkId?: "empty" | "foreign";
+    startedOutsideAddress?: boolean;
     extraAttachment?: boolean;
     publishedHostPort?: boolean;
     networkDriver?: string;
@@ -186,7 +194,11 @@ function dockerTransport(
                   )!;
                   return [
                     name,
-                    { ...(endpoint as Json), NetworkID: n.Id, IPAddress: "" },
+                    {
+                      ...(endpoint as Json),
+                      NetworkID: faults.createdEmptyNetworkId ? "" : n.Id,
+                      IPAddress: "",
+                    },
                   ];
                 },
               ),
@@ -201,6 +213,23 @@ function dockerTransport(
             Propagation: "rprivate",
           })),
         };
+        const ownedNetwork = [...networks.values()].find(
+          (n) => n.Name === body.HostConfig.NetworkMode,
+        )!;
+        if (faults.networkModeAsId) c.HostConfig.NetworkMode = ownedNetwork.Id;
+        if (faults.wrongNetworkMode)
+          c.HostConfig.NetworkMode = "foreign-network";
+        for (const endpoint of Object.values(
+          c.NetworkSettings.Networks,
+        ) as Json[]) {
+          if (faults.createdMissingNetworkId) delete endpoint.NetworkID;
+          if (faults.createdForeignNetworkId)
+            endpoint.NetworkID = "foreign-network";
+        }
+        if (faults.createdWrongNetworkKey) {
+          const endpoint = Object.values(c.NetworkSettings.Networks)[0];
+          c.NetworkSettings.Networks = { "foreign-config-name": endpoint };
+        }
         if (faults.extraAttachment)
           c.NetworkSettings.Networks.foreign = {
             NetworkID: "foreign-network",
@@ -227,14 +256,21 @@ function dockerTransport(
           Running: starts,
           Status: starts ? "running" : "exited",
         };
-        for (const endpoint of Object.values(
+        for (const [name, endpoint] of Object.entries(
           container!.NetworkSettings.Networks,
-        ) as Json[])
+        ) as [string, Json][]) {
+          const network = [...networks.values()].find(
+            (n) => n.Name === name || n.Id === name,
+          )!;
+          endpoint.NetworkID = network.Id;
           endpoint.IPAddress =
             endpoint.IPAMConfig?.IPv4Address ??
-            [...networks.values()]
-              .find((n) => n.Id === endpoint.NetworkID)!
-              .IPAM.Config[0].Subnet.replace(".0/24", ".2");
+            network.IPAM.Config[0].Subnet.replace(".0/24", ".2");
+          if (faults.startedNetworkId)
+            endpoint.NetworkID =
+              faults.startedNetworkId === "empty" ? "" : "foreign-network";
+          if (faults.startedOutsideAddress) endpoint.IPAddress = "192.0.2.77";
+        }
         return new Response(null, { status: 204 });
       }
       if (method === "POST" && path.endsWith("/stop")) {
@@ -261,7 +297,12 @@ function dockerTransport(
               ...network,
               Containers: Object.fromEntries(
                 [...containers.values()]
-                  .filter((c) => c.HostConfig.NetworkMode === network.Name)
+                  .filter(
+                    (c) =>
+                      c.State.Running &&
+                      (c.HostConfig.NetworkMode === network.Name ||
+                        c.HostConfig.NetworkMode === network.Id),
+                  )
                   .map((c) => [
                     c.Id,
                     {
@@ -329,6 +370,14 @@ async function fixture(
     skipProvision?: boolean;
     skipReserve?: boolean;
     dockerBridge?: boolean;
+    createdEmptyNetworkId?: boolean;
+    createdMissingNetworkId?: boolean;
+    createdForeignNetworkId?: boolean;
+    networkModeAsId?: boolean;
+    wrongNetworkMode?: boolean;
+    createdWrongNetworkKey?: boolean;
+    startedNetworkId?: "empty" | "foreign";
+    startedOutsideAddress?: boolean;
     extraAttachment?: boolean;
     publishedHostPort?: boolean;
     networkDriver?: string;
@@ -678,6 +727,13 @@ async function fixture(
     !faults.containerFailure &&
     !faults.publishedHostPort &&
     !faults.networkDriver &&
+    !faults.createdEmptyNetworkId &&
+    !faults.createdMissingNetworkId &&
+    !faults.createdForeignNetworkId &&
+    !faults.wrongNetworkMode &&
+    !faults.createdWrongNetworkKey &&
+    !faults.startedNetworkId &&
+    !faults.startedOutsideAddress &&
     !faults.gatewayMissingTun &&
     !faults.gatewayForwardingDisabled &&
     !faults.skipProvision &&
@@ -1138,7 +1194,11 @@ it.each([
       true,
       [],
       group ? validationGroup : undefined,
-      { loseGatewayCreateResponse: false, dockerBridge },
+      {
+        loseGatewayCreateResponse: false,
+        dockerBridge,
+        createdEmptyNetworkId: true,
+      },
     );
     await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
       expectedGeneration: f.ready.lease!.generation,
@@ -1422,52 +1482,57 @@ it.each([false, true])(
   },
 );
 
-it("recovers a committed gateway whose create response was lost without duplicating it", async () => {
-  const f = await fixture(3, "none", true, [], groupRecipe, {
-    loseGatewayCreateResponse: true,
-  });
-  expect(f.ready.phase).not.toBe("ready");
-  expect(f.transport.containers.size).toBe(2);
-  f.advance(10000);
-  await f.worker.reconcile();
-  const ready = (await f.queries.get(f.consumerId, f.ready.id))!;
-  expect(
-    ready.phase,
-    JSON.stringify(
-      await f.storage.all("SELECT state,result_json FROM operations"),
-    ),
-  ).toBe("ready");
-  expect(
-    f.transport.fetcher.mock.calls.filter(
-      ([input, init]) =>
-        new URL(String(input)).pathname.endsWith("/containers/create") &&
-        JSON.parse(String(init!.body)).Labels["io.hitchlet.member"] ===
-          "gateway",
-    ),
-  ).toHaveLength(1);
-  const query = {
-    leaseId: ready.lease!.id,
-    generation: ready.lease!.generation,
-  };
-  expect(
-    await new TicketReadyInventoryReader(f.storage, f.clock).read(
-      f.consumerId,
-      ready.id,
-      query,
-    ),
-  ).toMatchObject({ completeness: "complete" });
-  await f.tickets.cancel(ready.id, f.consumerId, "consumer_release", {
-    expectedGeneration: query.generation,
-  });
-  await f.worker.reconcileCleanupLane();
-  expect(
-    (await new TicketCleanupProofReader(f.storage, f.clock).read(
-      f.consumerId,
-      ready.id,
-      query,
-    ))!.receipts,
-  ).toHaveLength(5);
-});
+it.each([false, true])(
+  "recovers a committed gateway whose create response was lost without duplicating it (bridge=%s)",
+  async (dockerBridge) => {
+    const f = await fixture(3, "none", true, [], groupRecipe, {
+      loseGatewayCreateResponse: true,
+      dockerBridge,
+      createdEmptyNetworkId: true,
+    });
+    expect(f.ready.phase).not.toBe("ready");
+    expect(f.transport.containers.size).toBe(2);
+    f.advance(10000);
+    await f.worker.reconcile();
+    const ready = (await f.queries.get(f.consumerId, f.ready.id))!;
+    expect(
+      ready.phase,
+      JSON.stringify(
+        await f.storage.all("SELECT state,result_json FROM operations"),
+      ),
+    ).toBe("ready");
+    expect(
+      f.transport.fetcher.mock.calls.filter(
+        ([input, init]) =>
+          new URL(String(input)).pathname.endsWith("/containers/create") &&
+          JSON.parse(String(init!.body)).Labels["io.hitchlet.member"] ===
+            "gateway",
+      ),
+    ).toHaveLength(1);
+    const query = {
+      leaseId: ready.lease!.id,
+      generation: ready.lease!.generation,
+    };
+    expect(
+      await new TicketReadyInventoryReader(f.storage, f.clock).read(
+        f.consumerId,
+        ready.id,
+        query,
+      ),
+    ).toMatchObject({ completeness: "complete" });
+    await f.tickets.cancel(ready.id, f.consumerId, "consumer_release", {
+      expectedGeneration: query.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    expect(
+      (await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        ready.id,
+        query,
+      ))!.receipts,
+    ).toHaveLength(5);
+  },
+);
 
 it("rejects mutated member image, role and state facts from the actual persisted Provider inventory", async () => {
   const f = await fixture(3, "none", true, [], groupRecipe);
@@ -2522,3 +2587,187 @@ it("retains an opaque execution failure only as its known phase and operation re
     ).providerCleanup,
   ).toBe("complete");
 });
+
+it.each([false, true])(
+  "starts a created bridge lease with empty NetworkID until start (group=%s)",
+  async (group) => {
+    const f = await fixture(
+      group ? 3 : 2,
+      "none",
+      true,
+      [],
+      group ? groupRecipe : undefined,
+      {
+        loseGatewayCreateResponse: false,
+        dockerBridge: true,
+        createdEmptyNetworkId: true,
+      },
+    );
+    const op = (await f.storage.get<{ result_json: string }>(
+      "SELECT result_json FROM operations WHERE kind='allocation.provision'",
+    ))!;
+    expect(f.ready.phase, op.result_json).toBe("ready");
+    expect(startCalls(f)).toHaveLength(group ? 2 : 1);
+    if (!group) {
+      const calls = f.transport.fetcher.mock.calls;
+      const create = calls.findIndex(
+        ([u, i]) =>
+          i?.method === "POST" &&
+          new URL(String(u)).pathname.endsWith("/containers/create"),
+      );
+      const start = calls.findIndex(
+        ([u, i]) =>
+          i?.method === "POST" &&
+          new URL(String(u)).pathname.endsWith("/start"),
+      );
+      expect(
+        calls
+          .slice(create + 1, start)
+          .filter(([u]) =>
+            /\/containers\/[^/]+\/json$/.test(new URL(String(u)).pathname),
+          ),
+      ).toHaveLength(1);
+      expect(
+        calls.some(([u]) => new URL(String(u)).pathname.endsWith("/connect")),
+      ).toBe(false);
+    }
+    const query = {
+      leaseId: f.ready.lease!.id,
+      generation: f.ready.lease!.generation,
+    };
+    expect(
+      await new TicketReadyInventoryReader(f.storage, f.clock).read(
+        f.consumerId,
+        f.ready.id,
+        query,
+      ),
+    ).toMatchObject({ completeness: "complete" });
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+      expectedGeneration: query.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    expect(
+      await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        f.ready.id,
+        query,
+      ),
+    ).toMatchObject({ providerCleanup: "complete" });
+    expect(f.transport.deletes).toHaveLength(group ? 5 : 3);
+    expect(f.networkResult).not.toHaveBeenCalled();
+  },
+);
+function startCalls(f: Awaited<ReturnType<typeof fixture>>) {
+  return f.transport.fetcher.mock.calls.filter(
+    ([u, init]) =>
+      init?.method === "POST" && new URL(String(u)).pathname.endsWith("/start"),
+  );
+}
+
+it.each([false, true])(
+  "accepts missing created endpoint ID using the owned %s ID/name and verifies running attachment",
+  async (byId) => {
+    const f = await fixture(0, "none", true, [], undefined, {
+      loseGatewayCreateResponse: false,
+      dockerBridge: true,
+      createdMissingNetworkId: true,
+      networkModeAsId: byId,
+    });
+    expect(f.ready.phase).toBe("ready");
+    expect(startCalls(f)).toHaveLength(1);
+  },
+);
+
+it.each([
+  ["createdForeignNetworkId", "container_network_id_mismatch", 0],
+  ["wrongNetworkMode", "container_network_mode_mismatch", 0],
+  ["createdWrongNetworkKey", "container_network_attachment_mismatch", 0],
+  ["empty_running_id", "container_network_id_mismatch", 1],
+  ["foreign_running_id", "container_network_id_mismatch", 1],
+  ["startedOutsideAddress", "container_network_address_mismatch", 1],
+] as const)(
+  "retains wrong-network rejection with a safe reason (%s)",
+  async (fault, reason, starts) => {
+    const f = await fixture(0, "none", true, [], undefined, {
+      loseGatewayCreateResponse: false,
+      dockerBridge: true,
+      createdEmptyNetworkId: true,
+      ...(fault === "empty_running_id"
+        ? { startedNetworkId: "empty" as const }
+        : fault === "foreign_running_id"
+          ? { startedNetworkId: "foreign" as const }
+          : { [fault]: true }),
+    });
+    expect(f.ready.phase).not.toBe("ready");
+    expect(startCalls(f)).toHaveLength(starts);
+    const op = (await f.storage.get<{ id: string; result_json: string }>(
+      "SELECT id,result_json FROM operations WHERE kind='allocation.provision'",
+    ))!;
+    expect(JSON.parse(op.result_json).firstExecutionFailure).toMatchObject({
+      provider: "portainer",
+      stage: starts ? "container_start" : "container_create",
+      category: "configuration_mismatch",
+      reasonCode: reason,
+      operationId: op.id,
+    });
+    expect(op.result_json).not.toContain("foreign-network");
+    expect(JSON.parse(op.result_json).createEffects.container.state).toBe(
+      "observed",
+    );
+    const app = await buildApp(
+      loadConfig({
+        DATA_DIR: f.dir,
+        LOG_LEVEL: "silent",
+        EXECUTION_MODE: "portainer",
+        HITCHLET_SECRET_KEY_FILE: join(f.dir, "synthetic-unused.key"),
+      }),
+      { storage: f.storage },
+    );
+    try {
+      const sdk = new HitchletClient("https://controller.test", {
+        auth: { kind: "bearer", token: f.adminToken },
+        fetch: async (input, init) => {
+          const u = new URL(String(input));
+          const r = await app.inject({
+            method: "GET",
+            url: u.pathname + u.search,
+            headers: Object.fromEntries(new Headers(init?.headers)),
+          });
+          return new Response(r.body, {
+            status: r.statusCode,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+      expect(
+        (await sdk.admin.management.operations()).find((o) => o.id === op.id),
+      ).toMatchObject({
+        state: "unknown",
+        firstExecutionFailure: { reasonCode: reason },
+      });
+    } finally {
+      await app.close();
+    }
+    const query = {
+      leaseId: f.ready.lease!.id,
+      generation: f.ready.lease!.generation,
+    };
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_cancel", {
+      expectedGeneration: query.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    expect(
+      await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        f.ready.id,
+        query,
+      ),
+    ).toMatchObject({
+      version: "1.1",
+      providerCleanup: "complete",
+      outcome: "reclaimed",
+    });
+    expect(f.transport.deletes).toHaveLength(3);
+    expect(f.networkResult).not.toHaveBeenCalled();
+  },
+);

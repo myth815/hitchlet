@@ -2,6 +2,7 @@ import {
   PortainerRequestError,
   requestStage,
   failureCategory,
+  type PortainerFailure,
 } from "./portainer-request-error.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
 import { supportsContainerEntrypoint } from "@hitchlet/contracts/internal";
@@ -398,7 +399,15 @@ export class PortainerExecutionProvider implements ExecutionPort {
     await journal.recordCreated(containerResource);
     if (
       existingDetail &&
-      !containerMatchesFrozen(existingDetail, plan, image.Id, volumeName, name)
+      !containerMatchesFrozen(
+        existingDetail,
+        plan,
+        image.Id,
+        volumeName,
+        name,
+        undefined,
+        networkId,
+      )
     )
       throw new Error(
         "Existing Docker container no longer matches its frozen contract",
@@ -420,17 +429,18 @@ export class PortainerExecutionProvider implements ExecutionPort {
       ...networkFacts(inspectedNetwork, networkId),
     });
     await journal.recordCreated(networkResource);
-    const inspectedContainer = await this.request(
-      runtime,
-      "GET",
-      `containers/${encodeURIComponent(containerId)}/json`,
-    );
-    if (inspectedContainer.Id !== containerId)
-      throw new Error("Docker container readback identity mismatch");
+    // No container config/attachment mutation occurs after the owned readback;
+    // SSH archive injection changes files only. Reuse it instead of a second
+    // identical pre-start inspect. Running attachment is checked by ready().
+    const inspectedContainer = containerReadback;
     if (plainBridge(plan)) {
-      this.assertNativeBridge(plan, runtime, inspectedNetwork, [
-        inspectedContainer,
-      ]);
+      this.assertNativeBridge(
+        plan,
+        runtime,
+        inspectedNetwork,
+        [inspectedContainer],
+        "before_start",
+      );
     } else {
       const networkPlan = this.networkPlan(
         plan,
@@ -715,6 +725,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
           member.name === "gateway"
             ? plan.containerGroup!.gateway.environment
             : undefined,
+          networkId,
         )
       )
         throw new Error(
@@ -752,6 +763,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
         runtime,
         network,
         created.map((c) => c.detail),
+        "before_start",
       );
     } else {
       const agentPlan = this.networkPlan(
@@ -896,6 +908,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
           member.name === "gateway"
             ? plan.containerGroup!.gateway.environment
             : undefined,
+          networkResource.id,
         )
       )
         throw new Error(
@@ -969,7 +982,19 @@ export class PortainerExecutionProvider implements ExecutionPort {
     runtime: RuntimeAccess,
     network: Json,
     containers: readonly Json[],
+    phase: "before_start" | "running" = "running",
   ) {
+    const fail = (
+      reasonCode: NonNullable<PortainerFailure["reasonCode"]>,
+    ): never => {
+      throw new PortainerRequestError({
+        provider: "portainer",
+        stage:
+          phase === "before_start" ? "container_create" : "container_start",
+        category: "configuration_mismatch",
+        reasonCode,
+      });
+    };
     const subnet = subnetAddress(network);
     if (
       network.Name !== resourceName(plan) ||
@@ -979,35 +1004,55 @@ export class PortainerExecutionProvider implements ExecutionPort {
       !matchesOwnership(record(network.Labels), plan) ||
       !cidrContains(runtime.networkCidrBase, subnet)
     )
-      throw new Error(
-        "Native Docker bridge differs from the frozen allocation",
-      );
+      fail("bridge_contract_mismatch");
     for (const container of containers) {
       const host = record(container.HostConfig);
-      const attachments = Object.values(
-        record(record(container.NetworkSettings).Networks),
-      ).map(record);
+      if (!matchesOwnership(record(record(container.Config).Labels), plan))
+        fail("container_identity_mismatch");
+      if (host.NetworkMode !== network.Name && host.NetworkMode !== network.Id)
+        fail("container_network_mode_mismatch");
+      if (host.Privileged === true) fail("container_privilege_mismatch");
       if (
-        !matchesOwnership(record(record(container.Config).Labels), plan) ||
-        host.NetworkMode !== network.Name ||
-        host.Privileged === true ||
         host.PublishAllPorts === true ||
         Object.keys(record(host.PortBindings)).length ||
-        containerPorts(container).length ||
-        attachments.length !== 1 ||
-        attachments[0]?.NetworkID !== network.Id
+        containerPorts(container).length
       )
-        throw new Error(
-          "Container must use only its owned bridge with no published host ports",
-        );
+        fail("container_published_port_mismatch");
+      const attachments = Object.entries(
+        record(record(container.NetworkSettings).Networks),
+      );
+      if (attachments.length !== 1)
+        fail("container_network_attachment_mismatch");
+      const endpoint = record(attachments[0]?.[1]);
+      const state = record(container.State);
+      const pending =
+        phase === "before_start" &&
+        state.Running === false &&
+        state.Status === "created";
       if (
-        record(container.State).Running === true &&
-        !cidrContains(
-          subnet,
-          `${requiredString(attachments[0]?.IPAddress, "Container bridge IPv4")}/32`,
-        )
+        pending &&
+        (endpoint.NetworkID === undefined || endpoint.NetworkID === "") &&
+        attachments[0]?.[0] !== network.Name &&
+        attachments[0]?.[0] !== network.Id
       )
-        throw new Error("Container address is outside its owned bridge");
+        fail("container_network_attachment_mismatch");
+      // Docker fills endpoint operational facts during start. An explicit
+      // foreign ID is never acceptable, even on an unstarted container.
+      if (
+        pending
+          ? endpoint.NetworkID !== undefined &&
+            endpoint.NetworkID !== "" &&
+            endpoint.NetworkID !== network.Id
+          : endpoint.NetworkID !== network.Id
+      )
+        fail("container_network_id_mismatch");
+      if (
+        state.Running === true &&
+        (typeof endpoint.IPAddress !== "string" ||
+          !endpoint.IPAddress ||
+          !cidrContains(subnet, `${endpoint.IPAddress}/32`))
+      )
+        fail("container_network_address_mismatch");
     }
     const running = containers
       .filter((c) => record(c.State).Running === true)
@@ -1018,7 +1063,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
       JSON.stringify(Object.keys(record(network.Containers)).sort()) !==
         JSON.stringify(running)
     )
-      throw new Error("Native Docker bridge has unexpected attached members");
+      fail("bridge_membership_mismatch");
   }
 
   private async createNative(
@@ -1351,6 +1396,8 @@ export class PortainerExecutionProvider implements ExecutionPort {
           image.Id,
           workspace.id,
           String(networkResource.details?.networkName),
+          undefined,
+          networkResource.id,
         )
       )
         return {
@@ -1476,6 +1523,8 @@ export class PortainerExecutionProvider implements ExecutionPort {
         image.Id,
         workspace.id,
         resourceName(plan),
+        undefined,
+        networkResource.id,
       )
     )
       throw new Error(
@@ -1976,7 +2025,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
       `/api/endpoints/${encodeURIComponent(runtime.environmentId)}/docker/${path.replace(/^\//, "")}`,
       base,
     );
-    const stage = requestStage(path);
+    const stage = requestStage(path, method);
     const response = await fetch(url, {
       method,
       headers: {
@@ -2600,6 +2649,7 @@ function containerMatchesFrozen(
   volumeName: string,
   networkName: string,
   environment?: Readonly<Record<string, string>>,
+  networkId?: string,
 ): boolean {
   const host = record(container.HostConfig);
   const actualCpu =
@@ -2626,7 +2676,8 @@ function containerMatchesFrozen(
     (plan.accessProtocol !== "none" ||
       record(container.Config).User ===
         (plan.containerRole === "gateway" ? "0" : "1000:1000")) &&
-    host.NetworkMode === networkName &&
+    (host.NetworkMode === networkName ||
+      (networkId !== undefined && host.NetworkMode === networkId)) &&
     actualCpu === plan.resources.limit.cpuMillis &&
     actualMemory === plan.resources.limit.memoryMiB &&
     Number(host.MemorySwap) === Number(host.Memory) &&

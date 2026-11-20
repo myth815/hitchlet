@@ -1,3 +1,4 @@
+import { ValidationEvidence } from "./ValidationEvidence.js";
 import { ProfileRevocation } from "./ProfileRevocation.js";
 // @vitest-environment jsdom
 import React, { act } from "react";
@@ -1139,4 +1140,55 @@ it("keeps unknown revoke intent on its original key without blocking another Tic
     client.admin.management.revoke(version, body, "original-revoke-key"),
   ).rejects.toMatchObject({ code: "NETWORK_RESULT_UNKNOWN" });
   expect(writes.at(-1)).toBe(`/v1/tickets/${version}/revoke`);
+});
+
+it("renders the formal validation failure stage and safe bridge reason while keeping raw diagnostics hidden", async () => {
+  let safe = true;
+  const client = new HitchletClient("https://controller.test", {
+    fetch: async () =>
+      Response.json({
+        id: version,
+        imageArtifactId: id,
+        nodeId: network,
+        requestedByConsumerId: id,
+        reportId: null,
+        acceptedContract: {},
+        state: "failed",
+        testOutcome: "failed",
+        cleanupStatus: "complete",
+        scope: {},
+        checks: {
+          firstExecutionFailure: {
+            provider: "portainer",
+            stage: "container_create",
+            category: "configuration_mismatch",
+            reasonCode: safe
+              ? "container_network_id_mismatch"
+              : "PRIVATE_DIAGNOSTIC_BODY",
+            operationId: id,
+            observedAtMs: 1,
+            attempt: 1,
+            operation: "provision",
+          },
+        },
+        deadlineMs: 10000,
+        finishedAtMs: 1,
+        evidenceExpiresAtMs: null,
+        version: 2,
+        createdAtMs: 1,
+        updatedAtMs: 2,
+      }),
+  });
+  const { element } = await mount(
+    <ValidationEvidence client={client} id={version} />,
+  );
+  await click(element, "检查原验证报告与截止");
+  expect(element.textContent).toContain(
+    "历史首错：container_create / configuration_mismatch / container_network_id_mismatch",
+  );
+  expect(element.textContent).toContain(`operation ${id}；当前状态 failed`);
+  expect(element.textContent).not.toContain("HTTP 200");
+  safe = false;
+  await click(element, "检查原验证报告与截止");
+  expect(element.textContent).not.toContain("PRIVATE_DIAGNOSTIC_BODY");
 });

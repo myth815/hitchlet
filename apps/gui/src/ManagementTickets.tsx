@@ -119,6 +119,10 @@ export function ManagementTickets({
               <p>
                 历史首错：{o.firstExecutionFailure.stage} /{" "}
                 {o.firstExecutionFailure.category}
+                {"reasonCode" in o.firstExecutionFailure &&
+                o.firstExecutionFailure.reasonCode
+                  ? ` / ${o.firstExecutionFailure.reasonCode}`
+                  : ""}
                 {"statusCode" in o.firstExecutionFailure &&
                 o.firstExecutionFailure.statusCode
                   ? ` / HTTP ${o.firstExecutionFailure.statusCode}`
@@ -380,6 +384,10 @@ export function ManagementTickets({
                 <p>
                   历史首错：{o.firstExecutionFailure.stage} /{" "}
                   {o.firstExecutionFailure.category}
+                  {"reasonCode" in o.firstExecutionFailure &&
+                  o.firstExecutionFailure.reasonCode
+                    ? ` / ${o.firstExecutionFailure.reasonCode}`
+                    : ""}
                   {"statusCode" in o.firstExecutionFailure &&
                   o.firstExecutionFailure.statusCode
                     ? ` / HTTP ${o.firstExecutionFailure.statusCode}`

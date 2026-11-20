@@ -32,6 +32,7 @@ export {
   PreReadyTicketCleanupProofSchema,
 } from "@hitchlet/contracts";
 export { AdminCommands } from "./admin.js";
+export { OperationFailureSchema } from "@hitchlet/contracts/admin";
 export { PreparedManagementRevokeSchema } from "@hitchlet/contracts/admin";
 export { PreparedManagementRequestSchema } from "@hitchlet/contracts/admin";
 export type { PreparedManagementRequest } from "@hitchlet/contracts/admin";
