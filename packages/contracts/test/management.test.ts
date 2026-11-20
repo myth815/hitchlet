@@ -136,3 +136,31 @@ it("keeps safe created/running bridge reasons bounded without requiring a fabric
     }).success,
   ).toBe(false);
 });
+
+it("keeps observed exit diagnostics through the formal operation schema without accepting process text", async () => {
+  const { OperationFailureSchema } = await import("../src/admin.js");
+  const failure = {
+    provider: "portainer",
+    stage: "readiness",
+    category: "process_exited",
+    reasonCode: "container_process_exited",
+    containerState: "exited",
+    exitCode: 1,
+    oomKilled: false,
+    operationId: id,
+    observedAtMs: 1,
+    attempt: 1,
+    operation: "provision",
+  };
+  expect(OperationFailureSchema.parse(failure)).toEqual(failure);
+  for (const extra of [
+    { exitCode: "1" },
+    { oomKilled: "false" },
+    { containerState: "PRIVATE" },
+    { stderr: "PRIVATE" },
+    { error: "PRIVATE" },
+  ])
+    expect(
+      OperationFailureSchema.safeParse({ ...failure, ...extra }).success,
+    ).toBe(false);
+});

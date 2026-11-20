@@ -78,6 +78,8 @@ function dockerTransport(
     networkDriver?: string;
     manifestFailure?: { status: number; body: string };
     containerFailure?: "create" | "start";
+    processExit?: "start" | "readiness";
+    processExitMember?: "workload" | "gateway";
     gatewayMissingTun?: boolean;
     gatewayForwardingDisabled?: boolean;
   } = { loseGatewayCreateResponse: false },
@@ -89,6 +91,7 @@ function dockerTransport(
   let networkSequence = 0,
     containerSequence = 0;
   const deletes: string[] = [];
+  const runningReads = new Map<string, number>();
   const fetcher = vi.fn(
     async (input: URL | RequestInfo, init?: RequestInit) => {
       const url = new URL(String(input)),
@@ -319,10 +322,28 @@ function dockerTransport(
         return volumes.has(id)
           ? json(volumes.get(id))
           : new Response(null, { status: 404 });
-      if (path.endsWith("/json") && path.startsWith("containers/"))
+      if (path.endsWith("/json") && path.startsWith("containers/")) {
+        if (
+          container?.State.Running &&
+          faults.processExit &&
+          (container.Config.Labels["io.hitchlet.member"] ?? "workload") ===
+            (faults.processExitMember ?? "workload")
+        ) {
+          const reads = (runningReads.get(id) ?? 0) + 1;
+          runningReads.set(id, reads);
+          if (faults.processExit === "start" || reads > 1)
+            container.State = {
+              Running: false,
+              Status: "exited",
+              ExitCode: 1,
+              OOMKilled: false,
+              Error: "PRIVATE_PROCESS_TEXT",
+            };
+        }
         return container
           ? json(container)
           : new Response(null, { status: 404 });
+      }
       const isGateway =
         gateway && decodeURIComponent(path).includes(gateway.digest);
       const wanted = isGateway ? gateway! : { artifactRef, digest };
@@ -383,6 +404,8 @@ async function fixture(
     networkDriver?: string;
     manifestFailure?: { status: number; body: string };
     containerFailure?: "create" | "start";
+    processExit?: "start" | "readiness";
+    processExitMember?: "workload" | "gateway";
     gatewayMissingTun?: boolean;
     gatewayForwardingDisabled?: boolean;
   } = { loseGatewayCreateResponse: false },
@@ -725,6 +748,7 @@ async function fixture(
     !faults.extraAttachment &&
     !faults.manifestFailure &&
     !faults.containerFailure &&
+    !faults.processExit &&
     !faults.publishedHostPort &&
     !faults.networkDriver &&
     !faults.createdEmptyNetworkId &&
@@ -2372,6 +2396,194 @@ it.each(["recover", "deadline"] as const)(
           ),
         ).toMatchObject({ status: "published" });
       }
+      expect(f.transport.containers.size).toBe(0);
+      expect(f.transport.networks.size).toBe(0);
+      expect(
+        await f.storage.get(
+          "SELECT id FROM capacity_claims WHERE allocation_id=(SELECT id FROM allocations WHERE image_validation_id=?) AND state<>'released'",
+          [run.validationId],
+        ),
+      ).toBeUndefined();
+      expect(f.networkResult).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+it.each([
+  [false, "start", "recover"],
+  [false, "readiness", "deadline"],
+  [true, "start", "deadline"],
+  [true, "readiness", "recover"],
+] as const)(
+  "retains observed process exit through validation and cleanup (group=%s, phase=%s, outcome=%s)",
+  async (group, phase, outcome) => {
+    const faults: Parameters<typeof fixture>[5] = {
+      loseGatewayCreateResponse: false,
+      dockerBridge: true,
+    };
+    const recipe = group
+      ? { ...groupRecipe, gateway: { ...groupRecipe.gateway, mountPaths: [] } }
+      : undefined;
+    const f = await fixture(0, "none", true, [], recipe, faults);
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+      expectedGeneration: f.ready.lease!.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    const adminId = (await f.storage.get<{ id: string }>(
+      "SELECT id FROM consumers WHERE role='admin'",
+    ))!.id;
+    const nodeId = (await f.storage.get<{ id: string }>(
+      "SELECT id FROM nodes",
+    ))!.id;
+    const admin = new AdminService(
+      f.storage,
+      async () => {
+        throw new Error("Unexpected discovery");
+      },
+      f.clock,
+    );
+    const draft = await admin.createDraft({
+      name: "synthetic process exit",
+      version: "1",
+      architecture: "amd64",
+      artifactRef: "docker.io/example/node@sha256:" + "a".repeat(64),
+      digest: "sha256:" + "a".repeat(64),
+      minimumResources: { cpuMillis: 100, memoryMiB: 128, scratchMiB: 0 },
+      bootstrap: {
+        mechanism: group
+          ? "hitchlet-container-group-entrypoint-v1"
+          : "hitchlet-container-entrypoint-v1",
+        contractVersion: "1",
+        identityReset: true,
+      },
+      ...(recipe ? { containerGroup: recipe } : {}),
+      access: {
+        accessProtocols: [],
+        ports: [],
+        account: "workspace",
+        allowedSourceCidrs: [],
+        discovery: "none",
+        readiness: "container-running",
+      },
+      authorizedConsumerIds: [adminId, f.consumerId],
+    });
+    const run = await admin.scheduleValidation({
+      versionId: draft.versionId,
+      requestedBy: adminId,
+      imageArtifactId: draft.artifactId,
+      nodeId,
+      networkProfileId: f.networkId,
+      storage: [],
+      deadlineSeconds: 120,
+      resources: {
+        request: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+        limit: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+        isolation: "shared_kernel",
+        scratchEnforcement: "best_effort",
+        accelerators: [],
+      },
+    });
+    expect(run.scheduler).toBe("queued");
+    faults.processExit = phase;
+    faults.processExitMember = group ? "gateway" : "workload";
+    await f.worker.reconcile();
+    const original = (await f.storage.get<{
+      id: string;
+      state: string;
+      result_json: string;
+    }>(
+      "SELECT o.id,o.state,o.result_json FROM operations o JOIN allocations a ON a.id=o.allocation_id WHERE a.image_validation_id=? AND o.kind='allocation.provision'",
+      [run.validationId],
+    ))!;
+    const failure = {
+      provider: "portainer",
+      stage: phase === "start" ? "container_start" : "readiness",
+      category: "process_exited",
+      reasonCode: "container_process_exited",
+      containerState: "exited",
+      exitCode: 1,
+      oomKilled: false,
+      operationId: original.id,
+      observedAtMs: f.clock(),
+      attempt: 1,
+      operation: "provision",
+    };
+    expect(original.state).toBe("unknown");
+    expect(JSON.parse(original.result_json)).toMatchObject({
+      code: "operation_pending",
+      diagnostic: "execution_error",
+      firstExecutionFailure: failure,
+    });
+    expect(JSON.parse(original.result_json).createEffects.container.state).toBe(
+      "observed",
+    );
+    const native = [...f.transport.containers.values()];
+    expect(native).toHaveLength(group ? 2 : 1);
+    const exited = native.find((c) => c.State.Status === "exited")!;
+    expect(exited.State.ExitCode).toBe(1);
+    // This is the real Provider's request body: no validation-only entrypoint or business Env injection.
+    expect(exited.Config.Cmd).toEqual([]);
+    expect(exited.Config.Entrypoint).toBeUndefined();
+    if (!group) expect(exited.Config.Env).toBeUndefined();
+    expect(probeSsh).not.toHaveBeenCalled();
+    const app = await buildApp(
+      loadConfig({
+        DATA_DIR: f.dir,
+        LOG_LEVEL: "silent",
+        EXECUTION_MODE: "portainer",
+        HITCHLET_SECRET_KEY_FILE: join(f.dir, "synthetic-unused.key"),
+      }),
+      { storage: f.storage },
+    );
+    try {
+      const sdk = new HitchletClient("https://controller.test", {
+        auth: { kind: "bearer", token: f.adminToken },
+        fetch: async (input, init) => {
+          const url = new URL(String(input));
+          const reply = await app.inject({
+            method: "GET",
+            url: url.pathname + url.search,
+            headers: Object.fromEntries(new Headers(init?.headers)),
+          });
+          return new Response(reply.body, {
+            status: reply.statusCode,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+      expect(
+        (await sdk.admin.validation(run.validationId)).checks,
+      ).toMatchObject({ firstExecutionFailure: failure });
+      expect(
+        (await sdk.admin.management.operations()).find(
+          (o) => o.id === original.id,
+        ),
+      ).toMatchObject({ firstExecutionFailure: failure });
+      if (outcome === "recover") {
+        delete faults.processExit;
+        f.advance(3000);
+        await f.worker.reconcile();
+      } else {
+        f.advance(120000);
+        await f.worker.reconcileBeforeScheduling();
+      }
+      await f.worker.reconcileCleanupLane();
+      const result = await sdk.admin.validation(run.validationId);
+      expect(result).toMatchObject({
+        state: outcome === "recover" ? "succeeded" : "failed",
+        testOutcome: outcome === "recover" ? "passed" : "failed",
+        cleanupStatus: "complete",
+        checks: { firstExecutionFailure: failure },
+      });
+      expect(JSON.stringify(result)).not.toContain("PRIVATE_PROCESS_TEXT");
+      expect(
+        (await f.storage.get<{ result_json: string }>(
+          "SELECT result_json FROM operations WHERE id=?",
+          [original.id],
+        ))!.result_json,
+      ).not.toContain("PRIVATE_PROCESS_TEXT");
       expect(f.transport.containers.size).toBe(0);
       expect(f.transport.networks.size).toBe(0);
       expect(

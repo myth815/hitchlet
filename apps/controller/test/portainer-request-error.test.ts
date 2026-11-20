@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  assertContainerRunning,
   failureCategory,
   requestStage,
   PortainerRequestError,
@@ -98,4 +99,102 @@ it.each([
   ["containers/PRIVATE_ID/json", "POST"],
 ])("does not label a non-GET %s request as inspect", (path, method) => {
   expect(requestStage(path, method)).toBe("docker_request");
+});
+
+it.each([
+  [
+    { Running: false, Status: "exited", ExitCode: 1, OOMKilled: false },
+    {
+      category: "process_exited",
+      containerState: "exited",
+      exitCode: 1,
+      oomKilled: false,
+    },
+  ],
+  [
+    { Running: false, Status: "exited", ExitCode: 0 },
+    { category: "process_exited", containerState: "exited", exitCode: 0 },
+  ],
+  [
+    { Running: false, Status: "dead", ExitCode: 137, OOMKilled: true },
+    {
+      category: "process_exited",
+      containerState: "dead",
+      exitCode: 137,
+      oomKilled: true,
+    },
+  ],
+  [
+    { Running: false, Status: "exited", ExitCode: 137 },
+    { category: "process_exited", containerState: "exited", exitCode: 137 },
+  ],
+  [
+    { Running: false, Status: "exited", ExitCode: "1", OOMKilled: "false" },
+    { category: "process_exited", containerState: "exited" },
+  ],
+  [
+    { Running: false, Status: "created", ExitCode: 0 },
+    {
+      category: "evidence_missing",
+      reasonCode: "container_running_unverified",
+      containerState: "created",
+    },
+  ],
+  [
+    { Running: false, Status: "PRIVATE_STATUS", ExitCode: 1 },
+    {
+      category: "evidence_missing",
+      reasonCode: "container_running_unverified",
+    },
+  ],
+])("records only observed bounded lifecycle facts (%j)", (state, expected) => {
+  const error = (() => {
+    try {
+      assertContainerRunning(
+        { Id: "owned", State: { ...state, Error: "PRIVATE_PROCESS_TEXT" } },
+        "owned",
+        "readiness",
+      );
+    } catch (e) {
+      return e as PortainerRequestError;
+    }
+    throw new Error("An exited or unverified container must not become ready");
+  })();
+  expect(error).toBeInstanceOf(PortainerRequestError);
+  expect(error.diagnostic).toEqual({
+    provider: "portainer",
+    stage: "readiness",
+    reasonCode: "container_process_exited",
+    ...expected,
+  });
+  expect(JSON.stringify(error)).not.toContain("PRIVATE");
+});
+
+it("checks container identity before attributing exit facts, while a running owned container remains ready", () => {
+  expect(() =>
+    assertContainerRunning(
+      { Id: "owned", State: { Running: true } },
+      "owned",
+      "container_start",
+    ),
+  ).not.toThrow();
+  try {
+    assertContainerRunning(
+      {
+        Id: "foreign",
+        State: { Running: false, Status: "exited", ExitCode: 1 },
+      },
+      "owned",
+      "container_start",
+    );
+    throw new Error("Expected identity rejection");
+  } catch (error) {
+    expect(error).toBeInstanceOf(PortainerRequestError);
+    expect((error as PortainerRequestError).diagnostic).toEqual({
+      provider: "portainer",
+      stage: "container_start",
+      category: "configuration_mismatch",
+      reasonCode: "container_identity_mismatch",
+    });
+  }
 });

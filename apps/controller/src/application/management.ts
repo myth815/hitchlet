@@ -254,6 +254,19 @@ export class ManagementService {
           ...(f.provider === "portainer" && typeof f.reasonCode === "string"
             ? { reasonCode: f.reasonCode }
             : {}),
+          ...(f.provider === "portainer"
+            ? {
+                ...(typeof f.containerState === "string"
+                  ? { containerState: f.containerState }
+                  : {}),
+                ...(typeof f.exitCode === "number"
+                  ? { exitCode: f.exitCode }
+                  : {}),
+                ...(typeof f.oomKilled === "boolean"
+                  ? { oomKilled: f.oomKilled }
+                  : {}),
+              }
+            : {}),
           ...(typeof f.statusCode === "number"
             ? { statusCode: f.statusCode }
             : {}),

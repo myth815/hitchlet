@@ -33,8 +33,10 @@ explicitly contain `"access": {"protocol": "none"}`. No extra Node access
 capability or manual approval is introduced for the absence of an endpoint.
 The matching, quota, capacity, network and storage qualification checks remain.
 
-The provider preserves the image ENTRYPOINT, uses no extra command arguments,
-and runs this recipe as UID/GID 1000:1000, verified in Docker readback.
+The provider leaves ENTRYPOINT unset in its create request and sends `Cmd: []`.
+Docker inherits the image ENTRYPOINT and default CMD for this combination; this
+is not a validation-only command override. The provider adds no workload Env or
+WorkingDir override and runs this recipe as UID/GID 1000:1000, verified in Docker readback.
 Prepare startup configuration through existing authorized storage mounts before
 acquire; for example, map approved project and home subdirectories to `/work`
 and `/persist/home`. The image entrypoint reads the consumer's existing startup
@@ -49,6 +51,22 @@ probe. `ready` and `bootstrapComplete` describe resource delivery, not consumer
 registration, Git progress or application health. Owner claim and renewal use
 the existing lease API and do not wait for an external session to connect. An
 exited container does not satisfy `container-running` readiness.
+
+Image validation uses the same frozen image launch and explicitly requested
+storage mounts; it does not fabricate consumer startup configuration or identity.
+If an owned container exits before readiness, the existing authorized validation
+and operation readers retain `firstExecutionFailure`: `stage` is
+`container_start` for the immediate post-start check or `readiness` for the later
+check, `category` is `process_exited`, and `reasonCode` is
+`container_process_exited`. `containerState`, integer `exitCode` and boolean
+`oomKilled` contain only facts returned by Docker inspect. Missing facts remain
+absent; a zero exit code still does not meet container-running readiness, and
+exit 137 alone does not prove OOM. An unverified non-running state keeps
+`evidence_missing` / `container_running_unverified` instead of inventing an exit.
+Raw State.Error, process output, startup arguments and environment values are not
+copied into diagnostics. The original operation, unknown outcomes, retry and
+verified cleanup behavior remain in force; historical failure is separate from
+current state and does not by itself identify the application's failure cause.
 
 `getAccess` returns HTTP409 with `error.code=access_not_applicable` for a claimed
 no-access Ticket. It returns no endpoint or authentication material. The

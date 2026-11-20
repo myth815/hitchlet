@@ -2,6 +2,7 @@ import {
   PortainerRequestError,
   requestStage,
   failureCategory,
+  assertContainerRunning,
   type PortainerFailure,
 } from "./portainer-request-error.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
@@ -503,8 +504,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
       "GET",
       `containers/${encodeURIComponent(containerId)}/json`,
     );
-    if (started.Id !== containerId || record(started.State).Running !== true)
-      throw new Error("Docker container start was not verified");
+    assertContainerRunning(started, containerId, "container_start");
     const startedPorts = containerPorts(started);
     await journal.recordCreated(
       this.owned(plan, containerId, "container", {
@@ -819,11 +819,8 @@ export class PortainerExecutionProvider implements ExecutionPort {
         "GET",
         `containers/${encodeURIComponent(c.id)}/json`,
       );
-      if (
-        started.Id !== c.id ||
-        record(started.State).Running !== true ||
-        containerIpv4(started, name) !== ips[c.member.name]
-      )
+      assertContainerRunning(started, c.id, "container_start");
+      if (containerIpv4(started, name) !== ips[c.member.name])
         throw new Error("Group member start or assigned IP was not verified");
       await journal.recordCreated(
         this.owned(plan, c.id, "container", {
@@ -889,6 +886,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
         "GET",
         `containers/${encodeURIComponent(owned.id)}/json`,
       );
+      assertContainerRunning(detail, owned.id, "readiness");
       observedMembers.push(detail);
       const image = await this.inspectImage(
         runtime,
@@ -898,7 +896,6 @@ export class PortainerExecutionProvider implements ExecutionPort {
       );
       if (
         !image ||
-        record(detail.State).Running !== true ||
         !containerMatchesFrozen(
           detail,
           member.plan,
@@ -1498,11 +1495,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
       "GET",
       `containers/${encodeURIComponent(containerResource.id)}/json`,
     );
-    if (
-      detail.Id !== containerResource.id ||
-      record(detail.State).Running !== true
-    )
-      throw new Error("Docker container is not running");
+    assertContainerRunning(detail, containerResource.id, "readiness");
     const image = await this.inspectImage(
       runtime,
       plan.artifact.ref,

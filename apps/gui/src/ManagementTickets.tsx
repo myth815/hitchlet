@@ -123,6 +123,14 @@ export function ManagementTickets({
                 o.firstExecutionFailure.reasonCode
                   ? ` / ${o.firstExecutionFailure.reasonCode}`
                   : ""}
+                {"exitCode" in o.firstExecutionFailure &&
+                o.firstExecutionFailure.exitCode !== undefined
+                  ? ` / exit ${o.firstExecutionFailure.exitCode}`
+                  : ""}
+                {"oomKilled" in o.firstExecutionFailure &&
+                o.firstExecutionFailure.oomKilled !== undefined
+                  ? ` / OOM ${o.firstExecutionFailure.oomKilled}`
+                  : ""}
                 {"statusCode" in o.firstExecutionFailure &&
                 o.firstExecutionFailure.statusCode
                   ? ` / HTTP ${o.firstExecutionFailure.statusCode}`
@@ -387,6 +395,14 @@ export function ManagementTickets({
                   {"reasonCode" in o.firstExecutionFailure &&
                   o.firstExecutionFailure.reasonCode
                     ? ` / ${o.firstExecutionFailure.reasonCode}`
+                    : ""}
+                  {"exitCode" in o.firstExecutionFailure &&
+                  o.firstExecutionFailure.exitCode !== undefined
+                    ? ` / exit ${o.firstExecutionFailure.exitCode}`
+                    : ""}
+                  {"oomKilled" in o.firstExecutionFailure &&
+                  o.firstExecutionFailure.oomKilled !== undefined
+                    ? ` / OOM ${o.firstExecutionFailure.oomKilled}`
                     : ""}
                   {"statusCode" in o.firstExecutionFailure &&
                   o.firstExecutionFailure.statusCode

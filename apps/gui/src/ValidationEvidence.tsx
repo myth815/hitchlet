@@ -188,6 +188,13 @@ export function ValidationEvidence({
               {"reasonCode" in failure.data && failure.data.reasonCode
                 ? ` / ${failure.data.reasonCode}`
                 : ""}
+              {"exitCode" in failure.data && failure.data.exitCode !== undefined
+                ? ` / exit ${failure.data.exitCode}`
+                : ""}
+              {"oomKilled" in failure.data &&
+              failure.data.oomKilled !== undefined
+                ? ` / OOM ${failure.data.oomKilled}`
+                : ""}
               {"statusCode" in failure.data && failure.data.statusCode
                 ? ` / HTTP ${failure.data.statusCode}`
                 : ""}{" "}

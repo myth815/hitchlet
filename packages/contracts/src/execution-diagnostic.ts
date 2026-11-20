@@ -10,6 +10,7 @@ export const PortainerFailureSchema = z
       "container_create",
       "container_start",
       "container_inspect",
+      "readiness",
       "network_inspect",
       "docker_request",
       "node_probe",
@@ -24,11 +25,14 @@ export const PortainerFailureSchema = z
       "configuration_mismatch",
       "evidence_missing",
       "credential_unavailable",
+      "process_exited",
     ]),
     reasonCode: z
       .enum([
         "bridge_contract_mismatch",
         "container_identity_mismatch",
+        "container_process_exited",
+        "container_running_unverified",
         "container_network_mode_mismatch",
         "container_network_attachment_mismatch",
         "container_network_id_mismatch",
@@ -38,6 +42,19 @@ export const PortainerFailureSchema = z
         "bridge_membership_mismatch",
       ])
       .optional(),
+    containerState: z
+      .enum([
+        "created",
+        "running",
+        "paused",
+        "restarting",
+        "removing",
+        "exited",
+        "dead",
+      ])
+      .optional(),
+    exitCode: z.number().int().optional(),
+    oomKilled: z.boolean().optional(),
     statusCode: z.number().int().min(100).max(599).optional(),
   })
   .strict();
