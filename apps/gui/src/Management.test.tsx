@@ -821,6 +821,113 @@ it("keeps guest OS separate from node placement and does not submit an unsupport
   availability = "unsupported";
   await click(element, "可行性预检");
   await submit(element.querySelector("form")!);
-  expect(acquire).toHaveBeenCalledOnce();
+  expect(acquire).toHaveBeenCalledTimes(2);
   expect(element.textContent).toContain("当前没有对应环境能力");
+});
+
+it.each([403, 503])(
+  "shows the actual preflight error and request reference (%s) while allowing authoritative submission",
+  async (status) => {
+    const acquire = vi.fn();
+    const requestId = "00000000-0000-4000-8000-000000000099";
+    const client = new HitchletClient("https://controller.test", {
+      fetch: async (input) =>
+        new URL(String(input)).pathname === "/v1/catalog"
+          ? Response.json(catalog)
+          : Response.json(
+              {
+                error: {
+                  code: status === 403 ? "forbidden" : "admission_paused",
+                  message: status === 403 ? "forbidden" : "admission_paused",
+                  requestId,
+                  retryable: status === 503,
+                  details: {},
+                },
+              },
+              { status },
+            ),
+    });
+    const { element } = await mount(
+      <AuthorizedAcquire
+        client={client}
+        canOperate
+        busy={false}
+        blocked={false}
+        onAcquire={acquire}
+      />,
+    );
+    await click(element, "可行性预检");
+    expect(element.textContent).toContain(
+      status === 403 ? "forbidden" : "admission_paused",
+    );
+    expect(element.textContent).toContain(requestId);
+    expect(element.textContent).toContain(
+      status === 403 ? "当前登录与授权" : "控制器维护与恢复状态",
+    );
+    expect(element.textContent).not.toContain("请核对镜像下限、配额、期限");
+    await submit(element.querySelector("form")!);
+    expect(acquire).toHaveBeenCalledOnce();
+  },
+);
+
+it("submits an authorized request without a preview and retains the permission gate", async () => {
+  const paths: string[] = [];
+  const acquire = vi.fn();
+  const client = new HitchletClient("https://controller.test", {
+    fetch: async (input) => {
+      paths.push(new URL(String(input)).pathname);
+      return Response.json(catalog);
+    },
+  });
+  const { element } = await mount(
+    <AuthorizedAcquire
+      client={client}
+      canOperate
+      busy={false}
+      blocked={false}
+      onAcquire={acquire}
+    />,
+  );
+  await submit(element.querySelector("form")!);
+  expect(acquire).toHaveBeenCalledOnce();
+  expect(paths).toEqual(["/v1/catalog"]);
+  const denied = await mount(
+    <AuthorizedAcquire
+      client={client}
+      canOperate={false}
+      busy={false}
+      blocked={false}
+      onAcquire={acquire}
+    />,
+  );
+  await submit(denied.element.querySelector("form")!);
+  expect(acquire).toHaveBeenCalledOnce();
+});
+
+it("identifies an invalid local resource field without reflecting the request or sending preview", async () => {
+  const paths: string[] = [];
+  const client = new HitchletClient("https://controller.test", {
+    fetch: async (input) => {
+      paths.push(new URL(String(input)).pathname);
+      return Response.json(catalog);
+    },
+  });
+  const { element } = await mount(
+    <AuthorizedAcquire
+      client={client}
+      canOperate
+      busy={false}
+      blocked={false}
+      onAcquire={vi.fn()}
+    />,
+  );
+  await change(
+    element.querySelector<HTMLInputElement>('input[type="number"]')!,
+    "0",
+  );
+  await click(element, "可行性预检");
+  expect(element.querySelector('[role="alert"]')?.textContent).toContain(
+    "请检查CPU",
+  );
+  expect(paths).toEqual(["/v1/catalog"]);
 });

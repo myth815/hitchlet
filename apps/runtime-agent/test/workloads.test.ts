@@ -7,6 +7,7 @@ import { randomUUID } from "node:crypto";
 import { RuntimeWorkloadFacts } from "../src/workloads.js";
 import { FileJournal } from "../src/journal.js";
 import { createRuntimeServer, listenRuntimeServer } from "../src/server.js";
+import type { RuntimeStorageFacts } from "../src/storage.js";
 import type { NetworkWorker } from "../src/worker.js";
 import {
   RuntimeAgentHttpTransport,
@@ -247,7 +248,14 @@ it("serves only authenticated read-only facts over the existing mTLS transport",
     { stdio: "ignore" },
   );
   await writeFile(token, "fixture-token", { mode: 0o600 });
-  const execute = vi.fn();
+  const execute = vi.fn(async () => {
+    throw new Error("Stale controller epoch");
+  });
+  const storage = {
+    inspect: vi.fn(async () => {
+      throw new Error("Approved storage mount is absent or replaced");
+    }),
+  };
   const server = await createRuntimeServer(
     {
       host: "127.0.0.1",
@@ -258,7 +266,7 @@ it("serves only authenticated read-only facts over the existing mTLS transport",
       tokenFile: token,
     },
     { execute } as unknown as NetworkWorker,
-    undefined,
+    storage as unknown as RuntimeStorageFacts,
     f.subject,
   );
   const address = await listenRuntimeServer(server, "127.0.0.1", 0);
@@ -287,4 +295,95 @@ it("serves only authenticated read-only facts over the existing mTLS transport",
     /401/,
   );
   expect(execute).not.toHaveBeenCalled();
+  credentials.token = "fixture-token";
+  await expect(
+    transport.exchangeJson("/v1/workload-facts", {
+      ...f.request,
+      nativeEngineId: "other",
+    }),
+  ).rejects.toMatchObject({
+    statusCode: 409,
+    diagnostic: {
+      stage: "workload_facts",
+      category: "identity_mismatch",
+      requestId: f.request.requestId,
+    },
+  });
+  const storageRequest = {
+    requestId: randomUUID(),
+    installationId: identity.installationId,
+    runtimeIdentityId: identity.runtimeIdentityId,
+    nativeEngineId: identity.nativeEngineId,
+    mounts: [],
+  };
+  await expect(
+    transport.exchangeJson("/v1/storage-facts", storageRequest),
+  ).rejects.toMatchObject({
+    statusCode: 409,
+    diagnostic: {
+      stage: "storage_facts",
+      category: "mount_changed",
+      requestId: storageRequest.requestId,
+    },
+  });
+  const plan = {
+    installationId: "installation",
+    runtimeIdentityId: "runtime",
+    nativeEngineId: "engine",
+    allocationId: "allocation",
+    generation: 1,
+    operationId: "operation-original",
+    controlVersion: 1,
+    networkId: "network",
+    networkName: "hl-test",
+    networkSubnet: "172.30.77.0/24",
+    containerIds: ["container"],
+    bridgeInterface: "br-123456789abc",
+    bridgeGateway: "172.30.77.1",
+    userlandProxy: false,
+    publishedPorts: [],
+    grantId: "grant",
+    networkRevisionId: "revision",
+    frozenDenyRevisionId: "frozen",
+    effectiveDenyRevisionId: "effective",
+    ingressSourceCidrs: [],
+    egress: [],
+    managementDeny: [],
+    expectedRulesetHash: "sha256:" + "0".repeat(64),
+  };
+  const command = {
+    kind: "network.ensure",
+    installationId: identity.installationId,
+    runtimeIdentityId: identity.runtimeIdentityId,
+    agentId: identity.agentId,
+    commandId: "original-command",
+    operationId: plan.operationId,
+    allocationId: plan.allocationId,
+    generation: 1,
+    controlVersion: 1,
+    controllerEpoch: 1,
+    deadline: new Date(Date.now() + 60000).toISOString(),
+    plan,
+    contentHash: "sha256:" + "0".repeat(64),
+  };
+  await expect(
+    transport.exchangeJson("/v1/network-actions", command),
+  ).rejects.toMatchObject({
+    statusCode: 409,
+    diagnostic: {
+      stage: "network_action",
+      category: "stale_command",
+      requestId: command.commandId,
+      operationId: command.operationId,
+    },
+  });
+  expect(execute).toHaveBeenCalledOnce();
+  vi.spyOn(f.subject, "inspect").mockImplementationOnce(() => {
+    throw new Error("PRIVATE_BODY PRIVATE_TOKEN");
+  });
+  const failure = await transport
+    .exchangeJson("/v1/workload-facts", f.request)
+    .catch((e) => e);
+  expect(failure.diagnostic).toMatchObject({ category: "operation_failed" });
+  expect(JSON.stringify(failure)).not.toContain("PRIVATE");
 });

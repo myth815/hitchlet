@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -86,10 +86,12 @@ describe("D10 Portainer identity and D11a catalog", () => {
     let clock = Date.now();
     let live = evidence("engine-observation");
     let probeCount = 0;
+    let probeError: unknown;
     const service = new AdminService(
       db,
       async () => {
         probeCount++;
+        if (probeError) throw probeError;
         return live;
       },
       () => clock,
@@ -378,8 +380,8 @@ describe("D10 Portainer identity and D11a catalog", () => {
     expiryCaps.expiresAt = new Date(clock - 1).toISOString();
     const expiredJson = JSON.stringify(expiryCaps);
     await db.run(
-      "UPDATE nodes SET capabilities_json=?,observed_at_ms=? WHERE id=?",
-      [expiredJson, clock - 60_000, node.id],
+      "UPDATE nodes SET capabilities_json=?,observed_health='unknown',observed_at_ms=? WHERE id=?",
+      [expiredJson, clock - 121_000, node.id],
     );
     const beforeExpiredProbe = probeCount;
     expect(await service.refreshPortainerObservations()).toMatchObject({
@@ -395,6 +397,81 @@ describe("D10 Portainer identity and D11a catalog", () => {
     expect(current?.capabilities_json).toBe(expiredJson);
     expect(current?.observed_health).toBe("healthy");
     expect(probeCount).toBe(beforeExpiredProbe + 1);
+
+    // Expired evidence never suppresses actual reachability probes; failure
+    // and recovery are observed rather than writing a synthetic healthy row.
+    clock += 46_000;
+    probeError = new Error("PRIVATE_UNREACHABLE_ENDPOINT", {
+      cause: { code: "ECONNREFUSED" },
+    });
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      refreshed: 0,
+      unhealthy: 1,
+    });
+    const failedNode = (await service.listNodes()).find(
+      (n) => n.id === node.id,
+    )!;
+    expect(failedNode.observedHealth).toBe("degraded");
+    expect(failedNode.observationFailure).toMatchObject({
+      provider: "portainer",
+      stage: "node_probe",
+      category: "connection_refused",
+      observedAtMs: clock,
+    });
+    expect(JSON.stringify(failedNode)).not.toContain(
+      "PRIVATE_UNREACHABLE_ENDPOINT",
+    );
+    const failedCheckedAt = (await db.get<{ observed_at_ms: bigint }>(
+      "SELECT observed_at_ms FROM nodes WHERE id=?",
+      [node.id],
+    ))!.observed_at_ms;
+    expect(failedCheckedAt).toBe(BigInt(clock - 46_000));
+    probeError = undefined;
+    expect(await service.refreshPortainerObservations()).toMatchObject({
+      refreshed: 1,
+      unhealthy: 0,
+    });
+    expect(
+      (await service.listNodes()).find((n) => n.id === node.id),
+    ).toMatchObject({ observedHealth: "healthy", observationFailure: null });
+
+    // Optional diagnostics cannot roll back the actual health result or keep
+    // a reachable node unhealthy after recovery when audit writing is unavailable.
+    clock += 46_000;
+    probeError = new Error("PRIVATE_TIMEOUT", { cause: { code: "ETIMEDOUT" } });
+    const originalRun = db.run.bind(db);
+    const auditFailure = vi
+      .spyOn(db, "run")
+      .mockImplementation((sql, params) => {
+        if (
+          sql.startsWith("INSERT INTO audit_entries") &&
+          sql.includes("node.portainer_observation")
+        )
+          return Promise.reject(new Error("synthetic audit unavailable"));
+        return originalRun(sql, params);
+      });
+    try {
+      await expect(service.refreshPortainerObservations()).rejects.toThrow(
+        "synthetic audit unavailable",
+      );
+      expect(
+        (
+          await db.get("SELECT observed_health FROM nodes WHERE id=?", [
+            node.id,
+          ])
+        )?.observed_health,
+      ).toBe("degraded");
+      probeError = undefined;
+      expect(await service.refreshPortainerObservations()).toMatchObject({
+        refreshed: 1,
+        unhealthy: 0,
+      });
+      expect(
+        (await service.listNodes()).find((n) => n.id === node.id),
+      ).toMatchObject({ observedHealth: "healthy", observationFailure: null });
+    } finally {
+      auditFailure.mockRestore();
+    }
 
     // Re-saving the same configuration does not erase unchanged qualification;
     // changing it must invalidate the proof rather than waiting for a date.

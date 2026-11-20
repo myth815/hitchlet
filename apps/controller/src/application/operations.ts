@@ -1,3 +1,6 @@
+import type { ExecutionFailure } from "@hitchlet/contracts/internal";
+import { RuntimeAgentResponseError } from "../providers/runtime-network-client.js";
+import { PortainerRequestError } from "../providers/portainer-request-error.js";
 import {
   resolvedStorageMountSchema,
   supportsContainerEntrypoint,
@@ -382,7 +385,21 @@ export class OperationWorker {
         else await execute();
       } else await this.cleanup(op, token);
     } catch (error) {
-      await this.defer(op, token, "execution_error");
+      await this.defer(
+        op,
+        token,
+        "execution_error",
+        error instanceof PortainerRequestError
+          ? error.diagnostic
+          : error instanceof RuntimeAgentResponseError && error.diagnostic
+            ? { ...error.diagnostic, statusCode: error.statusCode }
+            : {
+                provider: "execution",
+                stage:
+                  op.kind === "allocation.provision" ? "provision" : "cleanup",
+                category: "unclassified_error",
+              },
+      );
     } finally {
       if (op.kind === "allocation.provision" && trackFlight)
         this.createCalls.leave(flightKey);
@@ -1067,6 +1084,7 @@ export class OperationWorker {
     op: Row,
     token: string,
     diagnostic = "operation_not_ready",
+    failure?: ExecutionFailure,
   ): Promise<void> {
     const now = this.now();
     const attempt = Number(op.attempt_count);
@@ -1083,6 +1101,24 @@ export class OperationWorker {
       attempt,
       now,
       diagnostic,
+      ...(failure &&
+      parseObject(op.result_json ?? "{}").firstExecutionFailure === undefined
+        ? {
+            firstExecutionFailure: {
+              ...failure,
+              ...(failure.provider === "runtime" && failure.operationId
+                ? { runtimeOperationId: failure.operationId }
+                : {}),
+              operationId: String(op.id),
+              observedAtMs: now,
+              attempt,
+              operation:
+                op.kind === "allocation.provision"
+                  ? ("provision" as const)
+                  : ("cleanup" as const),
+            },
+          }
+        : {}),
     });
   }
 }

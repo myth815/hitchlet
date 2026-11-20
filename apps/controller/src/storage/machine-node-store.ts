@@ -22,7 +22,10 @@ import {
   HumanUsePolicySchema,
   type HumanUsePolicy,
 } from "@hitchlet/contracts/admin";
-import type { TartRuntimeFacts } from "@hitchlet/contracts/internal";
+import type {
+  TartRuntimeFacts,
+  PortainerFailure,
+} from "@hitchlet/contracts/internal";
 import {
   hash,
   canonicalJson,
@@ -61,7 +64,7 @@ export class SQLiteMachineNodeStore {
   }
   async listNodes() {
     const rows = await this.db.all<Row>(
-      "SELECT id,machine_id,name,backend_kind,provider_connection_id,runtime_identity_id,pool_id,admission,observed_health,capabilities_json,observed_at_ms,version FROM nodes ORDER BY created_at_ms",
+      "SELECT id,machine_id,name,backend_kind,provider_connection_id,runtime_identity_id,pool_id,admission,observed_health,capabilities_json,observed_at_ms,version,(SELECT json_set(safe_details_json,'$.observedAtMs',occurred_at_ms) FROM audit_entries WHERE action='node.portainer_observation' AND target_id=nodes.id ORDER BY id DESC LIMIT 1) AS observation_failure FROM nodes ORDER BY created_at_ms",
     );
     const now = this.now();
     return rows.map((r) => ({
@@ -79,6 +82,10 @@ export class SQLiteMachineNodeStore {
       )
         ? String(r.observed_health)
         : "unknown",
+      observationFailure:
+        r.observed_health === "healthy" || !r.observation_failure
+          ? null
+          : JSON.parse(String(r.observation_failure)),
       capabilities: projectCapabilities(String(r.capabilities_json), now),
       observedAtMs:
         r.observed_at_ms === null ? null : integer(r.observed_at_ms),
@@ -469,6 +476,7 @@ export class SQLiteMachineNodeStore {
     >[number],
     result: "healthy" | "degraded" | "unknown",
     observedAtMs?: number,
+    failure?: PortainerFailure,
   ) {
     const time = this.now();
     const changes = await this.db.run(
@@ -503,7 +511,24 @@ export class SQLiteMachineNodeStore {
         snapshot.apiKeyRef,
       ],
     );
-    return changes.changes === 1n;
+    if (changes.changes !== 1n) return false;
+    // Diagnostics never roll back the actual health observation. A failed
+    // audit write still reaches the existing background error reporting lane.
+    if (failure) {
+      const details = JSON.stringify(failure);
+      await this.db.run(
+        "INSERT INTO audit_entries(actor_type,actor_id,action,target_type,target_id,request_id,occurred_at_ms,safe_details_json) SELECT 'controller','controller','node.portainer_observation','node',?,?,?,? WHERE COALESCE((SELECT safe_details_json FROM audit_entries WHERE action='node.portainer_observation' AND target_id=? ORDER BY id DESC LIMIT 1),'null')<>?",
+        [
+          snapshot.nodeId,
+          randomUUID(),
+          time,
+          details,
+          snapshot.nodeId,
+          details,
+        ],
+      );
+    }
+    return true;
   }
   async createMachine(input: {
     powerOnly?: boolean | undefined;

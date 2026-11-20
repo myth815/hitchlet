@@ -1,3 +1,4 @@
+import { RuntimeAgentResponseError } from "../src/providers/runtime-network-client.js";
 // Synthetic Portainer/SSH/Runtime transports; real ordinary Ticket, Provider,
 // OperationWorker, migrated SQLite journal and proof readers. No host operations.
 import { afterEach, expect, it, vi } from "vitest";
@@ -67,6 +68,8 @@ function dockerTransport(
     extraAttachment?: boolean;
     publishedHostPort?: boolean;
     networkDriver?: string;
+    manifestFailure?: { status: number; body: string };
+    containerFailure?: "create" | "start";
     gatewayMissingTun?: boolean;
     gatewayForwardingDisabled?: boolean;
   } = { loseGatewayCreateResponse: false },
@@ -133,6 +136,18 @@ function dockerTransport(
         volumes.set(v.Name, v);
         return json({ Name: v.Name });
       }
+      if (
+        method === "POST" &&
+        path === "containers/create" &&
+        faults.containerFailure === "create"
+      )
+        return new Response("PRIVATE_RUNTIME_TEXT", { status: 500 });
+      if (
+        method === "POST" &&
+        path.endsWith("/start") &&
+        faults.containerFailure === "start"
+      )
+        return new Response("PRIVATE_RUNTIME_TEXT", { status: 500 });
       if (method === "POST" && path === "containers/create") {
         const body = JSON.parse(String(init!.body));
         if (
@@ -276,6 +291,10 @@ function dockerTransport(
         faults.rejectGatewayImage
       )
         return new Response(null, { status: 503 });
+      if (path.startsWith("distribution/") && faults.manifestFailure)
+        return new Response(faults.manifestFailure.body, {
+          status: faults.manifestFailure.status,
+        });
       if (path.startsWith("distribution/"))
         return json({
           Descriptor: {
@@ -313,6 +332,8 @@ async function fixture(
     extraAttachment?: boolean;
     publishedHostPort?: boolean;
     networkDriver?: string;
+    manifestFailure?: { status: number; body: string };
+    containerFailure?: "create" | "start";
     gatewayMissingTun?: boolean;
     gatewayForwardingDisabled?: boolean;
   } = { loseGatewayCreateResponse: false },
@@ -653,6 +674,8 @@ async function fixture(
     !faults.rejectGatewayImage &&
     faults.gatewayCapabilities === undefined &&
     !faults.extraAttachment &&
+    !faults.manifestFailure &&
+    !faults.containerFailure &&
     !faults.publishedHostPort &&
     !faults.networkDriver &&
     !faults.gatewayMissingTun &&
@@ -673,6 +696,9 @@ async function fixture(
   return {
     dir,
     consumerToken,
+    adminToken: stdout.match(
+      /Initial admin bearer token \(shown once\): (\S+)/,
+    )![1]!,
     storage,
     clock,
     advance: (ms: number) => {
@@ -2104,4 +2130,337 @@ it("accepts explicit public preparation deadlines beyond omitted service default
     provisioningTimeoutSeconds: 2400,
   });
   await f.tickets.cancel(request.ticketId, f.consumerId);
+});
+
+it.each(["recover", "deadline"] as const)(
+  "retains safe manifest failure through the formal validation query and %s without changing lifecycle",
+  async (outcome) => {
+    const faults: Parameters<typeof fixture>[5] = {
+      loseGatewayCreateResponse: false,
+      dockerBridge: true,
+    };
+    const f = await fixture(0, "none", true, [], undefined, faults);
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_release", {
+      expectedGeneration: f.ready.lease!.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    const adminId = (await f.storage.get<{ id: string }>(
+      "SELECT id FROM consumers WHERE role='admin'",
+    ))!.id;
+    const nodeId = (await f.storage.get<{ id: string }>(
+      "SELECT id FROM nodes",
+    ))!.id;
+    const admin = new AdminService(
+      f.storage,
+      async () => {
+        throw new Error("Unexpected discovery");
+      },
+      f.clock,
+    );
+    const draft = await admin.createDraft({
+      name: "synthetic manifest retry",
+      version: "1",
+      architecture: "amd64",
+      artifactRef: "docker.io/example/node@sha256:" + "a".repeat(64),
+      digest: "sha256:" + "a".repeat(64),
+      minimumResources: { cpuMillis: 100, memoryMiB: 128, scratchMiB: 0 },
+      bootstrap: {
+        mechanism: "hitchlet-container-entrypoint-v1",
+        contractVersion: "1",
+        identityReset: true,
+      },
+      access: {
+        accessProtocols: [],
+        ports: [],
+        account: "workspace",
+        allowedSourceCidrs: [],
+        discovery: "none",
+        readiness: "container-running",
+      },
+      authorizedConsumerIds: [adminId, f.consumerId],
+    });
+    const run = await admin.scheduleValidation({
+      versionId: draft.versionId,
+      requestedBy: adminId,
+      imageArtifactId: draft.artifactId,
+      nodeId,
+      networkProfileId: f.networkId,
+      storage: [],
+      deadlineSeconds: 120,
+      resources: {
+        request: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+        limit: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+        isolation: "shared_kernel",
+        scratchEnforcement: "best_effort",
+        accelerators: [],
+      },
+    });
+    expect(run.scheduler).toBe("queued");
+    faults.manifestFailure = {
+      status: 500,
+      body: JSON.stringify({
+        message:
+          "Get https://example.invalid/PRIVATE_PATH?token=PRIVATE_TOKEN: connection refused",
+      }),
+    };
+    await f.worker.reconcile();
+    const original = (await f.storage.get<{
+      id: string;
+      state: string;
+      result_json: string;
+    }>(
+      "SELECT o.id,o.state,o.result_json FROM operations o JOIN allocations a ON a.id=o.allocation_id WHERE a.image_validation_id=? AND o.kind='allocation.provision'",
+      [run.validationId],
+    ))!;
+    const failure = {
+      provider: "portainer",
+      operationId: original.id,
+      stage: "manifest",
+      category: "connection_refused",
+      statusCode: 500,
+      observedAtMs: f.clock(),
+      attempt: 1,
+      operation: "provision",
+    };
+    expect(JSON.parse(original.result_json)).toMatchObject({
+      code: "operation_pending",
+      diagnostic: "execution_error",
+      firstExecutionFailure: failure,
+    });
+    expect(
+      JSON.parse(original.result_json).createEffects.container,
+    ).toBeUndefined();
+    expect(original.state).toBe("unknown");
+    expect(f.transport.containers.size).toBe(0);
+    const app = await buildApp(
+      loadConfig({
+        DATA_DIR: f.dir,
+        LOG_LEVEL: "silent",
+        EXECUTION_MODE: "portainer",
+        HITCHLET_SECRET_KEY_FILE: join(f.dir, "synthetic-unused.key"),
+      }),
+      { storage: f.storage },
+    );
+    try {
+      const sdk = new HitchletClient("https://controller.test", {
+        auth: { kind: "bearer", token: f.adminToken },
+        fetch: async (input, init) => {
+          const url = new URL(String(input));
+          const reply = await app.inject({
+            method: "GET",
+            url: url.pathname + url.search,
+            headers: Object.fromEntries(new Headers(init?.headers)),
+          });
+          return new Response(reply.body, {
+            status: reply.statusCode,
+            headers: { "content-type": "application/json" },
+          });
+        },
+      });
+      expect(
+        (await sdk.admin.validation(run.validationId)).checks,
+      ).toMatchObject({ firstExecutionFailure: failure });
+      if (outcome === "recover") {
+        delete faults.manifestFailure;
+        f.advance(3000);
+        await f.worker.reconcile();
+      } else {
+        // A later error must not overwrite the first actual failure.
+        faults.manifestFailure = { status: 503, body: "PRIVATE_LATER_FAILURE" };
+        f.advance(3000);
+        await f.worker.reconcile();
+        f.advance(120000);
+        await f.worker.reconcileBeforeScheduling();
+      }
+      await f.worker.reconcileCleanupLane();
+      const result = await sdk.admin.validation(run.validationId);
+      expect(result).toMatchObject({
+        state: outcome === "recover" ? "succeeded" : "failed",
+        testOutcome: outcome === "recover" ? "passed" : "failed",
+        cleanupStatus: "complete",
+        checks: { firstExecutionFailure: failure },
+      });
+      for (const secret of [
+        "PRIVATE_PATH",
+        "PRIVATE_TOKEN",
+        "PRIVATE_LATER_FAILURE",
+        "example.invalid",
+      ]) {
+        expect(JSON.stringify(result)).not.toContain(secret);
+        expect(
+          (await f.storage.get<{ result_json: string }>(
+            "SELECT result_json FROM operations WHERE id=?",
+            [original.id],
+          ))!.result_json,
+        ).not.toContain(secret);
+      }
+      if (outcome === "recover") {
+        const version = (await f.storage.get<{ entity_version: bigint }>(
+          "SELECT entity_version FROM image_versions WHERE id=?",
+          [draft.versionId],
+        ))!;
+        expect(
+          await new SQLiteImagePublicationStore(f.storage, f.clock).publish(
+            draft.versionId,
+            Number(version.entity_version),
+            async () => true,
+          ),
+        ).toMatchObject({ status: "published" });
+      }
+      expect(f.transport.containers.size).toBe(0);
+      expect(f.transport.networks.size).toBe(0);
+      expect(
+        await f.storage.get(
+          "SELECT id FROM capacity_claims WHERE allocation_id=(SELECT id FROM allocations WHERE image_validation_id=?) AND state<>'released'",
+          [run.validationId],
+        ),
+      ).toBeUndefined();
+      expect(f.networkResult).not.toHaveBeenCalled();
+    } finally {
+      await app.close();
+    }
+  },
+);
+
+it.each(["create", "start"] as const)(
+  "keeps actual container %s failure stage and original unknown-create/cleanup semantics",
+  async (stage) => {
+    const f = await fixture(0, "none", true, [], undefined, {
+      loseGatewayCreateResponse: false,
+      dockerBridge: true,
+      containerFailure: stage,
+    });
+    const row = (await f.storage.get<{ result_json: string }>(
+      "SELECT result_json FROM operations WHERE kind='allocation.provision'",
+    ))!;
+    const result = JSON.parse(row.result_json);
+    expect(result.firstExecutionFailure).toMatchObject({
+      stage: stage === "create" ? "container_create" : "container_start",
+      statusCode: 500,
+      category: "http_error",
+    });
+    expect(row.result_json).not.toContain("PRIVATE_RUNTIME_TEXT");
+    expect(result.createEffects.container.state).toBe(
+      stage === "create" ? "unknown" : "observed",
+    );
+    await f.tickets.cancel(f.ready.id, f.consumerId, "consumer_cancel", {
+      expectedGeneration: f.ready.lease!.generation,
+    });
+    await f.worker.reconcileCleanupLane();
+    if (stage === "create") {
+      expect((await f.queries.get(f.consumerId, f.ready.id))!.phase).toBe(
+        "releasing",
+      );
+      expect(
+        await f.storage.get(
+          "SELECT id FROM capacity_claims WHERE state<>'released'",
+        ),
+      ).toBeDefined();
+    } else {
+      expect((await f.queries.get(f.consumerId, f.ready.id))!.phase).toBe(
+        "released",
+      );
+      expect(
+        await new TicketCleanupProofReader(f.storage, f.clock).read(
+          f.consumerId,
+          f.ready.id,
+          { leaseId: f.ready.lease!.id, generation: f.ready.lease!.generation },
+        ),
+      ).toMatchObject({ version: "1.1", outcome: "reclaimed" });
+    }
+  },
+);
+
+it("retains a Runtime conflict on its original operation without changing pre-ready cleanup", async () => {
+  const f = await fixture(0, "none", true, [], undefined, {
+    loseGatewayCreateResponse: false,
+    skipProvision: true,
+  });
+  let runtimeRequestId = "",
+    runtimeOperationId = "";
+  f.networkResult.mockImplementationOnce(async (command) => {
+    runtimeRequestId = command.commandId;
+    runtimeOperationId = command.operationId;
+    throw new RuntimeAgentResponseError(409, {
+      provider: "runtime",
+      stage: "network_action",
+      category: "required_capability_unavailable",
+      requestId: command.commandId,
+      operationId: command.operationId,
+      message:
+        "Check the required capability for this selected profile; keep the existing lease tracked.",
+    });
+  });
+  await f.worker.reconcile();
+  const operation = (await f.storage.get<{ id: string; result_json: string }>(
+    "SELECT id,result_json FROM operations WHERE kind='allocation.provision'",
+  ))!;
+  expect(JSON.parse(operation.result_json).firstExecutionFailure).toMatchObject(
+    {
+      provider: "runtime",
+      stage: "network_action",
+      statusCode: 409,
+      operationId: operation.id,
+      runtimeOperationId,
+      requestId: runtimeRequestId,
+    },
+  );
+  const pending = (await f.queries.get(f.consumerId, f.ready.id))!;
+  expect(pending.phase).not.toBe("ready");
+  await f.tickets.cancel(pending.id, f.consumerId, "consumer_cancel", {
+    expectedGeneration: pending.lease!.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect(
+    (
+      await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        pending.id,
+        { leaseId: pending.lease!.id, generation: pending.lease!.generation },
+      )
+    ).providerCleanup,
+  ).toBe("complete");
+});
+
+it("retains an opaque execution failure only as its known phase and operation reference", async () => {
+  const f = await fixture(0, "none", true, [], undefined, {
+    loseGatewayCreateResponse: false,
+    dockerBridge: true,
+    skipProvision: true,
+  });
+  const ready = vi
+    .spyOn(PortainerExecutionProvider.prototype, "ready")
+    .mockRejectedValueOnce(new Error("PRIVATE_REQUEST PRIVATE_CREDENTIAL"));
+  try {
+    await f.worker.reconcile();
+  } finally {
+    ready.mockRestore();
+  }
+  const op = (await f.storage.get<{ id: string; result_json: string }>(
+    "SELECT id,result_json FROM operations WHERE kind='allocation.provision'",
+  ))!;
+  expect(JSON.parse(op.result_json).firstExecutionFailure).toMatchObject({
+    provider: "execution",
+    stage: "provision",
+    category: "unclassified_error",
+    operationId: op.id,
+  });
+  expect(op.result_json).not.toContain("PRIVATE");
+  expect(JSON.parse(op.result_json).firstExecutionFailure).not.toHaveProperty(
+    "statusCode",
+  );
+  const ticket = (await f.queries.get(f.consumerId, f.ready.id))!;
+  await f.tickets.cancel(ticket.id, f.consumerId, "consumer_cancel", {
+    expectedGeneration: ticket.lease!.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect(
+    (
+      await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        ticket.id,
+        { leaseId: ticket.lease!.id, generation: ticket.lease!.generation },
+      )
+    ).providerCleanup,
+  ).toBe("complete");
 });

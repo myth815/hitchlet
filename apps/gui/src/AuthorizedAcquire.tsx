@@ -8,6 +8,7 @@ import type {
 } from "@hitchlet/sdk";
 import {
   Observation,
+  managementError,
   ResourceFields,
   useManagementRead,
 } from "./ManagementUI.js";
@@ -123,10 +124,8 @@ export function AuthorizedAcquire({
     setError("");
     try {
       setPreview(await client.preview(request));
-    } catch {
-      setError(
-        "预检失败：请核对镜像下限、配额、期限、授权引用和安全子路径，刷新目录后再试。",
-      );
+    } catch (error) {
+      setError(`预检失败：${managementError(error, true)}`);
     } finally {
       setPreviewing(false);
     }
@@ -137,7 +136,7 @@ export function AuthorizedAcquire({
       <Observation at={catalog.at} error={catalog.error} />
       <button onClick={() => void catalog.refresh()}>刷新授权目录</button>
       <p className="muted">
-        按授权镜像选择资源和租期；预检不会占用资源，提交后才生成票据。
+        按授权镜像选择资源和租期；预检可选且不占用资源，提交时由服务端裁决并生成票据。
       </p>
       <details className="technical-details">
         <summary>资源限制与归还规则</summary>
@@ -150,7 +149,7 @@ export function AuthorizedAcquire({
         className="acquire-form"
         onSubmit={(e) => {
           e.preventDefault();
-          if (preview && preview.availability !== "unsupported")
+          if (!unavailable && !previewing && versionId && network)
             onAcquire(request);
         }}
       >
@@ -573,18 +572,13 @@ export function AuthorizedAcquire({
               <p>{preview.reasons.map(reasonLabel).join("；")}</p>
               <p>
                 预检服务端时间 {new Date(preview.observedAtMs).toLocaleString()}
-                。不支持的环境请更换需求；已支持但暂不可分配时可提交排队，等待原因见详情。
+                。这只是当前快照；提交时服务端会重新核对授权、能力与容量。
               </p>
             </div>
           ) : null}
           <button
             className="primary-button"
-            disabled={
-              !preview ||
-              preview.availability === "unsupported" ||
-              !versionId ||
-              !network
-            }
+            disabled={unavailable || previewing || !versionId || !network}
           >
             保存请求并申请 →
           </button>

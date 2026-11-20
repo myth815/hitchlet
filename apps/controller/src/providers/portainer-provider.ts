@@ -1,3 +1,8 @@
+import {
+  PortainerRequestError,
+  requestStage,
+  failureCategory,
+} from "./portainer-request-error.js";
 import { resourceManifest } from "../domain/resource-manifest.js";
 import { supportsContainerEntrypoint } from "@hitchlet/contracts/internal";
 import { createHash, randomUUID } from "node:crypto";
@@ -1971,6 +1976,7 @@ export class PortainerExecutionProvider implements ExecutionPort {
       `/api/endpoints/${encodeURIComponent(runtime.environmentId)}/docker/${path.replace(/^\//, "")}`,
       base,
     );
+    const stage = requestStage(path);
     const response = await fetch(url, {
       method,
       headers: {
@@ -1981,9 +1987,23 @@ export class PortainerExecutionProvider implements ExecutionPort {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       redirect: "error",
       signal: AbortSignal.timeout(15_000),
+    }).catch((error: unknown) => {
+      throw new PortainerRequestError({
+        provider: "portainer",
+        stage,
+        category: failureCategory(error, "transport_error"),
+      });
     });
-    if (!response.ok && !allowed.includes(response.status))
-      throw new Error(`Portainer Docker request failed (${response.status})`);
+    if (!response.ok && !allowed.includes(response.status)) {
+      // Only a fixed short class is retained; the upstream body is never logged or saved.
+      const remote = await response.text().catch(() => "");
+      throw new PortainerRequestError({
+        provider: "portainer",
+        stage,
+        category: failureCategory(remote, "http_error"),
+        statusCode: response.status,
+      });
+    }
     if (
       response.status === 204 ||
       response.status === 304 ||
@@ -1996,12 +2016,20 @@ export class PortainerExecutionProvider implements ExecutionPort {
     try {
       value = JSON.parse(text);
     } catch {
-      throw new Error("Portainer returned invalid Docker JSON");
+      throw new PortainerRequestError({
+        provider: "portainer",
+        stage,
+        category: "invalid_response",
+        statusCode: response.status,
+      });
     }
     if (Array.isArray(value))
-      throw new Error(
-        "Docker endpoint returned a list where an object was required",
-      );
+      throw new PortainerRequestError({
+        provider: "portainer",
+        stage,
+        category: "invalid_response",
+        statusCode: response.status,
+      });
     return record(value);
   }
 

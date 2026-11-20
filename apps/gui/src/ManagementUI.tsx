@@ -16,14 +16,59 @@ export type ManagementUI = {
     recovery?: PreparedManagementRevoke,
   ) => Promise<boolean>;
 };
-export const managementError = (e: unknown) => {
+export const managementError = (e: unknown, readOnly = false) => {
+  const inputError =
+    e instanceof ComputeClientError && e.code === "INVALID_REQUEST"
+      ? e.cause
+      : e;
+  if (
+    inputError &&
+    typeof inputError === "object" &&
+    "issues" in inputError &&
+    Array.isArray(inputError.issues)
+  ) {
+    const names = new Set<string>();
+    const fields: Record<string, string> = {
+      cpuMillis: "CPU",
+      memoryMiB: "内存",
+      scratchMiB: "临时盘",
+      requestedSeconds: "租期",
+      authorizedSubpath: "存储相对路径",
+      mountPath: "挂载目标",
+      image: "镜像",
+      networkProfileId: "网络配置",
+      storage: "存储",
+      resources: "资源",
+      lease: "租期",
+    };
+    for (const issue of inputError.issues) {
+      if (issue && typeof issue === "object" && Array.isArray(issue.path)) {
+        const path = issue.path.filter(
+          (part: unknown) => typeof part === "string",
+        ) as string[];
+        const field =
+          path.length > 1
+            ? (fields[path[path.length - 1]!] ?? fields[path[0]!])
+            : fields[path[0]!];
+        if (field) names.add(field);
+      }
+    }
+    return `输入校验失败：请检查${[...names].join("、") || "输入字段"}。`;
+  }
   if (!(e instanceof ComputeClientError))
     return "读取或输入校验失败，请检查字段并刷新。";
   if (e.code === "NETWORK_RESULT_UNKNOWN")
-    return e.recovery.idempotencyKey
+    return !readOnly && e.recovery.idempotencyKey
       ? "连接中断，原命令结果未确认。请检查原回执，不要重复提交。"
       : "暂时无法读取控制器，请检查连接后刷新。";
-  return `${e.code} · ${e.message}${[409, 412].includes(e.statusCode ?? 0) ? "；重新读取最新版本后再确认修改。" : ""}`;
+  const action = [401, 403].includes(e.statusCode ?? 0)
+    ? "；检查当前登录与授权后重试。"
+    : [409, 412].includes(e.statusCode ?? 0)
+      ? "；重新读取最新版本后再确认修改。"
+      : e.statusCode === 503
+        ? "；查看控制器维护与恢复状态，恢复后重试。"
+        : "";
+  return `${e.code} · ${e.message}${action}${e.requestId ? `；请求编号 ${e.requestId}` : ""}`;
 };
 
 /** Cancels stale page updates and retains the last snapshot as historical on read failure. */

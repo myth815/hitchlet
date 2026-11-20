@@ -5,6 +5,7 @@ import {
   MachinePowerExecutionStatusSchema,
 } from "./power-execution.js";
 import { z } from "zod";
+import { PortainerFailureSchema } from "./execution-diagnostic.js";
 import { supportsContainerEntrypoint } from "./container-entrypoint.js";
 import { networkDestinationSchema } from "./network-destination.js";
 import {
@@ -991,6 +992,11 @@ export const NodeViewSchema = z
     poolId: id,
     admission: admissionState,
     observedHealth: nodeHealth,
+    observationFailure: PortainerFailureSchema.extend({
+      observedAtMs: z.number().int().nonnegative(),
+    })
+      .nullable()
+      .optional(),
     capabilities: z
       .object({
         verified: z.boolean(),

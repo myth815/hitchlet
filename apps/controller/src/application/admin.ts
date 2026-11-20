@@ -1,3 +1,7 @@
+import {
+  PortainerRequestError,
+  failureCategory,
+} from "../providers/portainer-request-error.js";
 import { SQLiteHyperVAdminStore } from "../storage/hyperv-admin-store.js";
 import { hyperVTemplateProofMatches } from "./hyperv-facts.js";
 import { SQLiteProfileRevocationStore } from "../storage/profile-revocation-store.js";
@@ -330,20 +334,29 @@ export class AdminService {
             await this.inventory.recordPortainerObservation(
               snapshot,
               "degraded",
+              undefined,
+              {
+                provider: "portainer",
+                stage: "node_probe",
+                category: "evidence_missing",
+              },
             )
           )
             return "unhealthy" as const;
           return "unchanged" as const;
         }
+        let phase: "credential" | "probe" | "match" = "credential";
         try {
           if (!this.readSecret || !snapshot.apiKeyRef)
             throw new Error("Portainer connection secret is unavailable");
           const apiKey = await this.readSecret(snapshot.apiKeyRef);
+          phase = "probe";
           const evidence = await this.probe({
             endpointUrl: snapshot.endpointUrl,
             environmentId: snapshot.environmentId,
             apiKey,
           });
+          phase = "match";
           assertObservationMatches(snapshot, capabilities, evidence);
           if (
             await this.inventory.recordPortainerObservation(
@@ -353,11 +366,24 @@ export class AdminService {
             )
           )
             return "refreshed" as const;
-        } catch {
+        } catch (error) {
           if (
             await this.inventory.recordPortainerObservation(
               snapshot,
               "degraded",
+              undefined,
+              error instanceof PortainerRequestError
+                ? error.diagnostic
+                : {
+                    provider: "portainer",
+                    stage: "node_probe",
+                    category:
+                      phase === "credential"
+                        ? "credential_unavailable"
+                        : phase === "match"
+                          ? "configuration_mismatch"
+                          : failureCategory(error, "transport_error"),
+                  },
             )
           )
             return "unhealthy" as const;

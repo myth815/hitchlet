@@ -2,6 +2,24 @@ import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import https from "node:https";
 import {
+  RuntimeConflictSchema,
+  type RuntimeFailure,
+} from "@hitchlet/contracts/internal";
+
+export class RuntimeAgentResponseError extends Error {
+  constructor(
+    readonly statusCode: number,
+    readonly diagnostic?: RuntimeFailure,
+  ) {
+    super(
+      diagnostic
+        ? `Runtime ${diagnostic.stage}: ${diagnostic.category}. ${diagnostic.message}`
+        : `Runtime Agent returned HTTP ${statusCode}`,
+    );
+    this.name = "RuntimeAgentResponseError";
+  }
+}
+import {
   runtimeStorageRequestSchema,
   runtimeStorageResultSchema,
   type RuntimeStorageRequest,
@@ -233,8 +251,20 @@ export class RuntimeAgentHttpTransport implements RuntimeAgentJsonTransport {
         request.end(body);
       },
     );
-    if (response.status < 200 || response.status >= 300)
-      throw new Error(`Runtime Agent returned HTTP ${response.status}`);
+    if (response.status < 200 || response.status >= 300) {
+      let diagnostic: RuntimeFailure | undefined;
+      if (response.status === 409) {
+        try {
+          const parsed = RuntimeConflictSchema.safeParse(
+            JSON.parse(response.body.toString("utf8")),
+          );
+          if (parsed.success) diagnostic = parsed.data.error;
+        } catch {
+          /* Legacy empty or malformed error body remains an HTTP failure. */
+        }
+      }
+      throw new RuntimeAgentResponseError(response.status, diagnostic);
+    }
     try {
       return JSON.parse(response.body.toString("utf8"));
     } catch {

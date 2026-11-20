@@ -11,6 +11,7 @@ import {
 } from "@hitchlet/contracts/internal";
 import { equalSecret } from "./canonical.js";
 import type { NetworkWorker } from "./worker.js";
+import { runtimeFailure } from "./diagnostic.js";
 
 export type ServerConfig = Readonly<{
   host: string;
@@ -86,8 +87,21 @@ export async function createRuntimeServer(
                 "cache-control": "no-store",
               })
               .end(JSON.stringify(result));
-          } catch {
-            response.writeHead(409, { "cache-control": "no-store" }).end();
+          } catch (error) {
+            response
+              .writeHead(409, {
+                "cache-control": "no-store",
+                "content-type": "application/json",
+              })
+              .end(
+                JSON.stringify({
+                  error: runtimeFailure(
+                    error,
+                    "workload_facts",
+                    input.data.requestId,
+                  ),
+                }),
+              );
           }
           return;
         }
@@ -105,8 +119,21 @@ export async function createRuntimeServer(
                 "cache-control": "no-store",
               })
               .end(JSON.stringify(result));
-          } catch {
-            response.writeHead(409, { "cache-control": "no-store" }).end();
+          } catch (error) {
+            response
+              .writeHead(409, {
+                "cache-control": "no-store",
+                "content-type": "application/json",
+              })
+              .end(
+                JSON.stringify({
+                  error: runtimeFailure(
+                    error,
+                    "storage_facts",
+                    facts.data.requestId,
+                  ),
+                }),
+              );
           }
           return;
         }
@@ -125,9 +152,23 @@ export async function createRuntimeServer(
               "cache-control": "no-store",
             })
             .end(JSON.stringify(result));
-        } catch {
+        } catch (error) {
           // Fixed, credential-free errors; command payloads and engine output are never logged or reflected.
-          response.writeHead(409, { "cache-control": "no-store" }).end();
+          response
+            .writeHead(409, {
+              "cache-control": "no-store",
+              "content-type": "application/json",
+            })
+            .end(
+              JSON.stringify({
+                error: runtimeFailure(
+                  error,
+                  "network_action",
+                  parsed.data.commandId,
+                  parsed.data.operationId,
+                ),
+              }),
+            );
         }
       })().catch(() => {
         if (!response.headersSent) response.writeHead(500).end();

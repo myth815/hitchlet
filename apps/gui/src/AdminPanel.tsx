@@ -25,6 +25,22 @@ function errorMessage(error: unknown) {
       : "请求失败";
 }
 
+function observationHint(category: string) {
+  if (category === "configuration_mismatch")
+    return "核对当前 Engine、连接版本、架构与资源配置；变更后的配置需对应真实资格。";
+  if (category === "credential_unavailable")
+    return "检查现有 Portainer 密钥引用是否可读。";
+  if (category === "evidence_missing")
+    return "按所选交付能力提交缺少的真实资格；报告日期本身不会阻止探测。";
+  if (category === "name_resolution_failed")
+    return "检查 Controller 到 Portainer 的名称解析。";
+  if (category === "connection_refused")
+    return "检查所选 Portainer 服务与端点是否正在监听。";
+  if (category === "http_error")
+    return "按 HTTP 状态核对 Portainer 认证、端点授权或服务响应。";
+  return "检查 Controller 到 Portainer 的连接与响应；后台实际探测恢复后自动清除。";
+}
+
 function activeValidation(run: AdminValidationHistoryItem | undefined) {
   return (
     !!run &&
@@ -561,6 +577,16 @@ export function AdminPanel({
                 <span>
                   {node.admission} · {node.observedHealth}
                 </span>
+                {node.observationFailure && (
+                  <small role="status">
+                    探测诊断记录：{node.observationFailure.stage} /{" "}
+                    {node.observationFailure.category}
+                    {node.observationFailure.statusCode
+                      ? ` / HTTP ${node.observationFailure.statusCode}`
+                      : ""}
+                    ；{observationHint(node.observationFailure.category)}
+                  </small>
+                )}
                 <small>
                   能力{" "}
                   {node.capabilities.expiresAt &&
@@ -577,11 +603,13 @@ export function AdminPanel({
                   能力取证有效期至{" "}
                   {node.capabilities.expiresAt
                     ? new Date(node.capabilities.expiresAt).toLocaleString()
-                    : "未记录"}
+                    : "按当前配置匹配，不按日期过期"}
                   {node.capabilities.expiresAt &&
                   Date.parse(node.capabilities.expiresAt) <= Date.now()
                     ? " · 已过期，需重新实测取证"
-                    : " · 到期不会由心跳续期"}
+                    : node.capabilities.expiresAt
+                      ? " · 到期不会由心跳续期"
+                      : ""}
                 </small>
                 <small>
                   此页面不配置Runtime Agent或能力attestation；仅显示观测投影。

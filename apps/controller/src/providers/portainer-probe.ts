@@ -1,3 +1,7 @@
+import {
+  PortainerRequestError,
+  failureCategory,
+} from "./portainer-request-error.js";
 import type { PortainerProbe } from "./port.js";
 
 /** Read-only Portainer X-API-Key and Docker Engine identity probe. No endpoint accepts mutations. */
@@ -14,14 +18,28 @@ export const probePortainer: PortainerProbe = async ({
       headers: { "X-API-Key": apiKey, Accept: "application/json" },
       redirect: "error",
       signal: AbortSignal.timeout(10_000),
+    }).catch((error: unknown) => {
+      throw new PortainerRequestError({
+        provider: "portainer",
+        stage: "node_probe",
+        category: failureCategory(error, "transport_error"),
+      });
     });
     if (!response.ok)
-      throw new Error(
-        response.status === 401 || response.status === 403
-          ? "Portainer authentication or environment authorization failed"
-          : `Portainer read probe failed (${response.status})`,
-      );
-    return response.json() as Promise<unknown>;
+      throw new PortainerRequestError({
+        provider: "portainer",
+        stage: "node_probe",
+        category: "http_error",
+        statusCode: response.status,
+      });
+    return response.json().catch(() => {
+      throw new PortainerRequestError({
+        provider: "portainer",
+        stage: "node_probe",
+        category: "invalid_response",
+        statusCode: response.status,
+      });
+    }) as Promise<unknown>;
   };
   const root = `/api/endpoints/${encodeURIComponent(environmentId)}/docker/`;
   const [info, version, systemVersion, containers] = await Promise.all([

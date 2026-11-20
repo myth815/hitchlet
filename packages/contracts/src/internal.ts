@@ -1,4 +1,5 @@
 /** Internal controller-facing shared types; intentionally excluded from the public root. */
+export * from "./execution-diagnostic.js";
 export {
   hostSnapshotSchema,
   classifyHumanPresence,

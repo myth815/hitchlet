@@ -1,3 +1,4 @@
+import type { ExecutionFailure } from "@hitchlet/contracts/internal";
 import { createHash } from "node:crypto";
 import type { Statement } from "./protocol.js";
 import { StorageError, type Storage } from "./index.js";
@@ -912,6 +913,14 @@ export class SQLiteOperationStore {
     attempt: number;
     now: number;
     diagnostic: string;
+    firstExecutionFailure?: ExecutionFailure &
+      Readonly<{
+        operationId: string;
+        runtimeOperationId?: string;
+        observedAtMs: number;
+        attempt: number;
+        operation: "provision" | "cleanup";
+      }>;
   }): Promise<void> {
     const {
       operationId,
@@ -937,6 +946,9 @@ export class SQLiteOperationStore {
           JSON.stringify({
             code: "operation_pending",
             diagnostic: diagnostic.slice(0, 160),
+            ...(input.firstExecutionFailure
+              ? { firstExecutionFailure: input.firstExecutionFailure }
+              : {}),
           }),
           now + delay,
           now,
@@ -953,8 +965,17 @@ export class SQLiteOperationStore {
       },
       {
         kind: "run",
-        sql: "UPDATE image_validations SET cleanup_status=CASE WHEN state='releasing' THEN 'blocked' ELSE cleanup_status END,version=version+1,updated_at_ms=? WHERE id=? AND state IN ('running','releasing')",
-        params: [now, input.validationId ?? null],
+        sql: "UPDATE image_validations SET cleanup_status=CASE WHEN state='releasing' THEN 'blocked' ELSE cleanup_status END,checks_json=CASE WHEN ? IS NULL THEN checks_json ELSE json_set(checks_json,'$.firstExecutionFailure',COALESCE(json_extract(checks_json,'$.firstExecutionFailure'),json(?))) END,version=version+1,updated_at_ms=? WHERE id=? AND state IN ('running','releasing')",
+        params: [
+          input.firstExecutionFailure
+            ? JSON.stringify(input.firstExecutionFailure)
+            : null,
+          input.firstExecutionFailure
+            ? JSON.stringify(input.firstExecutionFailure)
+            : null,
+          now,
+          input.validationId ?? null,
+        ],
       },
       {
         kind: "run",
