@@ -372,7 +372,7 @@ async function fixture(
     [JSON.stringify([profile.revisionId])],
   );
   // Synthetic node qualification for this newly created fixture revision only.
-  if (faults.dockerBridge) {
+  {
     const node = (await storage.get<{ id: string; version: bigint }>(
       "SELECT id,version FROM nodes",
     ))!;
@@ -423,20 +423,39 @@ async function fixture(
       portainerVersion: evidence.portainerVersion,
       architecture: "amd64",
       checkedAt: new Date(now).toISOString(),
-      networkProfileRevisionIds: [networkProfile!.revisionId],
+      networkProfileRevisionIds: [
+        networkProfile?.revisionId ??
+          (await storage.get<{ id: string }>(
+            "SELECT id FROM network_profile_revisions WHERE profile_id=?",
+            [networkId],
+          ))!.id,
+      ],
       storageProfileRevisionIds: [profile.revisionId],
       operatorId: adminId,
       requestId: randomUUID(),
       report: {
         runId: randomUUID(),
         sha256: "a".repeat(64),
-        scopes: {
-          resourceLimits: {
-            status: "passed",
-            summary: "synthetic CPU/memory enforcement",
-            evidenceRef: "fixture:limits",
-          },
-        },
+        scopes: Object.fromEntries(
+          (faults.dockerBridge
+            ? ["resourceLimits"]
+            : [
+                "resourceLimits",
+                "firewallInput",
+                "firewallForward",
+                "ipv6",
+                "sshBootstrap",
+                "cleanupRecovery",
+              ]
+          ).map((name) => [
+            name,
+            {
+              status: "passed" as const,
+              summary: `synthetic ${name}`,
+              evidenceRef: `fixture:${name}`,
+            },
+          ]),
+        ),
         storageScopes: {
           readOnly: "passed",
           independentWrite: "passed",
@@ -453,23 +472,23 @@ async function fixture(
     });
     expect((await admin.listNodes())[0]!.capabilities).toMatchObject({
       verified: true,
-      supportedAccess: [],
+      supportedAccess: faults.dockerBridge ? [] : ["ssh"],
     });
     const capability = JSON.parse(
       (await storage.get<{ capabilities_json: string }>(
         "SELECT capabilities_json FROM nodes",
       ))!.capabilities_json,
     );
-    expect(capability.networkPolicyEnforcement).toBe("unsupported");
-    expect(capability.verifiedNetworkProfileRevisionIds).toEqual([]);
-    expect(Object.keys(capability.manualReport.scopes)).toEqual([
-      "resourceLimits",
-    ]);
-  } else if (networkProfile)
-    await storage.run(
-      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.verifiedNetworkProfileRevisionIds',json(?))",
-      [JSON.stringify([networkProfile.revisionId])],
+    expect(capability.networkPolicyEnforcement).toBe(
+      faults.dockerBridge ? "unsupported" : "verified",
     );
+    expect(capability.verifiedNetworkProfileRevisionIds).toHaveLength(
+      faults.dockerBridge ? 0 : 1,
+    );
+    expect(Object.keys(capability.manualReport.scopes)).toHaveLength(
+      faults.dockerBridge ? 1 : 6,
+    );
+  }
   await storage.run(
     "UPDATE system_maintenance SET runtime_disks_json=json_object((SELECT id FROM nodes),json(?)) WHERE singleton=1",
     [
@@ -1105,10 +1124,7 @@ it.each([
     const nodeId = (await f.storage.get<{ id: string }>(
       "SELECT id FROM nodes",
     ))!.id;
-    await f.storage.run(
-      "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.capacity',json(?))",
-      [JSON.stringify({ cpuMillis: 3000, memoryMiB: 4096, scratchMiB: 8192 })],
-    );
+
     const admin = new AdminService(
       f.storage,
       async () => {
@@ -1203,13 +1219,11 @@ it.each([
         "cpuHardLimit",
         "memoryHardLimit",
         "capacity",
-        "expiresAt",
+        "manualReport",
         "filtered",
       ] as const) {
         const caps = JSON.parse(original);
-        if (missing === "expiresAt")
-          caps.expiresAt = new Date(f.clock() - 1).toISOString();
-        else if (missing !== "filtered") delete caps[missing];
+        if (missing !== "filtered") delete caps[missing];
         await f.storage.run("UPDATE nodes SET capabilities_json=?", [
           JSON.stringify(caps),
         ]);
@@ -1239,16 +1253,19 @@ it.each([
           });
           expect(preview.eligibleNodeIds, missing).toEqual([]);
           expect(preview.reasons).toContain(
-            missing === "expiresAt"
-              ? "capabilities_expired"
-              : missing === "filtered"
-                ? "network_profile_unverified"
-                : "capabilities_unavailable",
+            missing === "filtered"
+              ? "network_profile_unverified"
+              : "capabilities_unavailable",
           );
         }
       }
       await f.storage.run("UPDATE nodes SET capabilities_json=?", [original]);
     }
+    if (dockerBridge)
+      await f.storage.run(
+        "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.expiresAt',?)",
+        [new Date(f.clock() - 1).toISOString()],
+      );
     const run = await admin.scheduleValidation(validationRequest);
     expect(run).toMatchObject({ scheduler: "queued" });
     await f.worker.reconcile();
@@ -1269,6 +1286,7 @@ it.each([
       test_outcome: "passed",
       cleanup_status: "complete",
     });
+
     const entity = (await f.storage.get<{ entity_version: bigint }>(
       "SELECT entity_version FROM image_versions WHERE id=?",
       [draft.versionId],
@@ -1907,3 +1925,183 @@ it.each([
     expect(f.networkResult).not.toHaveBeenCalled();
   },
 );
+
+it("keeps an unchanged healthy Docker node usable after only its capability report date passes", async () => {
+  const f = await fixture(0, "none", true, [], undefined, {
+    loseGatewayCreateResponse: false,
+    dockerBridge: true,
+    skipReserve: true,
+  });
+  await f.storage.run(
+    "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.expiresAt',?)",
+    [new Date(f.clock() + 1).toISOString()],
+  );
+  const saved = (await f.storage.get<{ capabilities_json: string }>(
+    "SELECT capabilities_json FROM nodes",
+  ))!.capabilities_json;
+  f.advance(2);
+  // Same actual synthetic Engine and proof. Independently fresh live observations
+  // isolate the report-date predicate, without borrowing a real service or lease.
+  await f.storage.run(
+    "UPDATE nodes SET observed_health='healthy',observed_at_ms=?",
+    [f.clock()],
+  );
+  await f.storage.run(
+    "UPDATE system_maintenance SET runtime_disks_json=json_object((SELECT id FROM nodes),json(?))",
+    [
+      JSON.stringify({
+        state: "healthy",
+        observedAtMs: f.clock(),
+        availableMiB: 100000,
+        reserveMiB: 128,
+      }),
+    ],
+  );
+  const preview = await f.tickets.preview(f.consumerId, {
+    image: { versionId: f.ready.pinnedImageVersionId },
+    networkProfileId: f.networkId,
+    resources: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+    access: { protocol: "none" },
+  });
+  expect(preview.reasons).not.toContain("capabilities_expired");
+  expect(preview.availability, JSON.stringify(preview)).toBe("available");
+  expect((await f.tickets.reserveNext())?.ticketId).toBe(f.ready.id);
+  await f.worker.reconcile();
+  expect((await f.queries.get(f.consumerId, f.ready.id))!.phase).toBe("ready");
+  expect(
+    (await f.storage.get<{ capabilities_json: string }>(
+      "SELECT capabilities_json FROM nodes",
+    ))!.capabilities_json,
+  ).toBe(saved);
+  const ticket = (await f.queries.get(f.consumerId, f.ready.id))!;
+  await f.tickets.cancel(ticket.id, f.consumerId, "consumer_release", {
+    expectedGeneration: ticket.lease!.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect((await f.queries.get(f.consumerId, ticket.id))!.phase).toBe(
+    "released",
+  );
+});
+
+it("recovers ordinary Docker provisioning after five transient manifest failures within the same frozen deadline", async () => {
+  const f = await fixture(0, "none", true, [], undefined, {
+    loseGatewayCreateResponse: false,
+    dockerBridge: true,
+    skipProvision: true,
+  });
+  const operation = (await f.storage.get<{ id: string }>(
+    "SELECT id FROM operations WHERE kind='allocation.provision'",
+  ))!;
+  const original = f.transport.fetcher.getMockImplementation()!;
+  let failed = 0;
+  f.transport.fetcher.mockImplementation(
+    async (...args: Parameters<typeof original>) => {
+      if (
+        new URL(String(args[0])).pathname.includes("/distribution/") &&
+        failed++ < 5
+      )
+        throw new Error("synthetic temporary manifest transport failure");
+      return original(...args);
+    },
+  );
+  for (let i = 0; i < 5; i++) {
+    await f.worker.run(operation.id);
+    // Isolate the attempt predicate; no service, clock or deadline is changed.
+    await f.storage.run("UPDATE operations SET next_check_at_ms=? WHERE id=?", [
+      f.clock(),
+      operation.id,
+    ]);
+  }
+  expect((await f.queries.get(f.consumerId, f.ready.id))!.phase).not.toBe(
+    "ready",
+  );
+  await f.worker.run(operation.id);
+  const ready = (await f.queries.get(f.consumerId, f.ready.id))!;
+  expect(ready.phase).toBe("ready");
+  expect(
+    f.transport.fetcher.mock.calls.filter(([url]) =>
+      new URL(String(url)).pathname.endsWith("/containers/create"),
+    ),
+  ).toHaveLength(1);
+  await f.tickets.cancel(ready.id, f.consumerId, "consumer_release", {
+    expectedGeneration: ready.lease!.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect(
+    (
+      await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        ready.id,
+        { leaseId: ready.lease!.id, generation: ready.lease!.generation },
+      )
+    ).providerCleanup,
+  ).toBe("complete");
+});
+
+it("keeps claim, renew and cleanup independent of historical Docker report dates", async () => {
+  const f = await fixture(2, "none", true, [], undefined, {
+    loseGatewayCreateResponse: false,
+    dockerBridge: true,
+  });
+  await f.storage.run(
+    "UPDATE nodes SET capabilities_json=json_set(capabilities_json,'$.expiresAt',?)",
+    [new Date(f.clock() - 1).toISOString()],
+  );
+  const leases = new LeaseService(f.storage, f.clock);
+  await leases.renew(f.consumerId, f.ready.id, "claim-after-report-date", {
+    generation: f.ready.lease!.generation,
+    expectedLeaseVersion: f.ready.lease!.version,
+  });
+  await leases.reconcilePending();
+  let ready = (await f.queries.get(f.consumerId, f.ready.id))!;
+  expect(ready.lease!.claimedAt).not.toBeNull();
+  await leases.renew(f.consumerId, ready.id, "renew-after-report-date", {
+    generation: ready.lease!.generation,
+    expectedLeaseVersion: ready.lease!.version,
+    requestedSeconds: 900,
+  });
+  await leases.reconcilePending();
+  ready = (await f.queries.get(f.consumerId, ready.id))!;
+  await f.tickets.cancel(ready.id, f.consumerId, "consumer_release", {
+    expectedGeneration: ready.lease!.generation,
+  });
+  await f.worker.reconcileCleanupLane();
+  expect(
+    (
+      await new TicketCleanupProofReader(f.storage, f.clock).read(
+        f.consumerId,
+        ready.id,
+        { leaseId: ready.lease!.id, generation: ready.lease!.generation },
+      )
+    ).providerCleanup,
+  ).toBe("complete");
+});
+
+it("accepts explicit public preparation deadlines beyond omitted service defaults", async () => {
+  const f = await fixture(0, "none", true, [], undefined, {
+    loseGatewayCreateResponse: false,
+    dockerBridge: true,
+    skipReserve: true,
+  });
+  await f.tickets.cancel(f.ready.id, f.consumerId);
+  const request = await f.tickets.acquire(
+    f.consumerId,
+    "explicit-longer-preparation",
+    {
+      image: { versionId: f.ready.pinnedImageVersionId },
+      networkProfileId: f.networkId,
+      resources: { cpuMillis: 500, memoryMiB: 512, scratchMiB: 0 },
+      access: { protocol: "none" },
+      lease: { queueTimeoutSeconds: 3600, provisioningTimeoutSeconds: 2400 },
+    },
+  );
+  const row = (await f.storage.get<{ request_json: string }>(
+    "SELECT request_json FROM tickets WHERE id=?",
+    [request.ticketId],
+  ))!;
+  expect(JSON.parse(row.request_json).lease).toMatchObject({
+    queueTimeoutSeconds: 3600,
+    provisioningTimeoutSeconds: 2400,
+  });
+  await f.tickets.cancel(request.ticketId, f.consumerId);
+});

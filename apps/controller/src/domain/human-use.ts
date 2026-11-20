@@ -68,6 +68,8 @@ export type DependencyNode = {
   observedAtMs: number | null;
   manualInventory: boolean;
   capabilityExpiresAtMs: number | null;
+  /** Actual Docker proof bound to current configuration; other backends retain their validity model. */
+  capabilityProofValid?: boolean;
 };
 export type MachineAdmissionContext = {
   machineId: string;
@@ -261,8 +263,14 @@ export function evaluateMachineAdmission(
     block("node_health_unavailable", `Node health is ${node.observedHealth}`);
   if (node && !isNodeObservationFresh(node.observedAtMs, now))
     block("node_observation_stale", "Node observation is stale or unknown");
+  if (node?.capabilityProofValid === false)
+    block(
+      "capabilities_unavailable",
+      "Node capability evidence does not match current configuration",
+    );
   if (
     node &&
+    node.capabilityProofValid === undefined &&
     (node.capabilityExpiresAtMs === null ||
       !Number.isFinite(node.capabilityExpiresAtMs) ||
       node.capabilityExpiresAtMs <= now)

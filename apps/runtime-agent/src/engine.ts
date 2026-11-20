@@ -60,15 +60,19 @@ export class LocalEngine {
     return info;
   }
 
-  async assertEngine(): Promise<string> {
+  async assertEngine(requireFilteredNetwork = false): Promise<string> {
     const info = await this.assertEngineIdentity();
     const id = typeof info.ID === "string" ? info.ID : "";
     if (!id || id !== this.config.nativeEngineId)
       throw new Error("Native Engine identity mismatch");
     this.mode = parseDockerSecurityOptions(info.SecurityOptions);
-    const backend = parseFirewallBackend(JSON.stringify(info.FirewallBackend));
-    if (backend.driver !== "iptables")
-      throw new Error("Docker iptables firewall backend is required");
+    if (requireFilteredNetwork) {
+      const backend = parseFirewallBackend(
+        JSON.stringify(info.FirewallBackend),
+      );
+      if (backend.driver !== "iptables")
+        throw new Error("Docker iptables firewall backend is required");
+    }
     return id;
   }
 
@@ -289,7 +293,7 @@ export class LocalEngine {
     subnet: string;
     containers: readonly Json[];
   }> {
-    await this.assertEngine();
+    await this.assertEngine(true);
     if (plan.nativeEngineId !== this.config.nativeEngineId)
       throw new Error("Plan targets another Engine");
     const networks = JSON.parse(
@@ -407,7 +411,7 @@ export class LocalEngine {
   }
 
   async assertAllocationAbsent(plan: RuntimeNetworkPlan): Promise<void> {
-    await this.assertEngine();
+    await this.assertEngine(true);
     const allocationFilter = `label=${LABEL}.allocation=${plan.allocationId}`;
     const [containerIds, networkIds] = await Promise.all([
       this.docker(["ps", "-aq", "--filter", allocationFilter]),

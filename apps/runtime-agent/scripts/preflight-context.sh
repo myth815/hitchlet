@@ -19,7 +19,7 @@ if [ "$engine_id" != "$HITCHLET_EXPECTED_ENGINE_ID" ]; then
   exit 3
 fi
 
-firewall_backend=$(docker --context "$HITCHLET_DOCKER_CONTEXT" info --format '{{.FirewallBackend}}')
+firewall_backend=$(docker --context "$HITCHLET_DOCKER_CONTEXT" info --format '{{.FirewallBackend.Driver}}')
 if [ "$firewall_backend" != "iptables" ]; then
   echo "Refusing unsupported Docker firewall backend" >&2
   exit 4

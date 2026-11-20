@@ -26,14 +26,10 @@ export function passedCapabilityScopes(
 /** Base Docker health requires resource evidence; selected filtered/SSH work uses its own verified capability fields. */
 export function validAttestedCapability(
   value: unknown,
-  now: number,
 ): value is Record<string, unknown> {
   if (!isRecord(value)) return false;
-  const expiry =
-    typeof value.expiresAt === "string" ? Date.parse(value.expiresAt) : NaN;
+  // A durable Docker qualification is invalidated by changed facts, not elapsed time.
   if (
-    !Number.isFinite(expiry) ||
-    expiry <= now ||
     !["constant_online_manual_inventory", "observed_host"].includes(
       String(value.admissionMode),
     ) ||
@@ -59,6 +55,44 @@ export function validAttestedCapability(
     (!Array.isArray(value.supportedAccess) ||
       !value.supportedAccess.includes("ssh") ||
       passedCapabilityScopes(report.scopes, ["sshBootstrap"]))
+  );
+}
+
+/** Same evidence binding used by observation and the atomic admission snapshot. */
+export function portainerCapabilityMatches(
+  value: unknown,
+  binding: {
+    connectionRevisionId: unknown;
+    engineId: unknown;
+    architecture: unknown;
+    providerEvidence: unknown;
+    capacity: unknown;
+  },
+): boolean {
+  if (
+    !validAttestedCapability(value) ||
+    !isRecord(binding.providerEvidence) ||
+    !isRecord(binding.capacity) ||
+    !isRecord(value.capacity)
+  )
+    return false;
+  const expectedCapacity = binding.capacity;
+  const attestedCapacity = value.capacity;
+  return (
+    typeof binding.engineId === "string" &&
+    typeof binding.connectionRevisionId === "string" &&
+    value.engineId === binding.engineId &&
+    value.connectionRevisionId === binding.connectionRevisionId &&
+    value.architecture === binding.architecture &&
+    Array.isArray(value.architectures) &&
+    value.architectures.includes(binding.architecture) &&
+    value.providerVersion ===
+      `Portainer/${binding.providerEvidence.portainerVersion}; Docker/${binding.providerEvidence.dockerVersion}` &&
+    ["cpuMillis", "memoryMiB", "scratchMiB"].every(
+      (key) =>
+        typeof expectedCapacity[key] === "number" &&
+        attestedCapacity[key] === expectedCapacity[key],
+    )
   );
 }
 

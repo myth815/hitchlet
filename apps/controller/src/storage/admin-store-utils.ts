@@ -74,13 +74,20 @@ export function projectCapabilities(value: string, now = Date.now()) {
         : "expired";
   return {
     verified:
-      evidenceState === "valid" &&
-      c.cpuHardLimit === "verified" &&
-      c.memoryHardLimit === "verified" &&
-      (c.networkMode === "trusted_nat" ||
-        c.networkPolicyEnforcement === "verified" ||
-        validAttestedCapability(c, now)),
-    expiresAt,
+      typeof c.providerVersion === "string" &&
+      c.providerVersion.startsWith("Portainer/")
+        ? validAttestedCapability(c)
+        : evidenceState === "valid" &&
+          c.cpuHardLimit === "verified" &&
+          c.memoryHardLimit === "verified" &&
+          (c.networkMode === "trusted_nat" ||
+            c.networkPolicyEnforcement === "verified" ||
+            validAttestedCapability(c)),
+    expiresAt:
+      typeof c.providerVersion === "string" &&
+      c.providerVersion.startsWith("Portainer/")
+        ? null
+        : expiresAt,
     architectures: Array.isArray(c.architectures)
       ? c.architectures.filter((x) => x === "amd64" || x === "arm64")
       : [],

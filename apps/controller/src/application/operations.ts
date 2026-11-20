@@ -370,7 +370,10 @@ export class OperationWorker {
         await this.defer(op, token, "untracked_create_outcome_unknown");
       else if (op.kind === "allocation.provision") {
         const execute = async () => {
-          if (Number(op.attempt_count) >= 5)
+          // Docker retries reconcile the actual create journal and Engine
+          // inventory. An attempt counter cannot replace their outcome or the
+          // caller's frozen provision deadline.
+          if (executionMode !== "portainer" && Number(op.attempt_count) >= 5)
             await this.inspectExhaustedProvision(op, token);
           else
             await this.provision(op, await this.plan(op, operationId), token);

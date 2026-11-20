@@ -384,17 +384,62 @@ describe("D10 Portainer identity and D11a catalog", () => {
     const beforeExpiredProbe = probeCount;
     expect(await service.refreshPortainerObservations()).toMatchObject({
       checked: 1,
-      refreshed: 0,
-      expired: 1,
+      refreshed: 1,
+      expired: 0,
     });
     current = await db.get(
       "SELECT capabilities_json,observed_at_ms,observed_health,admission FROM nodes WHERE id=?",
       [node.id],
     );
-    expect(current?.observed_at_ms).toBe(BigInt(clock - 60_000));
+    expect(current?.observed_at_ms).toBe(BigInt(clock));
     expect(current?.capabilities_json).toBe(expiredJson);
-    expect(current?.observed_health).toBe("unknown");
-    expect(probeCount).toBe(beforeExpiredProbe);
+    expect(current?.observed_health).toBe("healthy");
+    expect(probeCount).toBe(beforeExpiredProbe + 1);
+
+    // Re-saving the same configuration does not erase unchanged qualification;
+    // changing it must invalidate the proof rather than waiting for a date.
+    await db.run("UPDATE nodes SET admission='disabled' WHERE id=?", [node.id]);
+    const savedNode = (await db.get<{ config_json: string; version: bigint }>(
+      "SELECT config_json,version FROM nodes WHERE id=?",
+      [node.id],
+    ))!;
+    const runtimeConfig = JSON.parse(savedNode.config_json).runtimeProfile;
+    const unchanged = await service.configureNodeRuntime({
+      nodeId: node.id,
+      expectedVersion: Number(savedNode.version),
+      operatorId: adminId,
+      requestId: randomUUID(),
+      config: runtimeConfig,
+    });
+    expect(
+      await db.get(
+        "SELECT capabilities_json,observed_health FROM nodes WHERE id=?",
+        [node.id],
+      ),
+    ).toMatchObject({
+      capabilities_json: expiredJson,
+      observed_health: "healthy",
+    });
+    await service.configureNodeRuntime({
+      nodeId: node.id,
+      expectedVersion: unchanged.version,
+      operatorId: adminId,
+      requestId: randomUUID(),
+      config: { ...runtimeConfig, userlandProxy: !runtimeConfig.userlandProxy },
+    });
+    const invalidated = (await db.get<{
+      capabilities_json: string;
+      observed_health: string;
+    }>("SELECT capabilities_json,observed_health FROM nodes WHERE id=?", [
+      node.id,
+    ]))!;
+    expect(invalidated.observed_health).toBe("unknown");
+    expect(
+      JSON.parse(invalidated.capabilities_json).manualReport,
+    ).toBeUndefined();
+    expect(JSON.parse(invalidated.capabilities_json).admissionMode).toBe(
+      "observed_host",
+    );
   });
 
   it("rotates beyond a failed observation batch without advancing its success timestamp", async () => {

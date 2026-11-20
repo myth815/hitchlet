@@ -95,7 +95,7 @@ describe("local Engine startup preflight", () => {
     });
   };
 
-  it("reports rootless mode without bypassing required firewall checks using one info call", async () => {
+  it("reports rootless mode using one Engine identity call", async () => {
     mockInfo(
       response({
         SecurityOptions: [
@@ -131,7 +131,14 @@ describe("local Engine startup preflight", () => {
     );
     const engine = new LocalEngine(config);
 
-    await expect(engine.assertEngine()).rejects.toThrow(
+    await expect(engine.assertEngine()).resolves.toBe(config.nativeEngineId);
+    await expect(engine.assertEngine(true)).rejects.toThrow(
+      "Docker iptables firewall backend is required",
+    );
+    await expect(engine.inspectAllocation({} as never)).rejects.toThrow(
+      "Docker iptables firewall backend is required",
+    );
+    await expect(engine.assertAllocationAbsent({} as never)).rejects.toThrow(
       "Docker iptables firewall backend is required",
     );
     expect(engine.mode).toBe("rootless");
@@ -175,7 +182,10 @@ describe("local Engine startup preflight", () => {
         },
       }),
     );
-    await expect(new LocalEngine(config).assertEngine()).rejects.toThrow(
+    await expect(new LocalEngine(config).assertEngine()).resolves.toBe(
+      config.nativeEngineId,
+    );
+    await expect(new LocalEngine(config).assertEngine(true)).rejects.toThrow(
       "Docker iptables firewall backend is required",
     );
   });

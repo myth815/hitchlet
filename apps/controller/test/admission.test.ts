@@ -32,6 +32,39 @@ const context: AcquireNormalizationContext = {
 };
 
 describe("pure admission normalization", () => {
+  it("does not treat omitted queue/provision defaults as installation hard limits", () => {
+    const {
+      queueTimeoutSeconds: _queue,
+      provisioningTimeoutSeconds: _provision,
+      ...withoutLimits
+    } = context;
+    expect(normalizeAcquireRequest(request, withoutLimits).lease).toMatchObject(
+      { queueTimeoutSeconds: 1800, provisioningTimeoutSeconds: 1200 },
+    );
+    const longer = {
+      ...request,
+      lease: { queueTimeoutSeconds: 3600, provisioningTimeoutSeconds: 2400 },
+    };
+    expect(
+      normalizeAcquireRequest(AcquireRequestSchema.parse(longer), withoutLimits)
+        .lease,
+    ).toMatchObject(longer.lease);
+    expect(() => normalizeAcquireRequest(longer, context)).toThrow(
+      "queueTimeoutSeconds exceeds the authorized maximum",
+    );
+    expect(() =>
+      normalizeAcquireRequest(
+        { ...request, lease: { provisioningTimeoutSeconds: 301 } },
+        context,
+      ),
+    ).toThrow("provisioningTimeoutSeconds exceeds the authorized maximum");
+    expect(() =>
+      AcquireRequestSchema.parse({
+        ...request,
+        lease: { provisioningTimeoutSeconds: 86401 },
+      }),
+    ).toThrow();
+  });
   it("freezes defaults and accepted policy across later configuration changes", () => {
     const accepted = normalizeAcquireRequest(request, context);
     expect(accepted.kind).toBe("container");

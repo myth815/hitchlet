@@ -1,3 +1,4 @@
+import { portainerCapabilityMatches } from "../domain/attested-capability.js";
 import {
   HumanUsePolicySchema,
   type HumanUsePolicy,
@@ -20,9 +21,9 @@ const collaboratorMaintenancePrefix = "[collaborator-maintenance:";
  * is compared inside BEGIN IMMEDIATE before writing a claim or policy. Heartbeat updates
  * do not increment Machine.version, so entity-version CAS alone is insufficient. */
 const snapshotSql = `SELECT json_object(
- 'machine',(SELECT json_object('id',id,'name',name,'usageMode',usage_mode,'source',source,'admission',admission,'power',observed_power,'version',version,'management',json(management_json)) FROM machines WHERE id=:machineId),
+ 'machine',(SELECT json_object('id',id,'name',name,'usageMode',usage_mode,'source',source,'admission',admission,'power',observed_power,'architecture',architecture,'version',version,'management',json(management_json)) FROM machines WHERE id=:machineId),
  'pools',json((SELECT json_group_array(json_object('id',id,'parentAllocationId',parent_allocation_id,'capacity',json_object('cpuMillis',total_cpu_millis,'memoryMiB',total_memory_mib,'scratchMiB',total_scratch_mib),'reserve',json_object('cpuMillis',system_cpu_millis,'memoryMiB',system_memory_mib,'scratchMiB',system_scratch_mib),'version',version)) FROM (SELECT * FROM capacity_pools WHERE machine_id=:machineId ORDER BY id))),
- 'nodes',json((SELECT json_group_array(json_object('id',id,'name',name,'poolId',pool_id,'admission',admission,'observedHealth',observed_health,'capabilities',json(capabilities_json),'version',version,'observedAtMs',observed_at_ms)) FROM (SELECT * FROM nodes WHERE machine_id=:machineId ORDER BY id))),
+ 'nodes',json((SELECT json_group_array(json_object('id',id,'name',name,'poolId',pool_id,'admission',admission,'observedHealth',observed_health,'capabilities',json(capabilities_json),'config',json(config_json),'backendKind',backend_kind,'connectionRevisionId',cap_connection_revision,'engineId',cap_engine_id,'providerEvidence',json(cap_provider),'version',version,'observedAtMs',observed_at_ms)) FROM (SELECT n.*,pc.current_revision_id AS cap_connection_revision,ri.native_id AS cap_engine_id,r.evidence_json AS cap_provider FROM nodes n LEFT JOIN provider_connections pc ON pc.id=n.provider_connection_id AND pc.enabled=1 AND pc.runtime_identity_id=n.runtime_identity_id LEFT JOIN provider_connection_revisions r ON r.id=pc.current_revision_id AND r.verified_runtime_identity_id=n.runtime_identity_id LEFT JOIN runtime_identities ri ON ri.id=r.verified_runtime_identity_id WHERE n.machine_id=:machineId ORDER BY n.id))),
  'allocations',json((SELECT json_group_array(json_object('id',id,'nodeId',node_id,'purpose',purpose,'desiredState',desired_state,'observedState',observed_state,'cleanupStatus',cleanup_status,'version',version)) FROM (SELECT * FROM allocations WHERE machine_id=:machineId AND (id IN (SELECT allocation_id FROM capacity_claims WHERE state<>'released') OR id IN (SELECT parent_allocation_id FROM capacity_pools WHERE parent_allocation_id IS NOT NULL)) ORDER BY id))),
  'claims',json((SELECT json_group_array(json_object('id',id,'allocationId',allocation_id,'poolId',pool_id,'state',state,'resources',json_object('cpuMillis',cpu_millis,'memoryMiB',memory_mib,'scratchMiB',scratch_mib),'version',version)) FROM (SELECT c.* FROM capacity_claims c WHERE c.state<>'released' AND (c.allocation_id IN (SELECT id FROM allocations WHERE machine_id=:machineId) OR c.pool_id IN (SELECT id FROM capacity_pools WHERE machine_id=:machineId)) ORDER BY c.id))),
  'holds',json((SELECT json_group_array(json_object('id',id,'kind',kind,'reason',reason,'expiresAt',expires_at_ms)) FROM (SELECT * FROM holds WHERE machine_id=:machineId AND released_at_ms IS NULL ORDER BY id))),
@@ -42,16 +43,22 @@ type Material = {
     usageMode: "shared" | "dedicated";
     admission: MachineAdmissionContext["admission"];
     power: string;
+    architecture: string;
     version: number;
     management: { humanUsePolicy?: unknown };
   } | null;
   pools: MachineAdmissionContext["pools"];
   nodes: (Omit<
     MachineAdmissionContext["nodes"][number],
-    "manualInventory" | "capabilityExpiresAtMs"
+    "manualInventory" | "capabilityExpiresAtMs" | "capabilityProofValid"
   > & {
     version: number;
     capabilities: { admissionMode?: string; expiresAt?: string };
+    config: { executionMode?: string };
+    backendKind: string;
+    connectionRevisionId: string | null;
+    engineId: string | null;
+    providerEvidence: unknown;
   })[];
   allocations: MachineAdmissionContext["allocations"];
   claims: MachineAdmissionContext["claims"];
@@ -135,6 +142,18 @@ export async function loadMachineAdmission(
         ...n,
         manualInventory:
           n.capabilities?.admissionMode === "constant_online_manual_inventory",
+        ...(n.backendKind === "portainer" &&
+        n.config.executionMode === "portainer"
+          ? {
+              capabilityProofValid: portainerCapabilityMatches(n.capabilities, {
+                connectionRevisionId: n.connectionRevisionId,
+                engineId: n.engineId,
+                architecture: data.machine!.architecture,
+                providerEvidence: n.providerEvidence,
+                capacity: data.pools.find((p) => p.id === n.poolId)?.capacity,
+              }),
+            }
+          : {}),
         capabilityExpiresAtMs:
           typeof n.capabilities?.expiresAt === "string"
             ? Date.parse(n.capabilities.expiresAt)

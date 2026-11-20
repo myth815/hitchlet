@@ -96,7 +96,8 @@ it("reads a legacy Engine without using network mutation qualification as an obs
   state.calls = [];
   state.lists = 0;
   expect((await engine().workloadInventory()).complete).toBe(true);
-  await expect(engine().assertEngine()).rejects.toThrow(
+  await expect(engine().assertEngine()).resolves.toBe("engine");
+  await expect(engine().assertEngine(true)).rejects.toThrow(
     "Cannot verify Docker firewall capabilities",
   );
   state.legacyBackend = false;

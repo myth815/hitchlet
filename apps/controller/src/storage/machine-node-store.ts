@@ -25,6 +25,7 @@ import {
 import type { TartRuntimeFacts } from "@hitchlet/contracts/internal";
 import {
   hash,
+  canonicalJson,
   integer,
   parseJson,
   projectCapabilities,
@@ -146,7 +147,7 @@ export class SQLiteMachineNodeStore {
         ) ||
         String(row.backend_kind) !== "portainer" ||
         !liveNode ||
-        !validAttestedCapability(capability, time) ||
+        !validAttestedCapability(capability) ||
         !identityMatches ||
         !admission.allowed ||
         !(
@@ -332,7 +333,7 @@ export class SQLiteMachineNodeStore {
     const rows = await this.db.all<Row>(
       `SELECT n.id AS node_id,n.version AS node_version,n.admission,n.config_json,n.capabilities_json,n.observed_at_ms,
         n.provider_connection_id,n.runtime_identity_id,ri.native_id AS engine_id,m.architecture,
-        p.total_cpu_millis,p.total_memory_mib,c.version AS connection_version,c.current_revision_id,
+        p.total_cpu_millis,p.total_memory_mib,p.total_scratch_mib,c.version AS connection_version,c.current_revision_id,
         r.id AS revision_id,r.endpoint_ref,r.provider_endpoint_id,r.secret_version_ref,r.verified_runtime_identity_id
        FROM nodes n
        JOIN runtime_identities ri ON ri.id=n.runtime_identity_id AND ri.backend_kind='portainer'
@@ -369,6 +370,7 @@ export class SQLiteMachineNodeStore {
       architecture: String(row.architecture),
       cpuMillis: integer(row.total_cpu_millis),
       memoryMiB: integer(row.total_memory_mib),
+      scratchMiB: integer(row.total_scratch_mib),
     }));
   }
   async dueTartObservations(now: number, minimumAgeMs = 45_000, limit = 16) {
@@ -735,6 +737,9 @@ export class SQLiteMachineNodeStore {
       string,
       unknown
     >;
+    const changed =
+      canonicalJson(oldConfig.runtimeProfile ?? {}) !==
+      canonicalJson(input.config);
     const time = this.now();
     const config = {
       ...oldConfig,
@@ -745,9 +750,11 @@ export class SQLiteMachineNodeStore {
     await this.db.batchTransaction([
       {
         kind: "run",
-        sql: "UPDATE nodes SET config_json=?,version=version+1,updated_at_ms=? WHERE id=? AND version=? AND admission='disabled'",
+        sql: "UPDATE nodes SET config_json=?,capabilities_json=CASE WHEN ? THEN json_remove(capabilities_json,'$.manualReport') ELSE capabilities_json END,observed_health=CASE WHEN ? THEN 'unknown' ELSE observed_health END,version=version+1,updated_at_ms=? WHERE id=? AND version=? AND admission='disabled'",
         params: [
           JSON.stringify(config),
+          changed ? 1 : 0,
+          changed ? 1 : 0,
           time,
           input.nodeId,
           input.expectedVersion,

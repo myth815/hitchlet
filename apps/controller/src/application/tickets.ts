@@ -1,3 +1,4 @@
+import { validAttestedCapability } from "../domain/attested-capability.js";
 import { admissionOpen } from "./maintenance.js";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -317,9 +318,15 @@ export class TicketService {
           quota.maxLifetimeSeconds,
           "maxLifetimeSeconds",
         ),
-        queueTimeoutSeconds: this.options.queueTimeoutSeconds ?? 1800,
-        provisioningTimeoutSeconds:
-          this.options.provisioningTimeoutSeconds ?? 1200,
+        ...(this.options.queueTimeoutSeconds === undefined
+          ? {}
+          : { queueTimeoutSeconds: this.options.queueTimeoutSeconds }),
+        ...(this.options.provisioningTimeoutSeconds === undefined
+          ? {}
+          : {
+              provisioningTimeoutSeconds:
+                this.options.provisioningTimeoutSeconds,
+            }),
         defaultExpiryPolicyId: String(lifecycle.id),
       });
     } catch (error) {
@@ -841,7 +848,10 @@ export class TicketService {
       hardReasons.add("capabilities_unavailable");
     const capabilityExpiry =
       typeof caps.expiresAt === "string" ? Date.parse(caps.expiresAt) : NaN;
-    if (!Number.isFinite(capabilityExpiry) || capabilityExpiry <= now)
+    if (executionMode(candidate.config_json) === "portainer") {
+      if (!validAttestedCapability(caps))
+        hardReasons.add("capabilities_unavailable");
+    } else if (!Number.isFinite(capabilityExpiry) || capabilityExpiry <= now)
       hardReasons.add("capabilities_expired");
     if (
       caps.cpuHardLimit !== "verified" ||

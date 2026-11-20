@@ -18,6 +18,7 @@ import { SQLiteAdminReadStore } from "../storage/admin-read-store.js";
 import { SQLiteImageCacheStore } from "../storage/image-cache-store.js";
 import {
   validAttestedCapability,
+  portainerCapabilityMatches,
   validTartAttestedCapability,
   validHyperVAttestedCapability,
 } from "../domain/attested-capability.js";
@@ -324,26 +325,14 @@ export class AdminService {
         } catch {
           // An invalid stored capability document cannot be renewed by observation.
         }
-        if (
-          !capabilities ||
-          !validAttestedCapability(capabilities, checkedAt)
-        ) {
-          if (capabilities && capabilityExpired(capabilities, checkedAt)) {
-            if (
-              await this.inventory.recordPortainerObservation(
-                snapshot,
-                "unknown",
-              )
-            )
-              return "expired" as const;
-          } else if (
+        if (!capabilities || !validAttestedCapability(capabilities)) {
+          if (
             await this.inventory.recordPortainerObservation(
               snapshot,
               "degraded",
             )
-          ) {
+          )
             return "unhealthy" as const;
-          }
           return "unchanged" as const;
         }
         try {
@@ -389,7 +378,7 @@ export class AdminService {
       checked: snapshots.length,
       refreshed: outcomes.filter((value) => value === "refreshed").length,
       unhealthy: outcomes.filter((value) => value === "unhealthy").length,
-      expired: outcomes.filter((value) => value === "expired").length,
+      expired: 0, // Docker qualifications are configuration-bound, not time leases.
     };
   }
   async refreshTartObservations() {
@@ -706,21 +695,21 @@ function assertObservationMatches(
   capability: Record<string, unknown>,
   evidence: PortainerEvidence,
 ) {
-  const versionMatch =
-    capability.providerVersion ===
-    `Portainer/${evidence.portainerVersion}; Docker/${evidence.dockerVersion}`;
-  const capacity = capability.capacity;
   if (
+    !portainerCapabilityMatches(capability, {
+      connectionRevisionId: snapshot.revisionId,
+      engineId: snapshot.engineId,
+      architecture: snapshot.architecture,
+      providerEvidence: evidence,
+      capacity: {
+        cpuMillis: snapshot.cpuMillis,
+        memoryMiB: snapshot.memoryMiB,
+        scratchMiB: snapshot.scratchMiB,
+      },
+    }) ||
     evidence.engineId !== snapshot.engineId ||
-    capability.connectionRevisionId !== snapshot.revisionId ||
     evidence.os !== "linux" ||
     evidence.architecture !== snapshot.architecture ||
-    !Array.isArray(capability.architectures) ||
-    !capability.architectures.includes(evidence.architecture) ||
-    !versionMatch ||
-    !isRecord(capacity) ||
-    capacity.cpuMillis !== snapshot.cpuMillis ||
-    capacity.memoryMiB !== snapshot.memoryMiB ||
     snapshot.cpuMillis > evidence.cpuCount * 1000 ||
     snapshot.memoryMiB > Math.floor(evidence.memoryBytes / 1024 ** 2)
   )

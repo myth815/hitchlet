@@ -1,3 +1,4 @@
+import { validAttestedCapability } from "../domain/attested-capability.js";
 import { hyperVTemplateProofMatches } from "./hyperv-facts.js";
 import {
   runtimeStorageMountSchema,
@@ -211,6 +212,9 @@ export class ImageValidationService {
       isHyperV || (isTart && networkPolicy.tartMode !== "isolated");
     const dockerBridge = !isVm && networkPolicy.dockerMode === "bridge";
     const unfiltered = trustedNat || dockerBridge;
+    const realDocker =
+      target.backend_kind === "portainer" &&
+      object(target.config_json, "node config").executionMode === "portainer";
     let tartProofVerified = !isTart;
     if (isTart && this.tartFactsForRevision) {
       try {
@@ -297,8 +301,9 @@ export class ImageValidationService {
       !stringArray(caps.resourceKinds).includes(isVm ? "vm" : "container") ||
       (!noAccess &&
         !accessProtocols.some((protocol) => nodeAccess.includes(protocol))) ||
-      !Number.isFinite(expiry) ||
-      expiry <= this.now() ||
+      (realDocker
+        ? !validAttestedCapability(caps)
+        : !Number.isFinite(expiry) || expiry <= this.now()) ||
       target.admission !== "enabled" ||
       target.machine_admission !== "enabled" ||
       Number(target.connection_enabled) !== 1 ||

@@ -28,8 +28,9 @@ export interface AcquireNormalizationContext {
   };
   readonly maximumTtlSeconds: number;
   readonly maximumLifetimeSeconds: number;
-  readonly queueTimeoutSeconds: number;
-  readonly provisioningTimeoutSeconds: number;
+  /** Explicit installation limit; omission uses request/default within the public schema. */
+  readonly queueTimeoutSeconds?: number;
+  readonly provisioningTimeoutSeconds?: number;
   readonly defaultExpiryPolicyId: string;
 }
 
@@ -121,13 +122,13 @@ export function normalizeAcquireRequest(
     queueTimeoutSeconds: bounded(
       lease?.queueTimeoutSeconds,
       1800,
-      ctx.queueTimeoutSeconds,
+      ctx.queueTimeoutSeconds ?? 86_400,
       "queueTimeoutSeconds",
     ),
     provisioningTimeoutSeconds: bounded(
       lease?.provisioningTimeoutSeconds,
       1200,
-      ctx.provisioningTimeoutSeconds,
+      ctx.provisioningTimeoutSeconds ?? 86_400,
       "provisioningTimeoutSeconds",
     ),
     expiryPolicyId: lease?.expiryPolicyId ?? ctx.defaultExpiryPolicyId,
