@@ -1305,3 +1305,35 @@ describe("consumer console", () => {
     ).toBe(false);
   });
 });
+
+it.each([false, true])(
+  "passes actual App connection failure=%s into maintenance independently of overview",
+  async (failed) => {
+    const h = harness({
+      authPrincipal: {
+        ...principal,
+        role: "admin",
+        scopes: [
+          "tickets:read",
+          "tickets:write",
+          "tickets:revoke",
+          "images:read",
+          "events:read",
+        ],
+      },
+    });
+    if (failed)
+      vi.spyOn(h.client, "health").mockRejectedValue(
+        new Error("synthetic disconnected"),
+      );
+    const element = await mount(h.client);
+    await enter(element, "粘贴一次性显示的 token", "token");
+    await submit(element, ".login-card form");
+    await click(element, "管理");
+    await click(element, "验证、机器与系统维护");
+    const section = [...element.querySelectorAll(".admin-card")].find((n) =>
+      n.textContent?.includes("验证用授权挂载（可选）"),
+    )!;
+    expect(section.querySelector("fieldset")!.disabled).toBe(failed);
+  },
+);

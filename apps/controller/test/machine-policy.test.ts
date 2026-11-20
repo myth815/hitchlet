@@ -434,7 +434,7 @@ describe("Machine policies and the shared SQLite admission fence", () => {
       }),
     ).rejects.toMatchObject({ code: "conflict" });
   });
-  it("projects elapsed capability evidence as expired without changing its attested expiry", async () => {
+  it("retains unchanged capability evidence after its historical expiry without rewriting the report", async () => {
     const f = await fixture();
     const before = await f.db.get<{ capabilities_json: string }>(
       "SELECT capabilities_json FROM nodes WHERE id=?",
@@ -446,8 +446,9 @@ describe("Machine policies and the shared SQLite admission fence", () => {
       () => Date.parse(expiry) + 1,
     );
     const node = (await later.listNodes())[0]!;
-    expect(node.capabilities.verified).toBe(false);
-    expect(node.capabilities.expiresAt).toBe(expiry);
+    expect(node.capabilities.verified).toBe(true);
+    // Management publishes no admission expiry; the historical report remains intact.
+    expect(node.capabilities.expiresAt).toBeNull();
     expect(
       JSON.parse(
         (await f.db.get<{ capabilities_json: string }>(

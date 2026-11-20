@@ -661,6 +661,7 @@ export function App({ client: injected }: { client?: HitchletClient }) {
           {principal && canManage && view === "management" ? (
             <ManagementConsole
               key={`management:${principal.consumerId}`}
+              connected={!!health && !healthError}
               client={client}
               principal={principal}
               onCredentialIssued={setIssuedCredential}

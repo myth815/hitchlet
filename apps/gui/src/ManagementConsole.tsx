@@ -28,10 +28,12 @@ export function ManagementConsole({
   client: sourceClient,
   principal,
   onCredentialIssued,
+  connected = true,
 }: {
   client: HitchletClient;
   principal: AuthenticatedPrincipal;
   onCredentialIssued: (token: string) => void;
+  connected?: boolean;
 }) {
   const [tab, setTab] = React.useState("overview"),
     [busy, setBusy] = React.useState(false),
@@ -445,7 +447,7 @@ export function ManagementConsole({
           client={client}
           principal={principal}
           onCredentialIssued={onCredentialIssued}
-          connected={!!overview.data && !overview.error}
+          connected={connected}
         />
       ) : null}
     </section>

@@ -67,12 +67,12 @@ export function AdminPanel({
     ["tickets:read", "images:read", "events:read"].every((scope) =>
       principal.scopes.includes(scope),
     );
-  const canWrite =
+  const hasWritePermission =
     canRead &&
-    connected &&
     ["tickets:write", "tickets:revoke"].every((scope) =>
       principal.scopes.includes(scope),
     );
+  const canWrite = hasWritePermission && connected;
   const [versions, setVersions] = React.useState<AdminImageVersionSummary[]>(
     [],
   );
@@ -81,6 +81,7 @@ export function AdminPanel({
   const [nodes, setNodes] = React.useState<NodeView[]>([]);
   const [profiles, setProfiles] = React.useState<ProfileView[]>([]);
   const [selectedVersionId, setSelectedVersionId] = React.useState("");
+  const [targetRefresh, setTargetRefresh] = React.useState(0);
   const [selectedArtifactId, setSelectedArtifactId] = React.useState("");
   const [detail, setDetail] = React.useState<Awaited<
     ReturnType<AdminClient["draftVersion"]>
@@ -88,6 +89,7 @@ export function AdminPanel({
   const [runs, setRuns] = React.useState<AdminValidationHistoryItem[]>([]);
   const runsRef = React.useRef(runs);
   runsRef.current = runs;
+  const [runsLoaded, setRunsLoaded] = React.useState(false);
   const [selectedRunId, setSelectedRunId] = React.useState("");
   const [selectedNodeId, setSelectedNodeId] = React.useState("");
   const [profileId, setProfileId] = React.useState("");
@@ -121,6 +123,7 @@ export function AdminPanel({
   const detailArtifacts = detail?.artifacts ?? [];
   const canValidate =
     canWrite &&
+    runsLoaded &&
     !!selectedSummary &&
     ["draft", "validating"].includes(selectedSummary.status) &&
     detailArtifacts.length > 0 &&
@@ -130,6 +133,7 @@ export function AdminPanel({
     !runs.some(activeValidation);
   const canPublish =
     canWrite &&
+    runsLoaded &&
     !!selectedSummary &&
     ["draft", "validating"].includes(selectedSummary.status) &&
     !!selectedRun &&
@@ -143,18 +147,31 @@ export function AdminPanel({
 
   const refreshVersions = React.useCallback(
     async (isCancelled: () => boolean) => {
-      const items = await client.admin.imageVersions(isCancelled);
-      if (!isCancelled()) setVersions(items);
+      try {
+        const items = await client.admin.imageVersions(isCancelled);
+        if (!isCancelled()) setVersions(items);
+      } catch (cause) {
+        if (!isCancelled()) setVersions([]);
+        throw cause;
+      }
     },
     [client],
   );
   const refreshRuns = React.useCallback(
     async (versionId: string, isCancelled: () => boolean) => {
-      const items = await client.admin.validationHistory(
-        versionId,
-        isCancelled,
-      );
-      if (!isCancelled()) setRuns(items);
+      try {
+        const items = await client.admin.validationHistory(
+          versionId,
+          isCancelled,
+        );
+        if (!isCancelled()) {
+          setRuns(items);
+          setRunsLoaded(true);
+        }
+      } catch (cause) {
+        if (!isCancelled()) setRunsLoaded(false);
+        throw cause;
+      }
     },
     [client],
   );
@@ -276,6 +293,8 @@ export function AdminPanel({
     let active = true;
     const cancelled = () => !active || epoch !== lifecycle.current;
     setAliasesLoaded(false);
+    setDetail(null);
+    setRunsLoaded(false);
     void Promise.all([
       client.admin
         .draftVersion(selectedSummary.id, cancelled)
@@ -289,7 +308,11 @@ export function AdminPanel({
       .then(([draft]) => {
         if (!cancelled()) {
           setDetail(draft);
-          setSelectedArtifactId(draft?.artifacts[0]?.id ?? "");
+          setSelectedArtifactId((current) =>
+            draft?.artifacts.some((a) => a.id === current)
+              ? current
+              : (draft?.artifacts[0]?.id ?? ""),
+          );
         }
       })
       .catch((cause: unknown) => {
@@ -304,6 +327,7 @@ export function AdminPanel({
     selectedSummary?.entityVersion,
     selectedSummary?.id,
     selectedSummary?.status,
+    targetRefresh,
   ]);
 
   React.useEffect(() => {
@@ -323,7 +347,12 @@ export function AdminPanel({
     return () => {
       active = false;
     };
-  }, [refreshAliases, selectedSummary?.imageId, selectedSummary?.status]);
+  }, [
+    refreshAliases,
+    selectedSummary?.imageId,
+    selectedSummary?.status,
+    targetRefresh,
+  ]);
 
   React.useEffect(() => {
     if (!selectedSummary || !selectedRunIsActive) return;
@@ -348,10 +377,14 @@ export function AdminPanel({
         ]);
         if (!cancelled()) {
           setRuns(foundRuns);
+          setRunsLoaded(true);
           setVersions(foundVersions);
         }
       } catch (cause) {
-        if (!cancelled()) setError(errorMessage(cause));
+        if (!cancelled()) {
+          setRunsLoaded(false);
+          setError(errorMessage(cause));
+        }
       } finally {
         running = false;
       }
@@ -385,7 +418,7 @@ export function AdminPanel({
   }
 
   async function schedule() {
-    if (!selectedSummary || !detailArtifacts[0]) return;
+    if (!canValidate || !selectedSummary || !detailArtifacts[0]) return;
     await runAction(async (isCancelled) => {
       let receipt;
       try {
@@ -527,7 +560,11 @@ export function AdminPanel({
         <button
           className="secondary-button"
           disabled={busy}
-          onClick={() => void refreshVersions(() => false)}
+          onClick={() =>
+            void refreshVersions(() => false)
+              .then(() => setTargetRefresh((value) => value + 1))
+              .catch((cause) => setError(errorMessage(cause)))
+          }
         >
           刷新管理数据 ↻
         </button>
@@ -545,8 +582,8 @@ export function AdminPanel({
       <MachinePanel
         client={client}
         machines={machines}
-        connected={machineConnection}
-        canWrite={canWrite}
+        connected={machineConnection && connected}
+        canWrite={hasWritePermission}
         onRefresh={async () => {
           const epoch = lifecycle.current;
           try {

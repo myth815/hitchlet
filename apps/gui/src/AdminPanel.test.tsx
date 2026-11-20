@@ -3,8 +3,13 @@ import React from "react";
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HitchletClient, type AuthenticatedPrincipal } from "@hitchlet/sdk";
+import {
+  ComputeClientError,
+  HitchletClient,
+  type AuthenticatedPrincipal,
+} from "@hitchlet/sdk";
 import { AdminPanel } from "./AdminPanel.js";
+import { ManagementConsole } from "./ManagementConsole.js";
 
 (
   globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT: boolean }
@@ -29,7 +34,9 @@ const principal: AuthenticatedPrincipal = {
 const roots: Root[] = [];
 
 function successfulFixture() {
-  const client = new HitchletClient("https://controller.test");
+  const client = new HitchletClient("https://controller.test", {
+    fetch: async () => Response.json([]),
+  });
   vi.spyOn(client.admin, "imageVersions").mockResolvedValue([
     {
       id: versionId,
@@ -632,4 +639,260 @@ describe("administrator validation workflow", () => {
     );
     expect(element.textContent).toContain("不会自动重发或新建验证");
   });
+});
+
+function maintenanceMachine(): Awaited<
+  ReturnType<HitchletClient["admin"]["machines"]>
+>[number] {
+  const amounts = { cpuMillis: 1000, memoryMiB: 1000, scratchMiB: 1000 };
+  return {
+    machineId: imageId,
+    name: "Synthetic shared machine",
+    usageMode: "shared",
+    admission: "enabled",
+    version: 2,
+    hostObservation: {
+      state: "fresh",
+      humanPresence: "present",
+      cpuPercent: 1,
+      memoryPercent: 1,
+      memoryPressurePercent: 1,
+      memoryPressureSource: "linux_memavailable",
+      unmanagedActivityHold: null,
+      receivedAtMs: 100,
+      probeStatus: "partial",
+      sessionsComplete: false,
+      interactiveSessionCount: 1,
+    },
+    capacity: amounts,
+    systemReserve: amounts,
+    humanUsePolicy: {
+      blockShutdownForAnyInteractiveSession: true,
+      blockShutdownOnUnknownPresence: true,
+      maximumObservationAgeSeconds: 30,
+      admissionDuringInteraction: "within_reserved_budget",
+      humanReserved: amounts,
+      systemReserve: amounts,
+      attendedMaximum: amounts,
+      unattendedMaximum: amounts,
+      cpuPressureLimitPercent: 80,
+      memoryPressureLimitPercent: 80,
+    },
+    policySource: "configured",
+    physicalUsage: { cpuMillis: 0, memoryMiB: 0, scratchMiB: 0 },
+    workloadUsage: { cpuMillis: 0, memoryMiB: 0, scratchMiB: 0 },
+    holds: [],
+    dependencyTree: [],
+    shutdownDisabledReasons: [],
+    canAdmitTenants: true,
+    disabledReasons: [],
+    nodes: [],
+  };
+}
+async function maintenanceFixture(connected = true) {
+  const { client, publish } = successfulFixture(),
+    machine = maintenanceMachine();
+  // This test exercises real Console -> AdminPanel -> MachinePanel DOM behavior;
+  // SDK method doubles supply synthetic snapshots. Request recovery itself has
+  // separate real SDK/HTTP tests in Management.test.tsx.
+  vi.spyOn(client, "withManagementPreparation").mockReturnValue(client);
+  vi.spyOn(client.admin.management, "overview").mockRejectedValue(
+    new ComputeClientError({
+      code: "storage_unavailable",
+      message: "overview 503",
+      statusCode: 503,
+      requestId: principal.consumerId,
+      retryable: true,
+    }),
+  );
+  vi.mocked(client.admin.machines).mockResolvedValue([machine]);
+  const preview = vi
+    .spyOn(client.admin, "previewHumanUsePolicy")
+    .mockResolvedValue({ machine, canApply: true, updateDisabledReasons: [] });
+  const save = vi
+    .spyOn(client.admin, "updateHumanUsePolicy")
+    .mockResolvedValue({
+      machineId: machine.machineId,
+      version: 3,
+      policy: machine.humanUsePolicy!,
+    });
+  publish.mockResolvedValue({
+    versionId,
+    status: "published",
+    entityVersion: 8,
+  });
+  const element = document.createElement("div"),
+    root = createRoot(element);
+  roots.push(root);
+  await act(async () => {
+    root.render(
+      <ManagementConsole
+        client={client}
+        principal={principal}
+        connected={connected}
+        onCredentialIssued={() => {}}
+      />,
+    );
+    await new Promise((r) => setTimeout(r, 0));
+  });
+  await maintenanceClick(element, "验证、机器与系统维护");
+  return { client, publish, preview, save, element, machine };
+}
+function maintenanceButton(element: Element, label: string) {
+  const b = [...element.querySelectorAll("button")].find((b) =>
+    b.textContent?.includes(label),
+  );
+  if (!b) throw new Error(`Missing ${label}`);
+  return b;
+}
+async function maintenanceClick(element: Element, label: string) {
+  await act(async () => {
+    maintenanceButton(element, label).click();
+    await new Promise((r) => setTimeout(r, 0));
+  });
+}
+async function selectMaintenanceRun(element: Element) {
+  const select = [...element.querySelectorAll("select")].find((s) =>
+    s.textContent?.includes(runId.slice(0, 8)),
+  )!;
+  await act(async () => {
+    select.value = runId;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+it("permits machine policy and image publish when overview alone is 503 and target reads succeed", async () => {
+  const f = await maintenanceFixture();
+  expect(f.element.textContent).toContain("overview 503");
+  await selectMaintenanceRun(f.element);
+  expect(maintenanceButton(f.element, "按当前entityVersion发布").disabled).toBe(
+    false,
+  );
+  await maintenanceClick(f.element, "预演策略影响");
+  await maintenanceClick(f.element, "保存已预演策略");
+  expect(f.preview).toHaveBeenCalledTimes(1);
+  expect(f.save).toHaveBeenCalledWith(
+    f.machine.machineId,
+    { expectedVersion: 2, policy: f.machine.humanUsePolicy },
+    expect.any(String),
+    expect.any(Function),
+  );
+  await clickPublish(f.element);
+  expect(f.publish).toHaveBeenCalledWith(
+    versionId,
+    7,
+    expect.any(String),
+    expect.any(Function),
+  );
+});
+
+it("retains the actual disconnected state despite successful cached target snapshots", async () => {
+  const f = await maintenanceFixture(false);
+  await selectMaintenanceRun(f.element);
+  expect(f.element.textContent).toContain("控制器连接中断");
+  expect(maintenanceButton(f.element, "按当前entityVersion发布").disabled).toBe(
+    true,
+  );
+  await maintenanceClick(f.element, "预演策略影响");
+  await clickPublish(f.element);
+  expect(f.preview).not.toHaveBeenCalled();
+  expect(f.publish).not.toHaveBeenCalled();
+});
+
+it("stops cached machine writes on its own read failure and resumes after its own successful refresh", async () => {
+  const f = await maintenanceFixture();
+  await selectMaintenanceRun(f.element);
+  await maintenanceClick(f.element, "预演策略影响");
+  expect(maintenanceButton(f.element, "保存已预演策略").disabled).toBe(false);
+  vi.mocked(f.client.admin.machines).mockRejectedValue(
+    new Error("machine read unavailable"),
+  );
+  await maintenanceClick(f.element, "刷新机器观测与依赖");
+  expect(f.element.textContent).toContain("以下为历史依赖数据");
+  await maintenanceClick(f.element, "保存已预演策略");
+  expect(f.save).not.toHaveBeenCalled();
+  // The unrelated image still has its own successful snapshots.
+  expect(maintenanceButton(f.element, "按当前entityVersion发布").disabled).toBe(
+    false,
+  );
+  vi.mocked(f.client.admin.machines).mockResolvedValue([f.machine]);
+  await maintenanceClick(f.element, "刷新机器观测与依赖");
+  await maintenanceClick(f.element, "预演策略影响");
+  await maintenanceClick(f.element, "保存已预演策略");
+  expect(f.save).toHaveBeenCalledTimes(1);
+});
+
+it("does not publish cached image success after its own list read fails, and recovers by reading its target again", async () => {
+  const f = await maintenanceFixture();
+  await selectMaintenanceRun(f.element);
+  expect(maintenanceButton(f.element, "按当前entityVersion发布").disabled).toBe(
+    false,
+  );
+  const versions = await f.client.admin.imageVersions();
+  vi.mocked(f.client.admin.imageVersions).mockRejectedValue(
+    new Error("image read unavailable"),
+  );
+  await maintenanceClick(f.element, "刷新管理数据");
+  expect(f.element.textContent).toContain("image read unavailable");
+  await clickPublish(f.element);
+  expect(f.publish).not.toHaveBeenCalled();
+  vi.mocked(f.client.admin.imageVersions).mockResolvedValue(versions);
+  await maintenanceClick(f.element, "刷新管理数据");
+  await selectMaintenanceRun(f.element);
+  await clickPublish(f.element);
+  expect(f.publish).toHaveBeenCalledTimes(1);
+});
+
+it("does not reuse a passed run or artifact when the newly selected target history fails", async () => {
+  const f = await maintenanceFixture();
+  await selectMaintenanceRun(f.element);
+  const versions = await f.client.admin.imageVersions();
+  const history = await f.client.admin.validationHistory(versionId);
+  vi.mocked(f.client.admin.validationHistory).mockRejectedValue(
+    new Error("target history unavailable"),
+  );
+  vi.mocked(f.client.admin.imageVersions).mockResolvedValue(
+    versions.map((v) => ({ ...v, entityVersion: 8 })),
+  );
+  await maintenanceClick(f.element, "刷新管理数据");
+  expect(f.element.textContent).toContain("target history unavailable");
+  expect(maintenanceButton(f.element, "按当前entityVersion发布").disabled).toBe(
+    true,
+  );
+  await clickPublish(f.element);
+  expect(f.publish).not.toHaveBeenCalled();
+  vi.mocked(f.client.admin.validationHistory).mockResolvedValue(history);
+  await maintenanceClick(f.element, "刷新管理数据");
+  await selectMaintenanceRun(f.element);
+  expect(maintenanceButton(f.element, "按当前entityVersion发布").disabled).toBe(
+    false,
+  );
+  await clickPublish(f.element);
+  expect(f.publish).toHaveBeenCalledWith(
+    versionId,
+    8,
+    expect.any(String),
+    expect.any(Function),
+  );
+});
+
+it("refreshes the selected published alias normally instead of leaving it unloaded on same-version refresh", async () => {
+  const f = await maintenanceFixture();
+  const versions = await f.client.admin.imageVersions();
+  vi.mocked(f.client.admin.imageVersions).mockResolvedValue(
+    versions.map((v) => ({ ...v, status: "published" })),
+  );
+  const aliases = vi
+    .spyOn(f.client.admin, "imageAliases")
+    .mockResolvedValue([]);
+  await maintenanceClick(f.element, "刷新管理数据");
+  expect(maintenanceButton(f.element, "确认更新别名到所选版本").disabled).toBe(
+    false,
+  );
+  expect(aliases).toHaveBeenCalledTimes(1);
+  await maintenanceClick(f.element, "刷新管理数据");
+  expect(maintenanceButton(f.element, "确认更新别名到所选版本").disabled).toBe(
+    false,
+  );
+  expect(aliases).toHaveBeenCalledTimes(2);
 });
