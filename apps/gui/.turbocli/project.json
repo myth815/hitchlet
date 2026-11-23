@@ -1,0 +1,23 @@
+{
+  "protocolVersion": "1.0",
+  "featureRoom": {
+    "scope": {
+      "implementation": [
+        "src/**/*.tsx",
+        "src/**/*.ts",
+        "!src/**/*.test.tsx",
+        "!src/**/*.test.ts"
+      ],
+      "tests": ["src/**/*.test.tsx"],
+      "assets": []
+    },
+    "shared": [],
+    "projectLevel": [
+      "src/App.tsx",
+      "src/main.tsx",
+      "src/ManagementUI.tsx",
+      "src/ManagementConsole.tsx"
+    ],
+    "exclude": []
+  }
+}
