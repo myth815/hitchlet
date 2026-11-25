@@ -93,7 +93,6 @@ it.each([
 it.each([
   { cpuHardLimit: "unverified" },
   { memoryHardLimit: "unsupported" },
-  { expiresAt: new Date(now).toISOString() },
   { manualReport: { ...input.report, scopes: {} } },
   { offline: true },
 ])("retains required base health evidence %j", (change) => {
@@ -101,3 +100,25 @@ it.each([
     false,
   );
 });
+
+it.each([
+  ["a historical expiresAt", new Date(0).toISOString()],
+  ["an unparsable expiresAt", "not-a-date"],
+  ["an absent expiresAt", undefined],
+  ["a future expiresAt", new Date(now + 600000).toISOString()],
+])(
+  "keeps a Docker qualification valid for %s without treating it as a health fact",
+  (_label, expiresAt) => {
+    const candidate: Record<string, unknown> = { ...capability, expiresAt };
+    expect(validAttestedCapability(candidate, now)).toBe(true);
+    expect(validAttestedCapability({ ...candidate, offline: true }, now)).toBe(
+      false,
+    );
+    expect(
+      validAttestedCapability(
+        { ...candidate, cpuHardLimit: "unverified" },
+        now,
+      ),
+    ).toBe(false);
+  },
+);

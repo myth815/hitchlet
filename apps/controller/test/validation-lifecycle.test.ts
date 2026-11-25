@@ -1,4 +1,5 @@
 import { SQLiteImagePublicationStore } from "../src/storage/image-publication-store.js";
+import { validAttestedCapability } from "../src/domain/attested-capability.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { randomUUID, createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -1269,8 +1270,12 @@ describe("publication commit fences and grant revocation", () => {
       ),
     ).toEqual({ ownership: "reference", cleanup_policy: "keep" });
   });
-  it.each(["capability expiry", "validation expiry", "storage revocation"])(
-    "rejects %s while the runtime probe is awaited",
+  it.each([
+    "capability timestamp passes",
+    "validation report ages",
+    "storage grant is revoked",
+  ])(
+    "rechecks publication when the %s during the runtime probe",
     async (scenario) => {
       const f = await fixture();
       const storage = await f.admin.createProfile("storage", {
@@ -1309,80 +1314,78 @@ describe("publication commit fences and grant revocation", () => {
       expect(await f.admin.getValidation(run.validationId)).toMatchObject({
         state: "releasing",
       });
-      // Exercise the supported finite report expiry using the real cleanup transaction, before report immutability begins.
-      const batch = f.db.batchTransaction.bind(f.db);
-      const finiteExpiry =
-        scenario === "validation expiry"
-          ? vi
-              .spyOn(f.db, "batchTransaction")
-              .mockImplementation((statements) =>
-                batch(
-                  statements.map((statement) =>
-                    statement.sql.startsWith(
-                      "UPDATE image_validations SET state=CASE",
-                    )
-                      ? {
-                          ...statement,
-                          sql: statement.sql.replace(
-                            "SET state=CASE",
-                            `SET evidence_expires_at_ms=${f.now() + 1000},state=CASE`,
-                          ),
-                        }
-                      : statement,
-                  ),
-                ),
-              )
-          : undefined;
+      expect(
+        await f.db.get(
+          "SELECT json_extract(config_json,'$.executionMode') AS mode FROM nodes WHERE id=?",
+          [f.node.id],
+        ),
+      ).toEqual({ mode: "portainer" });
       await f.worker().run(await f.cleanupId());
-      finiteExpiry?.mockRestore();
       const store = new SQLiteImagePublicationStore(f.db, f.now);
       let probes = 0;
-      await expect(
-        store.publish(f.draft.versionId, await f.version(), async () => {
-          probes++;
-          if (scenario === "storage revocation")
-            await f.admin.revokeGrants(
-              {
-                profileKind: "storage",
-                profileRevisionId: storage.revisionId,
-                expectedProfileVersion: 1,
-                reason: "probe race",
-              },
-              f.request.requestedBy,
-              "probe-race",
-            );
-          else if (scenario === "capability expiry") {
-            const row = await f.db.get<{ capabilities_json: string }>(
-              "SELECT capabilities_json FROM nodes WHERE id=?",
-              [f.node.id],
-            );
-            f.advance(
-              Date.parse(JSON.parse(row!.capabilities_json).expiresAt) -
-                f.now(),
-            );
-          } else {
-            const row = await f.db.get<{ evidence_expires_at_ms: bigint }>(
-              "SELECT evidence_expires_at_ms FROM image_validations WHERE id=?",
-              [run.validationId],
-            );
-            f.advance(Number(row!.evidence_expires_at_ms) - f.now());
-          }
-          return true;
-        }),
-      ).rejects.toMatchObject({ code: "STORAGE_CAS_FAILED" });
+      const probe = async () => {
+        probes++;
+        if (scenario === "storage grant is revoked")
+          await f.admin.revokeGrants(
+            {
+              profileKind: "storage",
+              profileRevisionId: storage.revisionId,
+              expectedProfileVersion: 1,
+              reason: "probe race",
+            },
+            f.request.requestedBy,
+            "probe-race",
+          );
+        else if (scenario === "capability timestamp passes") {
+          const row = await f.db.get<{ capabilities_json: string }>(
+            "SELECT capabilities_json FROM nodes WHERE id=?",
+            [f.node.id],
+          );
+          // Cross the declared timestamp with all observed capabilities intact.
+          const before = JSON.parse(row!.capabilities_json);
+          expect(validAttestedCapability(before, f.now())).toBe(true);
+          const expiresAt = Date.parse(before.expiresAt);
+          expect(Number.isFinite(expiresAt)).toBe(true);
+          f.advance(expiresAt - f.now() + 1);
+          expect(validAttestedCapability(before, f.now())).toBe(true);
+        } else {
+          const row = await f.db.get<{ evidence_expires_at_ms: bigint }>(
+            "SELECT evidence_expires_at_ms FROM image_validations WHERE id=?",
+            [run.validationId],
+          );
+          // Portainer reports retain their validity while the configuration matches.
+          expect(row!.evidence_expires_at_ms).toBeNull();
+          f.advance(86_400_000);
+        }
+        return true;
+      };
+      const publication = store.publish(
+        f.draft.versionId,
+        await f.version(),
+        probe,
+      );
+      if (scenario === "storage grant is revoked")
+        await expect(publication).rejects.toMatchObject({
+          code: "STORAGE_CAS_FAILED",
+        });
+      else
+        await expect(publication).resolves.toMatchObject({
+          status: "published",
+        });
       expect(probes).toBe(1);
-      expect(
-        (await f.db.get<{ status: string }>(
-          "SELECT status FROM image_versions WHERE id=?",
-          [f.draft.versionId],
-        ))!.status,
-      ).not.toBe("published");
-      if (scenario === "storage revocation") {
-        const probe = vi.fn(async () => true);
+      const storedStatus = await f.db.get<{ status: string }>(
+        "SELECT status FROM image_versions WHERE id=?",
+        [f.draft.versionId],
+      );
+      if (scenario === "storage grant is revoked")
+        expect(storedStatus!.status).not.toBe("published");
+      else expect(storedStatus).toEqual({ status: "published" });
+      if (scenario === "storage grant is revoked") {
+        const retryProbe = vi.fn(async () => true);
         expect(
-          await store.publish(f.draft.versionId, await f.version(), probe),
+          await store.publish(f.draft.versionId, await f.version(), retryProbe),
         ).toBeUndefined();
-        expect(probe).not.toHaveBeenCalled();
+        expect(retryProbe).not.toHaveBeenCalled();
       }
     },
   );
