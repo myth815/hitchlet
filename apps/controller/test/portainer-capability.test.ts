@@ -46,15 +46,15 @@ it("accepts resource-only evidence without fabricating optional scopes or filter
   expect(PortainerCapabilityAttestationSchema.parse(input).report).toEqual(
     input.report,
   );
-  expect(validAttestedCapability(capability, now)).toBe(true);
+  expect(validAttestedCapability(capability)).toBe(true);
   expect(
-    validAttestedCapability(
-      { ...capability, networkPolicyEnforcement: "verified" },
-      now,
-    ),
+    validAttestedCapability({
+      ...capability,
+      networkPolicyEnforcement: "verified",
+    }),
   ).toBe(false);
   expect(
-    validAttestedCapability({ ...capability, supportedAccess: ["ssh"] }, now),
+    validAttestedCapability({ ...capability, supportedAccess: ["ssh"] }),
   ).toBe(false);
   const report = {
     ...input.report,
@@ -63,15 +63,12 @@ it("accepts resource-only evidence without fabricating optional scopes or filter
     ),
   };
   expect(
-    validAttestedCapability(
-      {
-        ...capability,
-        networkPolicyEnforcement: "verified",
-        supportedAccess: ["ssh"],
-        manualReport: report,
-      },
-      now,
-    ),
+    validAttestedCapability({
+      ...capability,
+      networkPolicyEnforcement: "verified",
+      supportedAccess: ["ssh"],
+      manualReport: report,
+    }),
   ).toBe(true);
 });
 
@@ -96,9 +93,7 @@ it.each([
   { manualReport: { ...input.report, scopes: {} } },
   { offline: true },
 ])("retains required base health evidence %j", (change) => {
-  expect(validAttestedCapability({ ...capability, ...change }, now)).toBe(
-    false,
-  );
+  expect(validAttestedCapability({ ...capability, ...change })).toBe(false);
 });
 
 it.each([
@@ -110,15 +105,12 @@ it.each([
   "keeps a Docker qualification valid for %s without treating it as a health fact",
   (_label, expiresAt) => {
     const candidate: Record<string, unknown> = { ...capability, expiresAt };
-    expect(validAttestedCapability(candidate, now)).toBe(true);
-    expect(validAttestedCapability({ ...candidate, offline: true }, now)).toBe(
+    expect(validAttestedCapability(candidate)).toBe(true);
+    expect(validAttestedCapability({ ...candidate, offline: true })).toBe(
       false,
     );
     expect(
-      validAttestedCapability(
-        { ...candidate, cpuHardLimit: "unverified" },
-        now,
-      ),
+      validAttestedCapability({ ...candidate, cpuHardLimit: "unverified" }),
     ).toBe(false);
   },
 );

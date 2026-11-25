@@ -1343,11 +1343,11 @@ describe("publication commit fences and grant revocation", () => {
           );
           // Cross the declared timestamp with all observed capabilities intact.
           const before = JSON.parse(row!.capabilities_json);
-          expect(validAttestedCapability(before, f.now())).toBe(true);
+          expect(validAttestedCapability(before)).toBe(true);
           const expiresAt = Date.parse(before.expiresAt);
-          expect(Number.isFinite(expiresAt)).toBe(true);
+          expect(expiresAt).toBeGreaterThan(f.now());
           f.advance(expiresAt - f.now() + 1);
-          expect(validAttestedCapability(before, f.now())).toBe(true);
+          expect(f.now()).toBeGreaterThan(expiresAt);
         } else {
           const row = await f.db.get<{ evidence_expires_at_ms: bigint }>(
             "SELECT evidence_expires_at_ms FROM image_validations WHERE id=?",
