@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import React from "react";
 import { act } from "react";
+import { ImageSetup } from "./ImageSetup.js";
+import type { ManagementUI } from "./ManagementUI.js";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -895,4 +897,247 @@ it("refreshes the selected published alias normally instead of leaving it unload
     false,
   );
   expect(aliases).toHaveBeenCalledTimes(2);
+});
+
+// Focused regression for the image-management original-cache receipt. The page only
+// stubs SDK reads/writes; the real ImageSetup component state machine is exercised.
+const cacheNodeA = "00000000-0000-4000-8000-0000000000a1";
+const cacheNodeB = "00000000-0000-4000-8000-0000000000b1";
+const cacheArtifact = "00000000-0000-4000-8000-0000000000c1";
+const cacheOperationA = "00000000-0000-4000-8000-0000000000a2";
+const cacheOperationB = "00000000-0000-4000-8000-0000000000b2";
+const cacheErrorText =
+  "原缓存回执读取失败；当前状态未知，请刷新后检查原操作。";
+
+function cacheReceipt(
+  operationId: string,
+  nodeId: string,
+  state: "succeeded" | "running" | "failed",
+  attemptCount: number,
+) {
+  return {
+    operationId,
+    nodeId,
+    artifactId: cacheArtifact,
+    kind: "image-cache.pull" as const,
+    state,
+    attemptCount,
+    nextCheckAtMs: 3,
+    cache: {
+      desiredState: "present" as const,
+      observedState: "ready" as const,
+      localRef: "registry.test/image:local",
+      sizeMiB: 512,
+      digestVerifiedAtMs: 2,
+      pinnedUntilMs: null,
+    },
+    diagnostic: null,
+  };
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void,
+    reject!: (cause: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
+}
+
+function cacheFixture() {
+  const client = new HitchletClient("https://controller.test", {
+    fetch: async () => Response.json([]),
+  });
+  const node = (id: string, name: string) => ({
+    id,
+    machineId: "00000000-0000-4000-8000-000000000006",
+    name,
+    backendKind: "portainer" as const,
+    providerConnectionId: "00000000-0000-4000-8000-000000000009",
+    runtimeIdentityId: "00000000-0000-4000-8000-000000000010",
+    poolId: "00000000-0000-4000-8000-000000000011",
+    admission: "enabled" as const,
+    observedHealth: "healthy" as const,
+    capabilities: {
+      verified: true,
+      expiresAt: null,
+      architectures: ["amd64" as const],
+      guestOs: ["linux" as const],
+      resourceKinds: ["container" as const],
+      supportedAccess: ["ssh" as const],
+    },
+    observedAtMs: 3,
+    version: 2,
+  });
+  vi.spyOn(client.admin, "imageVersions").mockResolvedValue([
+    {
+      id: versionId,
+      imageId,
+      imageName: "Linux runtime",
+      description: "fixture",
+      version: "v1",
+      status: "validating",
+      entityVersion: 7,
+      createdAtMs: 1,
+      updatedAtMs: 2,
+      publishedAtMs: null,
+      artifacts: [
+        {
+          id: cacheArtifact,
+          architecture: "amd64",
+          digest: `sha256:${"a".repeat(64)}`,
+          minimumResources: { cpuMillis: 1000, memoryMiB: 1024, scratchMiB: 0 },
+        },
+      ],
+    },
+  ]);
+  vi.spyOn(client.admin, "nodes").mockResolvedValue([
+    node(cacheNodeA, "node-a"),
+    node(cacheNodeB, "node-b"),
+  ]);
+  vi.spyOn(client.admin.management, "consumers").mockResolvedValue([]);
+  const operation = (nId: string, opId: string) => ({
+    id: opId,
+    ticketId: null,
+    nodeId: nId,
+    runtimeIdentityId: "00000000-0000-4000-8000-000000000010",
+    connectionRevisionId: null,
+    kind: "image-cache.pull",
+    state: "succeeded" as const,
+    attemptCount: 1,
+    version: 2,
+    nextCheckAtMs: 3,
+    updatedAtMs: 3,
+    errorCode: null,
+    retryable: false,
+  });
+  const operationsRead = vi
+    .spyOn(client.admin.management, "operations")
+    .mockResolvedValue([
+      operation(cacheNodeA, cacheOperationA),
+      operation(cacheNodeB, cacheOperationB),
+    ]);
+  const receipt = vi
+    .spyOn(client.admin, "cacheOperationReceipt")
+    .mockResolvedValue(
+      cacheReceipt(cacheOperationA, cacheNodeA, "succeeded", 1),
+    );
+  return { client, receipt, operationsRead };
+}
+
+async function mountCacheUi(client: HitchletClient) {
+  const element = document.createElement("div"),
+    root = createRoot(element);
+  roots.push(root);
+  const ui: ManagementUI = {
+    client,
+    principal,
+    disabled: false,
+    action: async (_label, work) => {
+      await work("cache-test-key");
+      return true;
+    },
+  };
+  await act(async () => {
+    root.render(<ImageSetup {...ui} />);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+  return element;
+}
+
+function cacheSelect(element: Element, label: string) {
+  const found = [...element.querySelectorAll("label")].find((item) =>
+    item.textContent?.trim().startsWith(label),
+  );
+  if (!found)
+    throw new Error(`Original cache control ${label} was not rendered`);
+  return found.querySelector("select") as HTMLSelectElement;
+}
+
+function cacheCheckButton(element: Element) {
+  const found = [...element.querySelectorAll("button")].find((item) =>
+    item.textContent?.includes("检查原缓存回执"),
+  );
+  if (!found) throw new Error("Original cache receipt control was not rendered");
+  return found as HTMLButtonElement;
+}
+
+async function cacheAction(run: () => void) {
+  await act(async () => {
+    run();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+async function cacheChoose(element: Element, label: string, value: string) {
+  await cacheAction(() => {
+    const select = cacheSelect(element, label);
+    select.value = value;
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+}
+
+async function cacheCheck(element: Element) {
+  await cacheAction(() => cacheCheckButton(element).click());
+}
+
+describe("image-management original cache receipt", () => {
+  it("shows the original receipt for the current selection and keeps the SDK call bound to the selected node and operation", async () => {
+    const { client, receipt } = cacheFixture();
+    const element = await mountCacheUi(client);
+    await cacheChoose(element, "Node", cacheNodeA);
+    await cacheChoose(element, "原缓存操作", cacheOperationA);
+    expect(cacheCheckButton(element).disabled).toBe(false);
+    await cacheCheck(element);
+    expect(receipt).toHaveBeenCalledTimes(1);
+    expect(receipt).toHaveBeenCalledWith(cacheNodeA, cacheOperationA);
+    expect(element.textContent).toContain(
+      `操作 ${cacheOperationA} · succeeded · 尝试 1`,
+    );
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("drops a late successful response after the node selection changed and shows no error either", async () => {
+    const { client, receipt } = cacheFixture();
+    const pending = deferred<ReturnType<typeof cacheReceipt>>();
+    receipt.mockReturnValue(pending.promise);
+    const element = await mountCacheUi(client);
+    await cacheChoose(element, "Node", cacheNodeA);
+    await cacheChoose(element, "原缓存操作", cacheOperationA);
+    await cacheAction(() => cacheCheckButton(element).click());
+    expect(receipt).toHaveBeenCalledWith(cacheNodeA, cacheOperationA);
+    // Switching node clears the original operation, so the second check is not sent.
+    await cacheChoose(element, "Node", cacheNodeB);
+    expect(cacheSelect(element, "原缓存操作").value).toBe("");
+    expect(cacheCheckButton(element).disabled).toBe(true);
+    await cacheAction(() => {
+      pending.resolve(cacheReceipt(cacheOperationA, cacheNodeA, "succeeded", 3));
+    });
+    expect(element.textContent).not.toContain(cacheOperationA);
+    expect(element.textContent).not.toContain("尝试 3");
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+    expect(receipt).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops a late failed response after the node selection changed instead of showing the read error", async () => {
+    const { client, receipt } = cacheFixture();
+    const pending = deferred<ReturnType<typeof cacheReceipt>>();
+    receipt.mockReturnValue(pending.promise);
+    const element = await mountCacheUi(client);
+    await cacheChoose(element, "Node", cacheNodeA);
+    await cacheChoose(element, "原缓存操作", cacheOperationA);
+    await cacheAction(() => cacheCheckButton(element).click());
+    await cacheChoose(element, "Node", cacheNodeB);
+    await cacheAction(() => {
+      pending.reject(new ComputeClientError({
+        code: "INVALID_RESPONSE",
+        message: "receipt unavailable",
+      }));
+    });
+    expect(element.textContent).not.toContain(cacheErrorText);
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+    expect(cacheSelect(element, "原缓存操作").value).toBe("");
+    expect(cacheCheckButton(element).disabled).toBe(true);
+  });
 });

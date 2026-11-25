@@ -46,6 +46,12 @@ export function ImageSetup({ client, disabled, action }: ManagementUI) {
       ReturnType<typeof client.admin.cacheOperationReceipt>
     > | null>(null);
   const [cacheError, setCacheError] = React.useState("");
+  const receiptEpoch = React.useRef(0);
+  const invalidateReceipt = () => {
+    receiptEpoch.current += 1;
+    setCache(null);
+    setCacheError("");
+  };
   const selected = snapshot.data?.versions.find((v) => v.id === versionId),
     blocked = disabled || !!snapshot.error;
   const bootstrap = {
@@ -297,7 +303,18 @@ export function ImageSetup({ client, disabled, action }: ManagementUI) {
         {cacheError ? <p role="alert">{cacheError}</p> : null}
         <label>
           Node
-          <select value={nodeId} onChange={(e) => setNode(e.target.value)}>
+          <select
+            value={nodeId}
+            onChange={(e) => {
+              const next = e.target.value;
+              if (next !== nodeId) {
+                // A previous node's operations and receipt do not apply here.
+                setNode(next);
+                setCacheOperation("");
+                invalidateReceipt();
+              }
+            }}
+          >
             <option value="">选择 Node</option>
             {snapshot.data?.nodes.map((n) => (
               <option key={n.id} value={n.id}>
@@ -326,18 +343,25 @@ export function ImageSetup({ client, disabled, action }: ManagementUI) {
           <button
             key={kind}
             disabled={blocked || !nodeId || !artifactId}
-            onClick={() =>
+            onClick={() => {
+              // Remember the selection this acceptance belongs to; a late
+              // receipt must not change the operation picker after a switch.
+              const token = receiptEpoch.current;
               void action(
                 `${kind}缓存 ${nodeId} ${artifactId}`,
                 async (key) => {
                   const result = await (kind === "prewarm"
                     ? client.admin.inventory.prewarm(nodeId, artifactId, key)
                     : client.admin.inventory.evict(nodeId, artifactId, key));
-                  setCacheOperation(result.operationId ?? "");
                   await snapshot.refresh();
+                  // Only the still-current selection may adopt this operation;
+                  // a late acceptance never re-selects after a node/op switch.
+                  if (token !== receiptEpoch.current) return;
+                  invalidateReceipt();
+                  setCacheOperation(result.operationId ?? "");
                 },
-              )
-            }
+              );
+            }}
           >
             {kind === "prewarm" ? "预热精确制品" : "回收无引用缓存"}
           </button>
@@ -350,7 +374,10 @@ export function ImageSetup({ client, disabled, action }: ManagementUI) {
           原缓存操作
           <select
             value={cacheOperationId}
-            onChange={(e) => setCacheOperation(e.target.value)}
+            onChange={(e) => {
+              setCacheOperation(e.target.value);
+              invalidateReceipt();
+            }}
           >
             <option value="">选择原操作</option>
             {snapshot.data?.operations
@@ -366,19 +393,28 @@ export function ImageSetup({ client, disabled, action }: ManagementUI) {
         </label>
         <button
           disabled={!nodeId || !cacheOperationId}
-          onClick={() =>
+          onClick={() => {
+            // Only the latest read issued for the still-selected node and
+            // operation may update the receipt shown below.
+            const token = (receiptEpoch.current += 1);
+            const current = () => token === receiptEpoch.current;
+            setCache(null);
+            setCacheError("");
             void client.admin
               .cacheOperationReceipt(nodeId, cacheOperationId)
               .then((value) => {
+                if (!current()) return;
                 setCache(value);
                 setCacheError("");
               })
-              .catch(() =>
+              .catch(() => {
+                if (!current()) return;
+                setCache(null);
                 setCacheError(
                   "原缓存回执读取失败；当前状态未知，请刷新后检查原操作。",
-                ),
-              )
-          }
+                );
+              });
+          }}
         >
           检查原缓存回执
         </button>
