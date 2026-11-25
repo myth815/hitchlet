@@ -12,7 +12,7 @@
   "parameters": {
     "patch": {
       "type": "string",
-      "description": "完整的 Git unified diff 文本，包含文件头、上下文以及行尾换行",
+      "description": "Git unified diff，包含文件头、真实上下文和末尾换行。Git 会重算 hunk 行数。",
       "required": true
     }
   },

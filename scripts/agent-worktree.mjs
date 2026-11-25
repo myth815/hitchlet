@@ -55,7 +55,7 @@ try {
   if (task === "read-file") await readTrackedFile(value);
   else if (task === "apply-patch") {
     // Newly created files stay visible to read-file and diff without staging their contents.
-    run("git", ["apply", "--intent-to-add", "-"], value);
+    run("git", ["apply", "--recount", "--intent-to-add", "-"], value);
   } else if (task === "package-build" || task === "package-test") {
     if (!/^@hitchlet\/[a-z0-9][a-z0-9-]*$/.test(value))
       throw Error(
