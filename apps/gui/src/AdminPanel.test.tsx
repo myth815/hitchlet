@@ -899,15 +899,12 @@ it("refreshes the selected published alias normally instead of leaving it unload
   expect(aliases).toHaveBeenCalledTimes(2);
 });
 
-// Focused regression for the image-management original-cache receipt. The page only
-// stubs SDK reads/writes; the real ImageSetup component state machine is exercised.
 const cacheNodeA = "00000000-0000-4000-8000-0000000000a1";
 const cacheNodeB = "00000000-0000-4000-8000-0000000000b1";
-const cacheArtifact = "00000000-0000-4000-8000-0000000000c1";
+const cacheAlternateOperation = "00000000-0000-4000-8000-0000000000a3";
 const cacheOperationA = "00000000-0000-4000-8000-0000000000a2";
 const cacheOperationB = "00000000-0000-4000-8000-0000000000b2";
-const cacheErrorText =
-  "原缓存回执读取失败；当前状态未知，请刷新后检查原操作。";
+const cacheErrorText = "原缓存回执读取失败；当前状态未知，请刷新后检查原操作。";
 
 function cacheReceipt(
   operationId: string,
@@ -918,26 +915,18 @@ function cacheReceipt(
   return {
     operationId,
     nodeId,
-    artifactId: cacheArtifact,
+    artifactId,
     kind: "image-cache.pull" as const,
     state,
     attemptCount,
     nextCheckAtMs: 3,
-    cache: {
-      desiredState: "present" as const,
-      observedState: "ready" as const,
-      localRef: "registry.test/image:local",
-      sizeMiB: 512,
-      digestVerifiedAtMs: 2,
-      pinnedUntilMs: null,
-    },
+    cache: null,
     diagnostic: null,
   };
 }
 
 function deferred<T>() {
-  let resolve!: (value: T) => void,
-    reject!: (cause: unknown) => void;
+  let resolve!: (value: T) => void, reject!: (cause: unknown) => void;
   const promise = new Promise<T>((done, fail) => {
     resolve = done;
     reject = fail;
@@ -946,9 +935,7 @@ function deferred<T>() {
 }
 
 function cacheFixture() {
-  const client = new HitchletClient("https://controller.test", {
-    fetch: async () => Response.json([]),
-  });
+  const { client } = successfulFixture();
   const node = (id: string, name: string) => ({
     id,
     machineId: "00000000-0000-4000-8000-000000000006",
@@ -970,33 +957,10 @@ function cacheFixture() {
     observedAtMs: 3,
     version: 2,
   });
-  vi.spyOn(client.admin, "imageVersions").mockResolvedValue([
-    {
-      id: versionId,
-      imageId,
-      imageName: "Linux runtime",
-      description: "fixture",
-      version: "v1",
-      status: "validating",
-      entityVersion: 7,
-      createdAtMs: 1,
-      updatedAtMs: 2,
-      publishedAtMs: null,
-      artifacts: [
-        {
-          id: cacheArtifact,
-          architecture: "amd64",
-          digest: `sha256:${"a".repeat(64)}`,
-          minimumResources: { cpuMillis: 1000, memoryMiB: 1024, scratchMiB: 0 },
-        },
-      ],
-    },
-  ]);
-  vi.spyOn(client.admin, "nodes").mockResolvedValue([
+  vi.mocked(client.admin.nodes).mockResolvedValue([
     node(cacheNodeA, "node-a"),
     node(cacheNodeB, "node-b"),
   ]);
-  vi.spyOn(client.admin.management, "consumers").mockResolvedValue([]);
   const operation = (nId: string, opId: string) => ({
     id: opId,
     ticketId: null,
@@ -1012,18 +976,17 @@ function cacheFixture() {
     errorCode: null,
     retryable: false,
   });
-  const operationsRead = vi
-    .spyOn(client.admin.management, "operations")
-    .mockResolvedValue([
-      operation(cacheNodeA, cacheOperationA),
-      operation(cacheNodeB, cacheOperationB),
-    ]);
+  vi.spyOn(client.admin.management, "operations").mockResolvedValue([
+    operation(cacheNodeA, cacheOperationA),
+    operation(cacheNodeA, cacheAlternateOperation),
+    operation(cacheNodeB, cacheOperationB),
+  ]);
   const receipt = vi
     .spyOn(client.admin, "cacheOperationReceipt")
     .mockResolvedValue(
       cacheReceipt(cacheOperationA, cacheNodeA, "succeeded", 1),
     );
-  return { client, receipt, operationsRead };
+  return { client, receipt };
 }
 
 async function mountCacheUi(client: HitchletClient) {
@@ -1055,12 +1018,12 @@ function cacheSelect(element: Element, label: string) {
   return found.querySelector("select") as HTMLSelectElement;
 }
 
-function cacheCheckButton(element: Element) {
-  const found = [...element.querySelectorAll("button")].find((item) =>
-    item.textContent?.includes("检查原缓存回执"),
+function cacheButton(element: Element, label = "检查原缓存回执") {
+  const button = [...element.querySelectorAll("button")].find(
+    (item) => item.textContent?.trim() === label,
   );
-  if (!found) throw new Error("Original cache receipt control was not rendered");
-  return found as HTMLButtonElement;
+  if (!button) throw new Error(`Missing ${label}`);
+  return button;
 }
 
 async function cacheAction(run: () => void) {
@@ -1079,7 +1042,7 @@ async function cacheChoose(element: Element, label: string, value: string) {
 }
 
 async function cacheCheck(element: Element) {
-  await cacheAction(() => cacheCheckButton(element).click());
+  await cacheAction(() => cacheButton(element).click());
 }
 
 describe("image-management original cache receipt", () => {
@@ -1088,7 +1051,7 @@ describe("image-management original cache receipt", () => {
     const element = await mountCacheUi(client);
     await cacheChoose(element, "Node", cacheNodeA);
     await cacheChoose(element, "原缓存操作", cacheOperationA);
-    expect(cacheCheckButton(element).disabled).toBe(false);
+    expect(cacheButton(element).disabled).toBe(false);
     await cacheCheck(element);
     expect(receipt).toHaveBeenCalledTimes(1);
     expect(receipt).toHaveBeenCalledWith(cacheNodeA, cacheOperationA);
@@ -1105,14 +1068,16 @@ describe("image-management original cache receipt", () => {
     const element = await mountCacheUi(client);
     await cacheChoose(element, "Node", cacheNodeA);
     await cacheChoose(element, "原缓存操作", cacheOperationA);
-    await cacheAction(() => cacheCheckButton(element).click());
+    await cacheCheck(element);
     expect(receipt).toHaveBeenCalledWith(cacheNodeA, cacheOperationA);
     // Switching node clears the original operation, so the second check is not sent.
     await cacheChoose(element, "Node", cacheNodeB);
     expect(cacheSelect(element, "原缓存操作").value).toBe("");
-    expect(cacheCheckButton(element).disabled).toBe(true);
+    expect(cacheButton(element).disabled).toBe(true);
     await cacheAction(() => {
-      pending.resolve(cacheReceipt(cacheOperationA, cacheNodeA, "succeeded", 3));
+      pending.resolve(
+        cacheReceipt(cacheOperationA, cacheNodeA, "succeeded", 3),
+      );
     });
     expect(element.textContent).not.toContain(cacheOperationA);
     expect(element.textContent).not.toContain("尝试 3");
@@ -1127,17 +1092,110 @@ describe("image-management original cache receipt", () => {
     const element = await mountCacheUi(client);
     await cacheChoose(element, "Node", cacheNodeA);
     await cacheChoose(element, "原缓存操作", cacheOperationA);
-    await cacheAction(() => cacheCheckButton(element).click());
+    await cacheCheck(element);
     await cacheChoose(element, "Node", cacheNodeB);
     await cacheAction(() => {
-      pending.reject(new ComputeClientError({
-        code: "INVALID_RESPONSE",
-        message: "receipt unavailable",
-      }));
+      pending.reject(
+        new ComputeClientError({
+          code: "INVALID_RESPONSE",
+          message: "receipt unavailable",
+        }),
+      );
     });
     expect(element.textContent).not.toContain(cacheErrorText);
     expect(element.querySelector('[role="alert"]')).toBeNull();
     expect(cacheSelect(element, "原缓存操作").value).toBe("");
-    expect(cacheCheckButton(element).disabled).toBe(true);
+    expect(cacheButton(element).disabled).toBe(true);
   });
+
+  it("retains the newest read after returning to an operation and checking it twice", async () => {
+    const { client, receipt } = cacheFixture();
+    const beforeSwitch = deferred<ReturnType<typeof cacheReceipt>>();
+    const beforeRepeat = deferred<ReturnType<typeof cacheReceipt>>();
+    receipt
+      .mockReturnValueOnce(beforeSwitch.promise)
+      .mockReturnValueOnce(beforeRepeat.promise)
+      .mockResolvedValueOnce(
+        cacheReceipt(cacheOperationA, cacheNodeA, "succeeded", 3),
+      );
+
+    const element = await mountCacheUi(client);
+    await cacheChoose(element, "Node", cacheNodeA);
+    await cacheChoose(element, "原缓存操作", cacheOperationA);
+    await cacheCheck(element);
+    await cacheChoose(element, "原缓存操作", cacheAlternateOperation);
+    await cacheChoose(element, "原缓存操作", cacheOperationA);
+    await cacheCheck(element);
+    await cacheCheck(element);
+
+    const newest = `操作 ${cacheOperationA} · succeeded · 尝试 3`;
+    expect(element.textContent).toContain(newest);
+    await cacheAction(() =>
+      beforeSwitch.resolve(
+        cacheReceipt(cacheOperationA, cacheNodeA, "running", 1),
+      ),
+    );
+    expect(element.textContent).toContain(newest);
+    await cacheAction(() => beforeRepeat.reject(new Error("superseded read")));
+    expect(element.textContent).toContain(newest);
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it.each([
+    {
+      method: "prewarm",
+      label: "预热精确制品",
+      nextNode: cacheNodeB,
+      nextOperation: cacheOperationB,
+    },
+    {
+      method: "evict",
+      label: "回收无引用缓存",
+      nextNode: cacheNodeA,
+      nextOperation: cacheAlternateOperation,
+    },
+  ] as const)(
+    "adopts a current $method acceptance but preserves a newer selection and receipt",
+    async ({ method, label, nextNode, nextOperation }) => {
+      const { client, receipt } = cacheFixture();
+      const accepted = {
+        state: "queued" as const,
+        operationId: cacheOperationA,
+      };
+      const pending = deferred<typeof accepted>();
+      const submit = vi
+        .spyOn(client.admin.inventory, method)
+        .mockReturnValueOnce(pending.promise)
+        .mockResolvedValueOnce(accepted);
+      receipt.mockResolvedValue(
+        cacheReceipt(nextOperation, nextNode, "succeeded", 2),
+      );
+
+      const element = await mountCacheUi(client);
+      await cacheChoose(element, "Node", cacheNodeA);
+      await cacheChoose(element, "精确制品", artifactId);
+      await cacheAction(() => cacheButton(element, label).click());
+      expect(submit).toHaveBeenCalledWith(
+        cacheNodeA,
+        artifactId,
+        "cache-test-key",
+      );
+      if (nextNode !== cacheNodeA) await cacheChoose(element, "Node", nextNode);
+      await cacheChoose(element, "原缓存操作", nextOperation);
+      await cacheCheck(element);
+
+      await cacheAction(() => pending.resolve(accepted));
+      expect(cacheSelect(element, "原缓存操作").value).toBe(nextOperation);
+      expect(element.textContent).toContain(
+        `操作 ${nextOperation} · succeeded · 尝试 2`,
+      );
+
+      if (nextNode !== cacheNodeA)
+        await cacheChoose(element, "Node", cacheNodeA);
+      await cacheAction(() => cacheButton(element, label).click());
+      expect(cacheSelect(element, "原缓存操作").value).toBe(cacheOperationA);
+      expect(submit).toHaveBeenCalledTimes(2);
+      expect(element.textContent).not.toContain("尝试 2");
+    },
+  );
 });
