@@ -53,6 +53,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/owner.method.md",
-    "sha256": "d7d36f3bd5600408ecb395ebfed7fd0c183660d4f1ed2d94b5fb9f58e4e3eaf8"
+    "sha256": "6229ae67fbf3f5091a5f978ef6e3bfcae5b7805bcf7863783284730da0723886"
   }
 }
