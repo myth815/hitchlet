@@ -40,6 +40,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/environment-engineer.method.md",
-    "sha256": "f7aa6ee70ce6dbc31737eb309a34a02a49d99267204d14e419af738ac8d2c7db"
+    "sha256": "00b95fb73815f031e188bb57bf4ec39b8ca4c06bb716f561b8dd531a184cdad9"
   }
 }

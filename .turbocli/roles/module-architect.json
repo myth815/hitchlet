@@ -44,6 +44,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/module-architect.method.md",
-    "sha256": "c42b75663a03df59703601bdb52812db3188a9796ca48b2dce16fcb670be132d"
+    "sha256": "ad6e25c08d40e12a046ea0716530dcdd6e3d8e819b398ae4c78304360625a46a"
   }
 }

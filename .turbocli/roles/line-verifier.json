@@ -44,6 +44,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/line-verifier.method.md",
-    "sha256": "1c8b4df597b9500b3667fc6e6577bda8f3afe4038bb91e4b7782e6873c64bfe2"
+    "sha256": "e8fc1caf99e8ee4b550e33a939b006fcc37f6d8a800d19f209e4935b1cdc658c"
   }
 }

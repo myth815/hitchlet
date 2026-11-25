@@ -48,6 +48,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/line-builder.method.md",
-    "sha256": "541945493cf20ef43b0e915e89102c56eb87f3aca30085dfa123fd291584f99e"
+    "sha256": "042ef27f33ff5c8c1e9ee4e1789158283234a710c6eaee04eee8a94e9d411cca"
   }
 }

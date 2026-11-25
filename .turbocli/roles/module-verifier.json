@@ -48,6 +48,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/module-verifier.method.md",
-    "sha256": "83d24abcb3568e1000cb5d5b90ffa476a22f17acbb73e24fcfb37aa0bb97a77b"
+    "sha256": "1e177fa3ce90dfc98b9a0176faf22f6ab1ff62ed0707d44fcbb85b1b99a6dcca"
   }
 }

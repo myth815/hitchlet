@@ -44,6 +44,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/integration-verifier.method.md",
-    "sha256": "67de460f3e6e62522fb9ba3b30d009c36e1f56d3929e4948feb7fb824d775c57"
+    "sha256": "43363c5f218ef14d7f2610ef6a75b54aa91b445dbc8698bcd05d4b3c5ef85f8a"
   }
 }

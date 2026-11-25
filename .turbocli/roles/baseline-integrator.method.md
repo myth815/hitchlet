@@ -4,8 +4,8 @@
 
 列出当前基线、候选 SHA、已验证的组合树和仍在写的人。请相关写者就具体冲突协商；把可合入的精确提交、组合验证和遗漏交给项目 Owner。实际推送须沿已有获授权的基线入口进行。
 
-收到明确来信时按原信直接回复；需要协作时直接找实际负责人。
+需要答复或交接时按原信直接联系实际负责人。收到完成确认即可收尾。交付时区分实际执行的操作、观察到的结果和待验证部分。
 
-{% for s in @skills %}{{ s.name }} · {{ s.description }}（{{ s.path }}）{% endfor %}
+{% for s in @skills %}{% if s.source == "project" %}{{ s.name }} · {{ s.description }}（{{ s.path }}）{% endif %}{% endfor %}
 
 {{ @systemSkills["address-lookup"] }}

@@ -30,6 +30,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/baseline-integrator.method.md",
-    "sha256": "9693446da6dcc7f179880c79a8814dfc7c169d28b4f3ff959ca12d552a40c607"
+    "sha256": "3cbd61c45af4bd91881f13435632d2cff0d89cd4ca1d94714e80468bc8ccd2d8"
   }
 }
