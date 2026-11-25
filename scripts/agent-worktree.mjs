@@ -1,7 +1,15 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { constants, lstatSync } from "node:fs";
 import { lstat, open, readlink, realpath } from "node:fs/promises";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  dirname,
+  isAbsolute,
+  matchesGlob,
+  normalize,
+  relative,
+  resolve,
+  sep,
+} from "node:path";
 import { pipeline } from "node:stream/promises";
 
 async function readTrackedFile(input) {
@@ -38,6 +46,108 @@ async function readTrackedFile(input) {
   } finally {
     await file.close();
   }
+}
+
+function findFeature(input) {
+  const target = normalize(input);
+  if (
+    !target ||
+    target === "." ||
+    isAbsolute(target) ||
+    target === ".." ||
+    target.startsWith("../")
+  )
+    throw Error("Expected a file path relative to the worktree root.");
+  const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
+  const revision = git("rev-parse", "HEAD").trim();
+  const tracked = git("ls-tree", "-r", "-z", "--name-only", revision).split(
+    "\0",
+  );
+  const roomFile = ".turbocli/project.json";
+  let directory = dirname(target);
+  while (directory !== "." && !tracked.includes(directory + "/" + roomFile))
+    directory = dirname(directory);
+  const prefix = directory === "." ? "" : directory + "/";
+  const read = (path) =>
+    JSON.parse(git("show", revision + ":" + prefix + path));
+  const matches = [],
+    testReferences = [],
+    roomRules = [],
+    unavailable = [];
+  const result = {
+    revision,
+    path: target,
+    module: null,
+    matches,
+    testReferences,
+    roomRules,
+    unavailable,
+  };
+  if (tracked.includes(prefix + roomFile)) {
+    const file = target.slice(prefix.length);
+    const pkg = read("package.json"),
+      room = read(roomFile).featureRoom;
+    result.module = { directory, name: pkg.name };
+    const matching = (patterns = []) => {
+      if (
+        patterns.some((p) => p.startsWith("!") && matchesGlob(file, p.slice(1)))
+      )
+        return [];
+      return patterns.filter((p) => !p.startsWith("!") && matchesGlob(file, p));
+    };
+    for (const name of ["projectLevel", "shared", "exclude"]) {
+      for (const pattern of matching(room?.[name]))
+        roomRules.push({ name, pattern, source: prefix + roomFile });
+    }
+    const start = prefix + ".turbocli/features/";
+    for (const source of tracked) {
+      if (
+        !source.startsWith(start) ||
+        !/^[^/]+\.json$/.test(source.slice(start.length))
+      )
+        continue;
+      try {
+        const feature = read(source.slice(prefix.length)),
+          rules = [];
+        if (
+          typeof feature.id !== "string" ||
+          !feature.writeSet ||
+          !Array.isArray(feature.testEntries)
+        )
+          throw Error("Invalid feature declaration");
+        for (const kind of ["implementation", "tests", "assets"]) {
+          for (const pattern of matching(feature.writeSet[kind]))
+            rules.push({ kind, pattern });
+        }
+        const entries = feature.testEntries
+          .map((entry) => entry.command ?? pkg.scripts?.[entry.script])
+          .filter(Boolean);
+        if (rules.length)
+          matches.push({
+            feature: feature.id,
+            source,
+            rules,
+            testEntries: entries,
+          });
+        else {
+          const clues = entries.filter((command) =>
+            command
+              .split(/[\s"']+/)
+              .some((arg) => arg === file || arg === "./" + file),
+          );
+          if (clues.length)
+            testReferences.push({
+              feature: feature.id,
+              source,
+              commands: clues,
+            });
+        }
+      } catch (error) {
+        unavailable.push({ source, error: error.message });
+      }
+    }
+  }
+  console.log(JSON.stringify(result));
 }
 
 function run(command, argv, input) {
@@ -96,6 +206,7 @@ try {
   const [task, value, ...extra] = process.argv.slice(2);
   if (!value || extra.length) throw Error("Expected one tool parameter.");
   if (task === "read-file") await readTrackedFile(value);
+  else if (task === "find-feature") findFeature(value);
   else if (task === "apply-patch") {
     applyPatch(value);
   } else if (task === "package-build" || task === "package-test") {

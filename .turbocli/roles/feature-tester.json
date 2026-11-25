@@ -6,6 +6,10 @@
   ],
   "fixedTools": [
     {
+      "id": "hitchlet.find-feature",
+      "source": ".turbocli/tools/find-feature.json"
+    },
+    {
       "id": "hitchlet.read-file",
       "source": ".turbocli/tools/read-file.json"
     },
@@ -48,6 +52,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/feature-tester.method.md",
-    "sha256": "40d33ca6848d60988cb62b55fc0b0a03f08d421df2ee6434edfe88eac1fe086d"
+    "sha256": "c7ec00967446606504a28d4202ea56dab69552098da8082e310f0757a3fae7f0"
   }
 }

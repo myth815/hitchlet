@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -138,4 +138,96 @@ test("failure to persist an intent tells the caller the working patch was applie
   );
   assert.equal(git("ls-files", "--stage"), index);
   assert.equal(await readFile(join(cwd, newPath), "utf8"), "written\n");
+});
+
+test("find-feature checks the committed module's globs, keeps overlaps, and separates test commands from write sets", async (t) => {
+  const { cwd, git } = await fixture(t);
+  const folder = join(cwd, "apps/sample/.turbocli/features");
+  await mkdir(folder, { recursive: true });
+  await writeFile(
+    join(cwd, "apps/sample/package.json"),
+    JSON.stringify({
+      name: "@sample/core",
+      scripts: { verify: "vitest run test/x.test.ts" },
+    }),
+  );
+  await writeFile(
+    join(folder, "../project.json"),
+    JSON.stringify({
+      protocolVersion: "1.0",
+      featureRoom: { shared: ["test/shared.ts"] },
+    }),
+  );
+  const declare = (name, tests, entries = []) =>
+    writeFile(
+      join(folder, name + ".json"),
+      JSON.stringify({ id: name, writeSet: { tests }, testEntries: entries }),
+    );
+  await declare("broad", ["test/**/*.test.ts", "!test/skip.test.ts"]);
+  await declare("specific", ["test/x.test.ts"]);
+  await declare("hint", ["src/none.ts"], [{ script: "verify" }]);
+  git("add", "apps");
+  git(
+    "-c",
+    "user.name=fixture",
+    "-c",
+    "user.email=fixture@localhost",
+    "commit",
+    "-qm",
+    "feature declarations",
+  );
+  const head = git("rev-parse", "HEAD").trim();
+  await declare("specific", ["test/not-this-file.ts"]);
+  await declare("untracked", ["test/x.test.ts"]);
+  const find = (file) =>
+    JSON.parse(
+      execFileSync(
+        process.execPath,
+        [entry, "find-feature", "apps/sample/" + file],
+        { cwd, encoding: "utf8" },
+      ),
+    );
+  const x = find("test/x.test.ts");
+  assert.equal(x.revision, head);
+  assert.deepEqual(x.module, {
+    directory: "apps/sample",
+    name: "@sample/core",
+  });
+  assert.deepEqual(
+    x.matches.map((m) => [m.feature, m.rules[0].pattern]),
+    [
+      ["broad", "test/**/*.test.ts"],
+      ["specific", "test/x.test.ts"],
+    ],
+  );
+  assert.deepEqual(x.testReferences, [
+    {
+      feature: "hint",
+      source: "apps/sample/.turbocli/features/hint.json",
+      commands: ["vitest run test/x.test.ts"],
+    },
+  ]);
+  assert.deepEqual(find("test/skip.test.ts").matches, []);
+  assert.deepEqual(
+    find("test/shared.ts").roomRules.map((x) => x.name),
+    ["shared"],
+  );
+  assert.deepEqual(find("src/missing.ts").matches, []);
+  await writeFile(join(folder, "broken.json"), "{");
+  git("add", "apps/sample/.turbocli/features/broken.json");
+  git(
+    "-c",
+    "user.name=fixture",
+    "-c",
+    "user.email=fixture@localhost",
+    "commit",
+    "-qm",
+    "damaged declaration",
+  );
+  const partial = find("test/x.test.ts");
+  assert.equal(partial.matches.length, 2);
+  assert.deepEqual(
+    partial.unavailable.map((x) => x.source),
+    ["apps/sample/.turbocli/features/broken.json"],
+  );
 });

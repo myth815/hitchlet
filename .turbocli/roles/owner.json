@@ -15,6 +15,14 @@
   ],
   "fixedTools": [
     {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.find-feature",
+      "source": ".turbocli/tools/find-feature.json"
+    },
+    {
       "id": "hitchlet.diff",
       "source": ".turbocli/tools/diff.json"
     }
@@ -45,6 +53,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/owner.method.md",
-    "sha256": "18c4c5645e5fc9fe8318e21fc2e51138bc795eb7de880d65427cb5f6fc7dbb01"
+    "sha256": "aadc7f34656a876a8ac55f0796d1f083a80fb5a5db37a89b5967ea6a834cfc33"
   }
 }
