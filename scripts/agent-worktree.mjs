@@ -161,6 +161,20 @@ function run(command, argv, input) {
 }
 
 function applyPatch(patch) {
+  const endMarker = /(?:^|\n)\*\*\* End Patch(?:\r?\n|$)/;
+  if (endMarker.test(patch)) {
+    const body = patch.replace(/\n\*\*\* End Patch(?:\r?\n)?$/, "\n");
+    if (
+      endMarker.test(body) ||
+      !/(?:^|\n)(?:diff --git [^\r\n]+|--- [^\r\n]+\r?\n\+\+\+ [^\r\n]+)/.test(
+        body,
+      )
+    )
+      throw Error(
+        "Expected one optional final *** End Patch after a Git unified diff.",
+      );
+    patch = body;
+  }
   // Git 2.39 can replace the existing index when apply --intent-to-add is used.
   // Use Git's NUL-separated output to identify the patch destinations, including renames.
   const numstat = execFileSync(

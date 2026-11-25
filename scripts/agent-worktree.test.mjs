@@ -57,6 +57,54 @@ test("a tracked edit recounts hunks and preserves every existing index entry", a
   assert.equal(git("ls-files", "--stage"), index);
 });
 
+test("a unified diff accepts a single closing marker and keeps literal hunk lines", async (t) => {
+  const { cwd, apply } = await fixture(t);
+  const file = join(cwd, "example.txt");
+  const marker = "*** End Patch";
+  const inline = "literal\u2028*** End Patch\u2028text";
+  const original = [marker, "old", marker, "last", ""].join("\n");
+  const diff = [
+    "--- a/example.txt",
+    "+++ b/example.txt",
+    "@@ -1,4 +1,4 @@",
+    " " + marker,
+    "-old",
+    "+" + inline,
+    "-" + marker,
+    " last",
+    "+" + marker,
+    "",
+  ].join("\n");
+  for (const ending of ["", "\n", "\r\n"]) {
+    await writeFile(file, original);
+    const result = apply("Index: example.txt\n" + diff + marker + ending);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(
+      await readFile(file, "utf8"),
+      [marker, inline, "last", marker, ""].join("\n"),
+    );
+  }
+});
+
+test("misplaced markers, other patch syntax and stale Git context cannot modify the worktree", async (t) => {
+  const { cwd, apply, git } = await fixture(t);
+  const index = git("ls-files", "--stage");
+  const marker = "*** End Patch\n";
+  for (const invalid of [
+    edit.replace("+new\n", "+new\n" + marker),
+    edit + marker + marker,
+    "*** Begin Patch\n*** Update File: example.txt\n@@\n-old\n+new\n" + marker,
+    edit.replace("-old\n", "-stale\n") + marker,
+  ]) {
+    assert.notEqual(apply(invalid).status, 0);
+    assert.equal(
+      await readFile(join(cwd, "example.txt"), "utf8"),
+      "first\nold\nlast\n",
+    );
+    assert.equal(git("ls-files", "--stage"), index);
+  }
+});
+
 test("a failed mixed patch can be corrected and marks only its actual new paths intent-to-add", async (t) => {
   const { cwd, git, apply } = await fixture(t);
   const initial = git("ls-files", "--stage");
@@ -108,7 +156,7 @@ test("Git's quoted rename destination with a tab and a newline is kept as one pa
     quoted +
     "\n";
   const index = git("ls-files", "--stage", "--", "example.txt", "another.txt");
-  const result = apply(patch);
+  const result = apply(patch + "*** End Patch\n");
   assert.equal(result.status, 0, result.stderr);
   assert.equal(
     git("ls-files", "--stage", "--", "example.txt", "another.txt"),
