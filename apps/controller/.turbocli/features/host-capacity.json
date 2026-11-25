@@ -1,0 +1,25 @@
+{
+  "id": "host-capacity",
+  "writeSet": {
+    "implementation": [
+      "src/application/host-agents.ts",
+      "src/application/maintenance-holds.ts",
+      "src/domain/human-use.ts",
+      "src/storage/host-agent-store.ts",
+      "src/storage/human-use-guard.ts",
+      "src/storage/machine-node-store.ts"
+    ],
+    "tests": [
+      "test/host-agents.test.ts",
+      "test/human-use.test.ts",
+      "test/machine-policy.test.ts",
+      "test/maintenance-holds.test.ts"
+    ],
+    "assets": ["src/storage/migrations/005-host-observations.sql"]
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/host-agents.test.ts test/human-use.test.ts test/machine-policy.test.ts test/maintenance-holds.test.ts"
+    }
+  ]
+}

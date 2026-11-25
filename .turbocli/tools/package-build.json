@@ -1,0 +1,21 @@
+{
+  "id": "hitchlet.package-build",
+  "description": "运行指定 Hitchlet 工作区成员的真实 package.json build 脚本。",
+  "executable": "node",
+  "argv": [
+    "scripts/agent-worktree.mjs",
+    "package-build",
+    {
+      "parameter": "member"
+    }
+  ],
+  "parameters": {
+    "member": {
+      "type": "string",
+      "description": "准确的包名，例如 @hitchlet/controller",
+      "required": true
+    }
+  },
+  "group": "hitchlet",
+  "groupDescription": "Hitchlet 工作树、成员构建与测试"
+}

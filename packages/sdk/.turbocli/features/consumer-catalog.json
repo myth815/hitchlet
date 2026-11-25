@@ -1,0 +1,11 @@
+{
+  "id": "consumer-catalog",
+  "writeSet": {
+    "implementation": ["src/index.ts", "examples/consumer-import.mjs"],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/sdk test test/client.test.ts" }
+  ]
+}

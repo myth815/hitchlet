@@ -1,0 +1,17 @@
+{
+  "id": "hyperv-vm",
+  "writeSet": {
+    "implementation": [
+      "src/drivers/hyperv*.ts",
+      "src/hyperv-*.ts",
+      "src/drivers/hyperv*.ps1"
+    ],
+    "tests": ["test/hyperv-*.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/hyperv-driver.test.ts test/hyperv-main.test.ts test/hyperv-powershell-direct.test.ts test/hyperv-server.test.ts test/hyperv-templates.test.ts"
+    }
+  ]
+}

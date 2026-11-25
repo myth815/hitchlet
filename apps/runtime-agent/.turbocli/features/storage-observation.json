@@ -1,0 +1,13 @@
+{
+  "id": "storage-observation",
+  "writeSet": {
+    "implementation": ["src/storage.ts"],
+    "tests": ["test/main-storage.test.ts", "test/storage.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/main-storage.test.ts test/storage.test.ts"
+    }
+  ]
+}

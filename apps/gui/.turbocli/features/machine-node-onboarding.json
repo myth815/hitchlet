@@ -1,0 +1,11 @@
+{
+  "id": "machine-node-onboarding",
+  "writeSet": {
+    "implementation": ["src/InventorySetup.tsx"],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/gui test src/Management.test.tsx" }
+  ]
+}

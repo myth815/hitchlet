@@ -1,0 +1,13 @@
+{
+  "id": "maintenance-recovery",
+  "writeSet": {
+    "implementation": ["src/maintenance.ts", "src/recovery.ts"],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/maintenance.test.ts"
+    }
+  ]
+}

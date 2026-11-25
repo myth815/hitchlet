@@ -1,0 +1,53 @@
+{
+  "placements": [
+    {
+      "kind": "line"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    },
+    {
+      "id": "hitchlet.apply-patch",
+      "source": ".turbocli/tools/apply-patch.json"
+    },
+    {
+      "id": "hitchlet.package-build",
+      "source": ".turbocli/tools/package-build.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "line-builder",
+    "version": "1",
+    "name": "云线施工员",
+    "description": "把本云线的交付目标和已约定的共享改动落实到同一工作树。"
+  },
+  "skills": [".turbocli/skills/scope/SKILL.md"],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/line-builder.method.md",
+    "sha256": "541945493cf20ef43b0e915e89102c56eb87f3aca30085dfa123fd291584f99e"
+  }
+}

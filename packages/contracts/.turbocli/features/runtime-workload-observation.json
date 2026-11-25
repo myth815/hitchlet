@@ -1,0 +1,13 @@
+{
+  "id": "runtime-workload-observation",
+  "writeSet": {
+    "implementation": ["src/runtime-workload.ts"],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/workloads.test.ts test/workload-native.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "id": "management-api",
+  "writeSet": {
+    "implementation": [
+      "src/application/admin-command-journal.ts",
+      "src/application/admin.ts",
+      "src/application/management.ts",
+      "src/http/admin-protocol.ts",
+      "src/http/management-openapi.ts",
+      "src/http/management-routes.ts",
+      "src/storage/admin-command-store.ts",
+      "src/storage/admin-read-store.ts",
+      "src/storage/admin-stores.ts",
+      "src/storage/management-store.ts",
+      "src/storage/profile-revocation-store.ts",
+      "src/storage/profile-store.ts"
+    ],
+    "tests": [
+      "test/admin-read-api.test.ts",
+      "test/admin.test.ts",
+      "test/management-preview-openapi.test.ts",
+      "test/management.test.ts"
+    ],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/admin-read-api.test.ts test/admin.test.ts test/management-preview-openapi.test.ts test/management.test.ts"
+    }
+  ]
+}

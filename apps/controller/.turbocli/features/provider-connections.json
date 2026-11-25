@@ -1,0 +1,16 @@
+{
+  "id": "provider-connections",
+  "writeSet": {
+    "implementation": [
+      "src/application/provider-connections.ts",
+      "src/storage/provider-connection-store.ts"
+    ],
+    "tests": ["test/connection-revision-race.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/connection-revision-race.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "id": "runtime-storage",
+  "writeSet": {
+    "implementation": ["src/runtime-storage.ts"],
+    "tests": ["test/runtime-storage.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/runtime-storage.test.ts"
+    }
+  ]
+}

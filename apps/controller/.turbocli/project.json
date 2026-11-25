@@ -1,0 +1,37 @@
+{
+  "protocolVersion": "1.0",
+  "featureRoom": {
+    "scope": {
+      "implementation": ["src/**/*.ts", "scripts/**/*.mjs"],
+      "tests": ["test/**/*.test.ts", "test/fixtures/**/*.mjs"],
+      "assets": [
+        "package.json",
+        "tsconfig.json",
+        "src/storage/*.md",
+        "src/storage/migrations/*.sql"
+      ]
+    },
+    "shared": [
+      "src/application/errors.ts",
+      "src/domain/resource-manifest.ts",
+      "src/providers/port.ts",
+      "src/storage/admin-store-utils.ts",
+      "src/storage/idempotency-store.ts"
+    ],
+    "projectLevel": [
+      "src/app.ts",
+      "src/config.ts",
+      "src/init-simulator.ts",
+      "src/rotating-log.ts",
+      "src/server.ts",
+      "src/http/openapi.ts",
+      "scripts/dev-watch.mjs",
+      "package.json",
+      "tsconfig.json",
+      "test/app.test.ts",
+      "test/config.test.ts",
+      "test/sdk-example.test.ts"
+    ],
+    "exclude": []
+  }
+}

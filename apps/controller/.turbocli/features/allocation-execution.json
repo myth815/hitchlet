@@ -1,0 +1,22 @@
+{
+  "id": "allocation-execution",
+  "writeSet": {
+    "implementation": [
+      "src/application/operations.ts",
+      "src/providers/execution-dispatcher.ts",
+      "src/providers/execution-registry.ts",
+      "src/providers/simulator.ts",
+      "src/storage/operation-store.ts"
+    ],
+    "tests": [
+      "test/execution-dispatcher.test.ts",
+      "test/operation-store-integrity.test.ts"
+    ],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/execution-dispatcher.test.ts test/operation-store-integrity.test.ts"
+    }
+  ]
+}

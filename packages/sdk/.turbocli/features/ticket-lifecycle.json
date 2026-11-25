@@ -1,0 +1,13 @@
+{
+  "id": "ticket-lifecycle",
+  "writeSet": {
+    "implementation": ["src/tickets.ts", "examples/resumable-tenant.mjs"],
+    "tests": ["test/client.test.ts", "test/console.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/sdk test test/client.test.ts test/console.test.ts"
+    }
+  ]
+}

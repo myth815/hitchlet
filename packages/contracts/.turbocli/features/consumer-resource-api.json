@@ -1,0 +1,20 @@
+{
+  "id": "consumer-resource-api",
+  "writeSet": {
+    "implementation": [
+      "src/consumer.ts",
+      "src/schemas.ts",
+      "src/ready-inventory.ts"
+    ],
+    "tests": ["test/schemas.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/schemas.test.ts"
+    },
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/ticket-ready-inventory.test.ts"
+    }
+  ]
+}

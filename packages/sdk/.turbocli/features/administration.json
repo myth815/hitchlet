@@ -1,0 +1,13 @@
+{
+  "id": "administration",
+  "writeSet": {
+    "implementation": ["src/admin.ts"],
+    "tests": ["test/admin.test.ts", "test/power.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/sdk test test/admin.test.ts test/power.test.ts"
+    }
+  ]
+}

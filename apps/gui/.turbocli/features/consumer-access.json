@@ -1,0 +1,14 @@
+{
+  "id": "consumer-access",
+  "writeSet": {
+    "implementation": ["src/ConsumerSetup.tsx"],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/gui typecheck" },
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/management.test.ts"
+    }
+  ]
+}

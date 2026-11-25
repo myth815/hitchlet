@@ -1,0 +1,17 @@
+{
+  "id": "session-transport",
+  "writeSet": {
+    "implementation": ["src/session.ts", "src/transport.ts", "src/response.ts"],
+    "tests": [
+      "test/session.test.ts",
+      "test/response.test.ts",
+      "test/review.test.ts"
+    ],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/sdk test test/session.test.ts test/response.test.ts test/review.test.ts"
+    }
+  ]
+}

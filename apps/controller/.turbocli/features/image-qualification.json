@@ -1,0 +1,31 @@
+{
+  "id": "image-qualification",
+  "writeSet": {
+    "implementation": [
+      "src/application/image-cache.ts",
+      "src/application/image-publishing.ts",
+      "src/application/image-validation.ts",
+      "src/domain/attested-capability.ts",
+      "src/domain/docker-image-reference.ts",
+      "src/domain/docker-recipe.ts",
+      "src/providers/image-cache-port.ts",
+      "src/storage/image-cache-store.ts",
+      "src/storage/image-publication-store.ts",
+      "src/storage/image-validation-store.ts",
+      "src/storage/validation-store.ts"
+    ],
+    "tests": [
+      "test/capability-validity.test.ts",
+      "test/docker-image-reference.test.ts",
+      "test/image-cache-worker.test.ts",
+      "test/validation-lifecycle.test.ts",
+      "test/fixtures/validation-process.mjs"
+    ],
+    "assets": ["src/storage/migrations/003-validation-evidence.sql"]
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/capability-validity.test.ts test/docker-image-reference.test.ts test/image-cache-worker.test.ts test/validation-lifecycle.test.ts"
+    }
+  ]
+}

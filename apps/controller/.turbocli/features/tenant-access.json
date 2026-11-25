@@ -1,0 +1,27 @@
+{
+  "id": "tenant-access",
+  "writeSet": {
+    "implementation": [
+      "src/application/access.ts",
+      "src/application/console-credentials.ts",
+      "src/application/console.ts",
+      "src/domain/console-frame.ts",
+      "src/providers/ssh-readiness-command.ts",
+      "src/providers/ssh-readiness.ts",
+      "src/storage/access-material-store.ts",
+      "src/storage/console-credential-store.ts"
+    ],
+    "tests": [
+      "test/access-material-store.test.ts",
+      "test/console-credentials.test.ts",
+      "test/console.test.ts",
+      "test/ssh-readiness.test.ts"
+    ],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/access-material-store.test.ts test/console-credentials.test.ts test/console.test.ts test/ssh-readiness.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "id": "hitchlet.diff",
+  "description": "查看当前工作树相对 HEAD 的改动，包含已暂存和未暂存的跟踪文件。可限定到一个路径。",
+  "executable": "git",
+  "argv": [
+    "--literal-pathspecs",
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "HEAD",
+    "--",
+    {
+      "parameter": "path"
+    }
+  ],
+  "parameters": {
+    "path": {
+      "type": "string",
+      "description": "可选，工作区相对文件或目录路径",
+      "required": false
+    }
+  },
+  "group": "hitchlet",
+  "groupDescription": "Hitchlet 工作树、成员构建与测试"
+}

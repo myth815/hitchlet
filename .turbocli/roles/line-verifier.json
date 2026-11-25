@@ -1,0 +1,49 @@
+{
+  "placements": [
+    {
+      "kind": "line"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    },
+    {
+      "id": "hitchlet.package-test",
+      "source": ".turbocli/tools/package-test.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "line-verifier",
+    "version": "1",
+    "name": "云线复验员",
+    "description": "复验本逻辑云线上提交的实际组合和交付目标。"
+  },
+  "skills": [".turbocli/skills/proof/SKILL.md"],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/line-verifier.method.md",
+    "sha256": "1c8b4df597b9500b3667fc6e6577bda8f3afe4038bb91e4b7782e6873c64bfe2"
+  }
+}

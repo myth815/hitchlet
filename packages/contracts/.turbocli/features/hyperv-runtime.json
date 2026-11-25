@@ -1,0 +1,23 @@
+{
+  "id": "hyperv-runtime",
+  "writeSet": {
+    "implementation": [
+      "src/hyperv-runtime.ts",
+      "src/hyperv-console.ts",
+      "src/hyperv-interactive.ts"
+    ],
+    "tests": ["test/hyperv-runtime.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/hyperv-runtime.test.ts"
+    },
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/hyperv-console.test.ts"
+    },
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/hyperv-server.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "id": "hyperv-vm",
+  "writeSet": {
+    "implementation": [
+      "src/application/hyperv-facts.ts",
+      "src/providers/hyperv-*.ts",
+      "src/storage/hyperv-admin-store.ts"
+    ],
+    "tests": ["test/hyperv-*.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/hyperv-console.test.ts test/hyperv-draft.test.ts test/hyperv-management-lifecycle.test.ts test/hyperv-provider.test.ts test/hyperv-runtime-client.test.ts test/hyperv-ssh-readiness.test.ts test/hyperv-ssh-relay.test.ts"
+    }
+  ]
+}

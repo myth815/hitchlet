@@ -1,0 +1,35 @@
+{
+  "placements": [
+    {
+      "kind": "project"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "baseline-integrator",
+    "version": "1",
+    "name": "基线集成员",
+    "description": "核对候选组合和验收证据，负责 Hitchlet 统一基线集成。"
+  },
+  "skills": [".turbocli/skills/proof/SKILL.md"],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/baseline-integrator.method.md",
+    "sha256": "9693446da6dcc7f179880c79a8814dfc7c169d28b4f3ff959ca12d552a40c607"
+  }
+}

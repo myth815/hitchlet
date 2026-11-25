@@ -1,0 +1,13 @@
+{
+  "id": "wsl-host",
+  "writeSet": {
+    "implementation": ["src/host-wsl*.ts"],
+    "tests": ["test/host-wsl*.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/host-wsl-cadence.test.ts test/host-wsl-keeper.test.ts test/host-wsl-management.test.ts test/host-wsl-observer-bridge.test.ts test/host-wsl-platform.test.ts test/host-wsl-receipt.test.ts test/host-wsl-redirector.test.ts test/host-wsl.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "id": "host-observation",
+  "writeSet": {
+    "implementation": [
+      "src/host-client.ts",
+      "src/host-main.ts",
+      "src/host-probes.ts",
+      "src/host-service.ts",
+      "src/host-windows.ps1"
+    ],
+    "tests": [
+      "test/host-client.test.ts",
+      "test/host-probes.test.ts",
+      "test/host-service.test.ts",
+      "test/host-system-tasks.test.ts",
+      "test/host-windows-session.test.ts",
+      "test/fixtures/mac-console.json"
+    ],
+    "assets": ["HOST.md"]
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/host-client.test.ts test/host-probes.test.ts test/host-service.test.ts test/host-system-tasks.test.ts test/host-windows-session.test.ts"
+    }
+  ]
+}

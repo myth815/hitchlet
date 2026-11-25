@@ -1,0 +1,21 @@
+{
+  "id": "hitchlet.read-file",
+  "description": "读取当前工作树中指定的 Git 跟踪文件，包含未暂存的修改。符号链接返回链接目标文本。",
+  "executable": "node",
+  "argv": [
+    "scripts/agent-worktree.mjs",
+    "read-file",
+    {
+      "parameter": "path"
+    }
+  ],
+  "parameters": {
+    "path": {
+      "type": "string",
+      "description": "相对工作区根目录的单个跟踪文件路径",
+      "required": true
+    }
+  },
+  "group": "hitchlet",
+  "groupDescription": "Hitchlet 工作树、成员构建与测试"
+}

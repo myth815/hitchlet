@@ -1,0 +1,11 @@
+{
+  "id": "resource-inventory",
+  "writeSet": {
+    "implementation": ["src/inventory.ts"],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/sdk test test/management.test.ts" }
+  ]
+}

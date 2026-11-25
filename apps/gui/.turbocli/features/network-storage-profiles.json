@@ -1,0 +1,15 @@
+{
+  "id": "network-storage-profiles",
+  "writeSet": {
+    "implementation": [
+      "src/ProfileSetup.tsx",
+      "src/ProfileRevocation.tsx",
+      "src/NetworkProtection.tsx"
+    ],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/gui test src/Management.test.tsx" }
+  ]
+}

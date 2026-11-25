@@ -1,0 +1,49 @@
+{
+  "placements": [
+    {
+      "kind": "module"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    },
+    {
+      "id": "hitchlet.apply-patch",
+      "source": ".turbocli/tools/apply-patch.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "module-docs",
+    "version": "1",
+    "name": "模块文档维护员",
+    "description": "维护本模块对外契约、运行说明和共享文档。"
+  },
+  "skills": [],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/module-docs.method.md",
+    "sha256": "a49fc1c53244f4f2aeb73d794e2726868e46370e9f86524f41f68209cb3838f4"
+  }
+}

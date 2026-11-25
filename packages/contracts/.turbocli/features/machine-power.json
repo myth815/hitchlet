@@ -1,0 +1,14 @@
+{
+  "id": "machine-power",
+  "writeSet": {
+    "implementation": ["src/power.ts", "src/power-execution.ts"],
+    "tests": ["test/power.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/contracts test test/power.test.ts" },
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/power-execution.test.ts"
+    }
+  ]
+}

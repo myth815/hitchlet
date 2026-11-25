@@ -1,0 +1,11 @@
+{
+  "id": "ticket-operations",
+  "writeSet": {
+    "implementation": ["src/ManagementTickets.tsx", "src/DailyNodeActions.tsx"],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/gui test src/Management.test.tsx" }
+  ]
+}

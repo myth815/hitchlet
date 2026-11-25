@@ -1,0 +1,22 @@
+{
+  "id": "storage-ledger",
+  "writeSet": {
+    "implementation": [
+      "src/storage/index.ts",
+      "src/storage/protocol.ts",
+      "src/storage/worker.ts",
+      "scripts/copy-schema.mjs"
+    ],
+    "tests": ["test/storage.test.ts", "test/fixtures/crash-worker.mjs"],
+    "assets": [
+      "src/storage/README.md",
+      "src/storage/migrations/001-initial.sql",
+      "src/storage/migrations/004-managed-resource-identities.sql"
+    ]
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/storage.test.ts"
+    }
+  ]
+}

@@ -1,11 +1,18 @@
 {
   "id": "image-management",
   "writeSet": {
-    "implementation": ["src/ImageSetup.tsx"],
-    "tests": [],
+    "implementation": [
+      "src/ImageSetup.tsx",
+      "src/AdminPanel.tsx",
+      "src/ValidationEvidence.tsx"
+    ],
+    "tests": ["src/AdminPanel.test.tsx"],
     "assets": []
   },
   "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/gui test src/AdminPanel.test.tsx src/Management.test.tsx"
+    },
     {
       "command": "pnpm --filter @hitchlet/controller test test/admin.test.ts test/image-cache-worker.test.ts"
     }

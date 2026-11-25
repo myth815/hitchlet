@@ -1,0 +1,53 @@
+{
+  "placements": [
+    {
+      "kind": "feature"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    },
+    {
+      "id": "hitchlet.apply-patch",
+      "source": ".turbocli/tools/apply-patch.json"
+    },
+    {
+      "id": "hitchlet.package-build",
+      "source": ".turbocli/tools/package-build.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "implementer",
+    "version": "1",
+    "name": "功能实现员",
+    "description": "实现本功能的行为和局部修复。"
+  },
+  "skills": [".turbocli/skills/scope/SKILL.md"],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/implementer.method.md",
+    "sha256": "601d62f01bf6941fc47680efcaad147cab090872a9bb269d6f07d898ece18605"
+  }
+}

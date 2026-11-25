@@ -1,0 +1,43 @@
+{
+  "protocolVersion": "1.0",
+  "featureRoom": {
+    "scope": {
+      "implementation": [
+        "src/**/*.ts",
+        "src/**/*.ps1",
+        "src/**/*.cjs",
+        "scripts/**/*.mjs",
+        "scripts/**/*.sh"
+      ],
+      "tests": ["test/**/*.test.ts", "test/fixtures/**/*.json"],
+      "assets": [
+        "package.json",
+        "tsconfig.json",
+        "Dockerfile",
+        "Dockerfile.dockerignore",
+        "*.md"
+      ]
+    },
+    "shared": [
+      "src/canonical.ts",
+      "src/command-exec.ts",
+      "src/diagnostic.ts",
+      "src/journal.ts",
+      "src/server.ts",
+      "src/vm-server.ts",
+      "test/command-exec.test.ts",
+      "test/diagnostic.test.ts",
+      "test/journal.test.ts"
+    ],
+    "projectLevel": [
+      "src/main.ts",
+      "package.json",
+      "tsconfig.json",
+      "README.md",
+      "Dockerfile",
+      "Dockerfile.dockerignore",
+      "scripts/copy-host-assets.mjs"
+    ],
+    "exclude": []
+  }
+}

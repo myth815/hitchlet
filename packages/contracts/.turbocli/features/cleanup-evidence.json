@@ -1,0 +1,13 @@
+{
+  "id": "cleanup-evidence",
+  "writeSet": {
+    "implementation": ["src/cleanup-proof.ts"],
+    "tests": ["test/pre-ready-cleanup-proof.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/pre-ready-cleanup-proof.test.ts"
+    }
+  ]
+}

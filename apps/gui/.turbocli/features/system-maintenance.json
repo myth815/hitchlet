@@ -1,0 +1,11 @@
+{
+  "id": "system-maintenance",
+  "writeSet": {
+    "implementation": ["src/SystemPanel.tsx"],
+    "tests": ["src/SystemPanel.test.tsx"],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/gui test src/SystemPanel.test.tsx" }
+  ]
+}

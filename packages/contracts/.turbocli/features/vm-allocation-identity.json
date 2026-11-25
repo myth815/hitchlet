@@ -1,0 +1,13 @@
+{
+  "id": "vm-allocation-identity",
+  "writeSet": {
+    "implementation": ["src/vm-runtime-identity.ts"],
+    "tests": ["test/vm-runtime-identity.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/vm-runtime-identity.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "id": "runtime-network-and-storage",
+  "writeSet": {
+    "implementation": [
+      "src/providers/runtime-credentials.ts",
+      "src/providers/runtime-network-client.ts",
+      "src/providers/runtime-network-port.ts"
+    ],
+    "tests": [
+      "test/runtime-host-egress.test.ts",
+      "test/runtime-network-client.test.ts",
+      "test/runtime-storage-client.test.ts"
+    ],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/runtime-host-egress.test.ts test/runtime-network-client.test.ts test/runtime-storage-client.test.ts"
+    }
+  ]
+}

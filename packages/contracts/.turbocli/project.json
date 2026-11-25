@@ -1,0 +1,20 @@
+{
+  "protocolVersion": "1.0",
+  "featureRoom": {
+    "scope": {
+      "implementation": ["src/**/*.ts", "!src/**/*.typecheck.ts"],
+      "tests": ["test/**/*.ts", "src/**/*.typecheck.ts"],
+      "assets": ["package.json", "tsconfig.json"]
+    },
+    "shared": ["src/common.ts", "src/execution-diagnostic.ts"],
+    "projectLevel": [
+      "src/index.ts",
+      "src/public.ts",
+      "src/internal.ts",
+      "src/public-boundary.typecheck.ts",
+      "package.json",
+      "tsconfig.json"
+    ],
+    "exclude": []
+  }
+}

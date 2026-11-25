@@ -1,0 +1,13 @@
+{
+  "id": "power-management",
+  "writeSet": {
+    "implementation": ["src/PowerPanel.tsx", "src/PowerExecutionPanel.tsx"],
+    "tests": ["src/PowerPanel.test.tsx", "src/PowerExecutionPanel.test.tsx"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/gui test src/PowerPanel.test.tsx src/PowerExecutionPanel.test.tsx"
+    }
+  ]
+}

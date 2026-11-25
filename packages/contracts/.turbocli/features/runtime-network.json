@@ -1,0 +1,16 @@
+{
+  "id": "runtime-network",
+  "writeSet": {
+    "implementation": ["src/network-destination.ts", "src/runtime-network.ts"],
+    "tests": ["test/network-destination.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/network-destination.test.ts"
+    },
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/firewall.test.ts"
+    }
+  ]
+}

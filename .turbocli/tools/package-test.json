@@ -1,0 +1,21 @@
+{
+  "id": "hitchlet.package-test",
+  "description": "运行指定 Hitchlet 工作区成员的真实 package.json test 脚本。",
+  "executable": "node",
+  "argv": [
+    "scripts/agent-worktree.mjs",
+    "package-test",
+    {
+      "parameter": "member"
+    }
+  ],
+  "parameters": {
+    "member": {
+      "type": "string",
+      "description": "准确的包名，例如 @hitchlet/runtime-agent",
+      "required": true
+    }
+  },
+  "group": "hitchlet",
+  "groupDescription": "Hitchlet 工作树、成员构建与测试"
+}

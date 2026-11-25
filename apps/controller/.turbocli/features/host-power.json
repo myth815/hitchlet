@@ -1,0 +1,17 @@
+{
+  "id": "host-power",
+  "writeSet": {
+    "implementation": [
+      "src/application/power*.ts",
+      "src/domain/power*.ts",
+      "src/storage/power*.ts"
+    ],
+    "tests": ["test/power*.test.ts"],
+    "assets": ["src/storage/migrations/006-power-dry-run.sql"]
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/power-domain.test.ts test/power-execution.test.ts test/power.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "id": "management-workbench",
+  "writeSet": {
+    "implementation": [
+      "src/ManagementConsole.tsx",
+      "src/management-prepared.ts"
+    ],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/gui test src/Management.test.tsx" }
+  ]
+}

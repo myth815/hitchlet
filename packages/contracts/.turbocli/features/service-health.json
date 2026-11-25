@@ -1,0 +1,11 @@
+{
+  "id": "service-health",
+  "writeSet": {
+    "implementation": ["src/health.ts"],
+    "tests": ["test/health.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/contracts test test/health.test.ts" }
+  ]
+}

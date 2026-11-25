@@ -1,0 +1,14 @@
+{
+  "id": "console-access",
+  "writeSet": {
+    "implementation": ["src/console.ts"],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/sdk test test/console.test.ts" },
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/console.test.ts"
+    }
+  ]
+}

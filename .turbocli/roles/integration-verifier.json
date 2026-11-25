@@ -1,0 +1,49 @@
+{
+  "placements": [
+    {
+      "kind": "workspace"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    },
+    {
+      "id": "hitchlet.package-test",
+      "source": ".turbocli/tools/package-test.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "integration-verifier",
+    "version": "1",
+    "name": "工作区联验员",
+    "description": "从使用者入口检验本工作区跨包组合。"
+  },
+  "skills": [".turbocli/skills/proof/SKILL.md"],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/integration-verifier.method.md",
+    "sha256": "67de460f3e6e62522fb9ba3b30d009c36e1f56d3929e4948feb7fb824d775c57"
+  }
+}

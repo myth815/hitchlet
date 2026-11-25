@@ -1,0 +1,50 @@
+{
+  "placements": [
+    {
+      "kind": "workspace"
+    },
+    {
+      "kind": "line"
+    },
+    {
+      "kind": "module"
+    },
+    {
+      "kind": "feature"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "owner",
+    "version": "1",
+    "name": "Owner",
+    "description": "负责当前节点的交付、接口分歧和最终验收。"
+  },
+  "skills": [".turbocli/skills/scope/SKILL.md"],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/owner.method.md",
+    "sha256": "2847a4da593f4bca7547ec6cb18617d30359bd8255c35788e9264de9f0932bcd"
+  }
+}

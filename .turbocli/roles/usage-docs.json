@@ -1,0 +1,49 @@
+{
+  "placements": [
+    {
+      "kind": "feature"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    },
+    {
+      "id": "hitchlet.apply-patch",
+      "source": ".turbocli/tools/apply-patch.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "usage-docs",
+    "version": "1",
+    "name": "功能使用文档员",
+    "description": "将本功能已验证的操作和结果写成用户可用的步骤。"
+  },
+  "skills": [],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/usage-docs.method.md",
+    "sha256": "1a7f30d9bd22ae0c59156f5fce1d40e1ced1e3e1351aa20295a9deb75175ce69"
+  }
+}

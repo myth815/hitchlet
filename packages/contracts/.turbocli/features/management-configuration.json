@@ -1,0 +1,13 @@
+{
+  "id": "management-configuration",
+  "writeSet": {
+    "implementation": ["src/management.ts"],
+    "tests": ["test/management.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/management.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "tart-vm",
+  "writeSet": {
+    "implementation": [
+      "src/drivers/tart*.ts",
+      "src/tart-main.ts",
+      "src/tart-server.ts",
+      "src/drivers/tart-guest-bootstrap.cjs"
+    ],
+    "tests": ["test/tart-*.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/tart-driver.test.ts test/tart-guest-bootstrap.test.ts test/tart-main.test.ts test/tart-network.test.ts test/tart-server.test.ts"
+    }
+  ]
+}

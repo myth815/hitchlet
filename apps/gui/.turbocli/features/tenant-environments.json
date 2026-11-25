@@ -1,0 +1,18 @@
+{
+  "id": "tenant-environments",
+  "writeSet": {
+    "implementation": [
+      "src/Panels.tsx",
+      "src/AuthorizedAcquire.tsx",
+      "src/prepared.ts",
+      "src/EventUpdates.tsx"
+    ],
+    "tests": ["src/main.test.tsx"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/gui test src/main.test.tsx src/Management.test.tsx"
+    }
+  ]
+}

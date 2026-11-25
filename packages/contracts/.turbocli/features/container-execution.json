@@ -1,0 +1,16 @@
+{
+  "id": "container-execution",
+  "writeSet": {
+    "implementation": ["src/container-entrypoint.ts", "src/container-group.ts"],
+    "tests": [
+      "test/container-entrypoint.test.ts",
+      "test/container-group.test.ts"
+    ],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/container-entrypoint.test.ts test/container-group.test.ts"
+    }
+  ]
+}

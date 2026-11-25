@@ -1,0 +1,20 @@
+{
+  "id": "tart-runtime",
+  "writeSet": {
+    "implementation": [
+      "src/tart-runtime.ts",
+      "src/tart-network.ts",
+      "src/tart-transport.ts"
+    ],
+    "tests": ["test/tart-runtime.test.ts", "test/tart-transport.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/tart-runtime.test.ts test/tart-transport.test.ts"
+    },
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/tart-network.test.ts"
+    }
+  ]
+}

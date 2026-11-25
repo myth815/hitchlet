@@ -1,0 +1,25 @@
+{
+  "id": "container-network",
+  "writeSet": {
+    "implementation": [
+      "src/engine.ts",
+      "src/firewall.ts",
+      "src/worker.ts",
+      "scripts/preflight-context.sh",
+      "scripts/probe-published-port.sh"
+    ],
+    "tests": [
+      "test/container-group-engine.test.ts",
+      "test/engine.test.ts",
+      "test/firewall.test.ts",
+      "test/preflight-script.test.ts",
+      "test/worker.test.ts"
+    ],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/container-group-engine.test.ts test/engine.test.ts test/firewall.test.ts test/preflight-script.test.ts test/worker.test.ts"
+    }
+  ]
+}

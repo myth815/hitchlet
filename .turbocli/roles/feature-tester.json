@@ -1,0 +1,53 @@
+{
+  "placements": [
+    {
+      "kind": "feature"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    },
+    {
+      "id": "hitchlet.apply-patch",
+      "source": ".turbocli/tools/apply-patch.json"
+    },
+    {
+      "id": "hitchlet.package-test",
+      "source": ".turbocli/tools/package-test.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "feature-tester",
+    "version": "1",
+    "name": "功能测试员",
+    "description": "独立设计并执行覆盖本功能的回归测试。"
+  },
+  "skills": [".turbocli/skills/proof/SKILL.md"],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/feature-tester.method.md",
+    "sha256": "744807eb1563b67deceed648ae78dba6140b96a04478b6ac6de972d0c7559170"
+  }
+}

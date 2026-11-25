@@ -1,0 +1,30 @@
+{
+  "id": "ticket-lifecycle",
+  "writeSet": {
+    "implementation": [
+      "src/application/commands.ts",
+      "src/application/leases.ts",
+      "src/application/queries.ts",
+      "src/application/tickets.ts",
+      "src/domain/admission.ts",
+      "src/domain/ticket.ts",
+      "src/storage/read-store.ts",
+      "src/storage/renewal-store.ts",
+      "src/storage/termination-context.ts",
+      "src/storage/ticket-store.ts"
+    ],
+    "tests": [
+      "test/admission.test.ts",
+      "test/d05-review.test.ts",
+      "test/lease-background.test.ts",
+      "test/ticket-domain.test.ts",
+      "test/tickets.test.ts"
+    ],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/admission.test.ts test/d05-review.test.ts test/lease-background.test.ts test/ticket-domain.test.ts test/tickets.test.ts"
+    }
+  ]
+}

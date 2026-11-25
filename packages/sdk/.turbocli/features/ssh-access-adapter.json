@@ -1,0 +1,13 @@
+{
+  "id": "ssh-access-adapter",
+  "writeSet": {
+    "implementation": ["examples/ssh-access-adapter.mjs"],
+    "tests": ["test/ssh-access-adapter.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/sdk test test/ssh-access-adapter.test.ts"
+    }
+  ]
+}

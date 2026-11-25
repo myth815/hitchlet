@@ -1,0 +1,25 @@
+{
+  "id": "resource-evidence",
+  "writeSet": {
+    "implementation": [
+      "src/application/group-inventory.ts",
+      "src/application/pre-ready-cleanup-proof.ts",
+      "src/application/ticket-cleanup-proof.ts",
+      "src/application/ticket-ready-inventory.ts",
+      "src/http/cleanup-proof-route.ts",
+      "src/http/ready-inventory-route.ts"
+    ],
+    "tests": [
+      "test/cleanup-proof-retention.test.ts",
+      "test/ticket-cleanup-proof.test.ts",
+      "test/ticket-proof-provider-integration.test.ts",
+      "test/ticket-ready-inventory.test.ts"
+    ],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/cleanup-proof-retention.test.ts test/ticket-cleanup-proof.test.ts test/ticket-proof-provider-integration.test.ts test/ticket-ready-inventory.test.ts"
+    }
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "protocolVersion": "1.0",
+  "featureRoom": {
+    "scope": {
+      "implementation": ["src/**/*.ts", "examples/**/*.mjs"],
+      "tests": ["test/**/*.ts"],
+      "assets": ["*.md", "examples/**/*.md", "package.json", "tsconfig.json"]
+    },
+    "shared": ["test/management.test.ts"],
+    "projectLevel": [
+      "README.md",
+      "examples/README.md",
+      "package.json",
+      "tsconfig.json"
+    ],
+    "exclude": []
+  }
+}

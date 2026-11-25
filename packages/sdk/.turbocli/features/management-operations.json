@@ -1,0 +1,11 @@
+{
+  "id": "management-operations",
+  "writeSet": {
+    "implementation": ["src/management.ts"],
+    "tests": [],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/sdk test test/management.test.ts" }
+  ]
+}

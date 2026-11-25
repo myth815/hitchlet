@@ -1,0 +1,21 @@
+{
+  "id": "maintenance-and-recovery",
+  "writeSet": {
+    "implementation": [
+      "src/application/maintenance.ts",
+      "src/application/recovery.ts",
+      "src/providers/recovery-control.ts",
+      "src/recovery-cli.ts",
+      "src/storage/history-retention.ts",
+      "src/storage/maintenance-store.ts",
+      "src/storage/recovery-store.ts"
+    ],
+    "tests": ["test/maintenance.test.ts"],
+    "assets": ["src/storage/migrations/007-operations-maintenance.sql"]
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/maintenance.test.ts"
+    }
+  ]
+}

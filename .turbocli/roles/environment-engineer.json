@@ -1,0 +1,45 @@
+{
+  "placements": [
+    {
+      "kind": "workspace"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "environment-engineer",
+    "version": "1",
+    "name": "环境工程师",
+    "description": "为当前工作区核对 Node、pnpm、包依赖和构建起点。"
+  },
+  "skills": [],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/environment-engineer.method.md",
+    "sha256": "f7aa6ee70ce6dbc31737eb309a34a02a49d99267204d14e419af738ac8d2c7db"
+  }
+}

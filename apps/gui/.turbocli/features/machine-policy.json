@@ -1,0 +1,11 @@
+{
+  "id": "machine-policy",
+  "writeSet": {
+    "implementation": ["src/MachinePanel.tsx"],
+    "tests": ["src/MachinePanel.test.tsx"],
+    "assets": []
+  },
+  "testEntries": [
+    { "command": "pnpm --filter @hitchlet/gui test src/MachinePanel.test.tsx" }
+  ]
+}

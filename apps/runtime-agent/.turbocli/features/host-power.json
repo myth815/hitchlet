@@ -1,0 +1,13 @@
+{
+  "id": "host-power",
+  "writeSet": {
+    "implementation": ["src/host-power*.ts", "src/host-power-windows.ps1"],
+    "tests": ["test/host-power*.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/runtime-agent test test/host-power-evidence.test.ts test/host-power-native-image.test.ts test/host-power-observation-record.test.ts test/host-power-observer.test.ts test/host-power-watch-launcher.test.ts test/host-power.test.ts"
+    }
+  ]
+}

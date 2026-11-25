@@ -1,0 +1,17 @@
+{
+  "id": "portainer-containers",
+  "writeSet": {
+    "implementation": [
+      "src/application/portainer-background.ts",
+      "src/providers/container-group.ts",
+      "src/providers/portainer-*.ts"
+    ],
+    "tests": ["test/portainer-*.test.ts", "test/provider-probe.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/portainer-background.test.ts test/portainer-cache.test.ts test/portainer-capability.test.ts test/portainer-cleanup.test.ts test/portainer-request-error.test.ts test/provider-probe.test.ts"
+    }
+  ]
+}

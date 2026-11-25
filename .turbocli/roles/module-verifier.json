@@ -1,0 +1,53 @@
+{
+  "placements": [
+    {
+      "kind": "module"
+    }
+  ],
+  "fixedTools": [
+    {
+      "id": "hitchlet.read-file",
+      "source": ".turbocli/tools/read-file.json"
+    },
+    {
+      "id": "hitchlet.diff",
+      "source": ".turbocli/tools/diff.json"
+    },
+    {
+      "id": "hitchlet.package-build",
+      "source": ".turbocli/tools/package-build.json"
+    },
+    {
+      "id": "hitchlet.package-test",
+      "source": ".turbocli/tools/package-test.json"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "module-verifier",
+    "version": "1",
+    "name": "模块构建与联验员",
+    "description": "负责单个包构建、接口验证及与相邻包的端到端用例。"
+  },
+  "skills": [".turbocli/skills/proof/SKILL.md"],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/module-verifier.method.md",
+    "sha256": "83d24abcb3568e1000cb5d5b90ffa476a22f17acbb73e24fcfb37aa0bb97a77b"
+  }
+}

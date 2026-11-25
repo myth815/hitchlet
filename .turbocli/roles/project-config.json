@@ -1,0 +1,35 @@
+{
+  "placements": [
+    {
+      "kind": "project"
+    }
+  ],
+  "schemaVersion": "role-manifest/2",
+  "role": {
+    "id": "project-config",
+    "version": "1",
+    "name": "项目配置维护员",
+    "description": "维护 Hitchlet 的工程配置和开线输入。"
+  },
+  "skills": [],
+  "projectRules": [],
+  "modelTuning": [],
+  "modelStrategy": {
+    "kind": "single",
+    "modelRef": "c04fc8be-25e5-4a2e-8a16-f2fe078ee24c"
+  },
+  "tools": [],
+  "lifecycle": {
+    "kind": "continuable"
+  },
+  "context": {
+    "kind": "window",
+    "policyRef": "pending",
+    "mode": "stacked"
+  },
+  "builtins": ["time", "branch", "commit", "model"],
+  "template": {
+    "path": ".turbocli/roles/project-config.method.md",
+    "sha256": "c22b0fa955049fe4a29b1bb612977eb04a3a257ace7c7b11077933d04c254f55"
+  }
+}

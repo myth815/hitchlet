@@ -1,0 +1,16 @@
+{
+  "id": "host-observation",
+  "writeSet": {
+    "implementation": ["src/host-agent.ts", "src/host-observation.ts"],
+    "tests": ["test/host-observation.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/contracts test test/host-observation.test.ts"
+    },
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/host-agents.test.ts"
+    }
+  ]
+}

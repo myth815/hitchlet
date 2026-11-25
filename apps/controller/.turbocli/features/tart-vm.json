@@ -1,0 +1,13 @@
+{
+  "id": "tart-vm",
+  "writeSet": {
+    "implementation": ["src/application/tart-*.ts", "src/providers/tart-*.ts"],
+    "tests": ["test/tart-*.test.ts"],
+    "assets": []
+  },
+  "testEntries": [
+    {
+      "command": "pnpm --filter @hitchlet/controller test test/tart-admin-publication.test.ts test/tart-nat-qualification.test.ts test/tart-provider.test.ts test/tart-recovery.test.ts test/tart-runtime-client.test.ts test/tart-ssh-readiness.test.ts"
+    }
+  ]
+}
