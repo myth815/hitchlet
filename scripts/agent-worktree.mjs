@@ -92,7 +92,8 @@ function matchingRules(file, patterns) {
 function findMember(target, git, revision) {
   const ancestors = [];
   for (let dir = dirname(target); dir !== "."; dir = dirname(dir))
-    ancestors.push(dir + "/package.json");
+    for (const name of ["package.json", "package.json5", "package.yaml"])
+      ancestors.push(dir + "/" + name);
   if (!ancestors.length) return;
   const paths = new Set(
     git(
@@ -123,15 +124,14 @@ function findMember(target, git, revision) {
     exclude = ["**/node_modules/**", "**/bower_components/**"];
   // pnpm appends a manifest suffix and tinyglobby distinguishes !(...) from a negation.
   for (const raw of patterns) {
-    const p = raw.replace(/\/?$/, "/package.json");
+    const p = raw.replace(/\/?$/, "/package.{json,yaml,json5}");
     if (!p.startsWith("!") || p.startsWith("!(")) include.push(normalize(p));
     else if (!p.startsWith("!!") || p.startsWith("!!("))
       exclude.push(normalize(p.slice(1)));
   }
   const included = picomatch(include, { posix: true }),
     excluded = picomatch(exclude, { posix: true });
-  const owner = candidates.find((path) => included(path) && !excluded(path));
-  return owner && dirname(owner);
+  return candidates.find((path) => included(path) && !excluded(path));
 }
 
 function findFeature(input) {
@@ -160,16 +160,33 @@ function findFeature(input) {
     roomRules,
     unavailable,
   };
-  const directory = findMember(target, git, revision);
-  if (!directory) {
+  const manifest = findMember(target, git, revision);
+  if (!manifest) {
     console.log(JSON.stringify(result));
     return;
   }
-  const prefix = directory + "/",
+  const directory = dirname(manifest),
+    prefix = directory + "/",
     file = target.slice(prefix.length);
   const read = (path) => JSON.parse(git("show", revision + ":" + path));
-  const pkg = read(prefix + "package.json"),
-    roomSource = prefix + roomFile;
+  const roomSource = prefix + roomFile;
+  let pkg;
+  try {
+    const contents = git("show", revision + ":" + manifest);
+    pkg = manifest.endsWith(".yaml")
+      ? yaml.load(contents)
+      : JSON.parse(contents);
+    if (!object(pkg)) throw Error();
+  } catch {
+    unavailable.push({
+      source: manifest,
+      error: manifest.endsWith(".json5")
+        ? "package_json5_unavailable"
+        : "package_manifest_invalid",
+    });
+    console.log(JSON.stringify(result));
+    return;
+  }
   result.module = { directory, name: pkg.name ?? directory };
   const featureDir = prefix + ".turbocli/features/";
   const paths = git(

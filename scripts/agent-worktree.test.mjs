@@ -391,3 +391,64 @@ test("find-feature follows the committed pnpm member set and reports conflicting
     ["valid"],
   );
 });
+
+test("nested YAML and JSON5 packages belong to their own module, including when the local parser cannot read its name", async (t) => {
+  const { cwd, git } = await fixture(t);
+  await writeFile(join(cwd, "pnpm-workspace.yaml"), 'packages: ["apps/**"]\n');
+  const modules = [
+    ["apps/outer", "package.json", '{"name":"outer"}'],
+    ["apps/outer/y", "package.yaml", "name: nested-yaml"],
+    ["apps/outer/j", "package.json5", '{"name":"nested-json5"}'],
+    ["apps/outer/extended", "package.json5", "{name:'extended',}"],
+  ];
+  for (const [dir, manifest, body] of modules) {
+    const folder = join(cwd, dir, ".turbocli/features");
+    await mkdir(folder, { recursive: true });
+    await writeFile(join(cwd, dir, manifest), body);
+    await writeFile(
+      join(folder, "f.json"),
+      JSON.stringify({
+        id: "owned",
+        writeSet: { implementation: ["**"] },
+        testEntries: [],
+      }),
+    );
+  }
+  git("add", "apps", "pnpm-workspace.yaml");
+  git(
+    "-c",
+    "user.name=fixture",
+    "-c",
+    "user.email=fixture@localhost",
+    "commit",
+    "-qm",
+    "alternative manifests",
+  );
+  const find = (dir) =>
+    JSON.parse(
+      execFileSync(process.execPath, [entry, "find-feature", dir + "/x.ts"], {
+        cwd,
+        encoding: "utf8",
+      }),
+    );
+  for (const [dir, name] of [
+    ["apps/outer/y", "nested-yaml"],
+    ["apps/outer/j", "nested-json5"],
+  ]) {
+    const found = find(dir);
+    assert.deepEqual(found.module, { directory: dir, name });
+    assert.deepEqual(
+      found.matches.map((x) => x.source),
+      [dir + "/.turbocli/features/f.json"],
+    );
+  }
+  const unavailable = find("apps/outer/extended");
+  assert.equal(unavailable.module, null);
+  assert.deepEqual(unavailable.matches, []);
+  assert.deepEqual(unavailable.unavailable, [
+    {
+      source: "apps/outer/extended/package.json5",
+      error: "package_json5_unavailable",
+    },
+  ]);
+});
