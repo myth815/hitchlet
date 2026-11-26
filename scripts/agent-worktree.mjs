@@ -292,7 +292,13 @@ function run(command, argv, input) {
     stdio: [input === undefined ? "inherit" : "pipe", "inherit", "inherit"],
     ...(input !== undefined && { input }),
   });
-  if (result.error) throw result.error;
+  if (result.error) {
+    // A child can close stdin early (EPIPE) after reporting its own failure.
+    // Return failure so a caller can still report work already applied.
+    console.error(result.error.message);
+    process.exitCode = result.status || 1;
+    return false;
+  }
   process.exitCode = result.status ?? 1;
   return result.status === 0;
 }
