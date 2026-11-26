@@ -287,7 +287,10 @@ test("find-feature checks the committed module's globs, keeps overlaps, and sepa
 test("find-feature follows the committed pnpm member set and reports conflicting identities across the whole module", async (t) => {
   const { cwd, git } = await fixture(t);
   const manifest = join(cwd, "pnpm-workspace.yaml");
-  await writeFile(manifest, "packages:\n  - 'apps/*'\n  - '!apps/excluded'\n");
+  await writeFile(
+    manifest,
+    "members: &members\n  - 'apps/(included|excluded)'\n  - '!apps/excluded'\npackages: *members\n",
+  );
   const moduleRoot = join(cwd, "apps/included");
   async function put(module, path, value) {
     const destination = join(cwd, module, path);

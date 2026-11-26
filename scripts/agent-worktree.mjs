@@ -1,19 +1,11 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  constants,
-  lstatSync,
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { constants, lstatSync } from "node:fs";
+import yaml from "./vendor/js-yaml-4.3.2/js-yaml.min.cjs";
+import picomatch from "./vendor/picomatch-4.0.7/index.js";
 import { lstat, open, readlink, realpath } from "node:fs/promises";
 import {
   dirname,
   isAbsolute,
-  join,
   matchesGlob,
   normalize,
   relative,
@@ -95,71 +87,51 @@ function matchingRules(file, patterns) {
   return patterns.filter((p) => !p.startsWith("!") && matchesGlob(file, p));
 }
 
-// Let pnpm resolve membership in the committed workspace. Only ancestors of the
-// requested file can own it; no source files or working-copy settings are read.
+// Use the same YAML parser and glob engine as pnpm's workspace discovery.
+// Package manifests and membership are both read from the same Git revision.
 function findMember(target, git, revision) {
-  const ancestorManifests = [];
+  const ancestors = [];
   for (let dir = dirname(target); dir !== "."; dir = dirname(dir))
-    ancestorManifests.push(dir + "/package.json");
-  if (!ancestorManifests.length) return;
-  const paths = git(
-    "--literal-pathspecs",
-    "ls-tree",
-    "-z",
-    "--name-only",
-    revision,
-    "--",
-    workspaceFile,
-    ...ancestorManifests,
-  ).split("\0");
-  const candidates = ancestorManifests.filter((manifest) =>
-    paths.includes(manifest),
+    ancestors.push(dir + "/package.json");
+  if (!ancestors.length) return;
+  const paths = new Set(
+    git(
+      "--literal-pathspecs",
+      "ls-tree",
+      "-z",
+      "--name-only",
+      revision,
+      "--",
+      workspaceFile,
+      ...ancestors,
+    ).split("\0"),
   );
+  const candidates = ancestors.filter((path) => paths.has(path));
   if (!candidates.length) return;
-  if (!paths.includes(workspaceFile))
+  if (!paths.has(workspaceFile))
     throw Error("pnpm workspace manifest is missing");
-
-  const snapshot = realpathSync(
-    mkdtempSync(join(tmpdir(), "hitchlet-member-")),
-  );
-  try {
-    writeFileSync(
-      join(snapshot, workspaceFile),
-      git("show", revision + ":" + workspaceFile),
-    );
-    for (const path of candidates) {
-      mkdirSync(join(snapshot, dirname(path)), { recursive: true });
-      writeFileSync(join(snapshot, path), git("show", revision + ":" + path));
-    }
-    const listing = execFileSync(
-      "pnpm",
-      [
-        "--config.offline=true",
-        "--config.ignore-scripts=true",
-        "--config.ignore-pnpmfile=true",
-        "--config.manage-package-manager-versions=false",
-        "list",
-        "-r",
-        "--depth",
-        "-1",
-        "--json",
-      ],
-      {
-        cwd: snapshot,
-        encoding: "utf8",
-        env: { ...process.env, COREPACK_ENABLE_NETWORK: "0" },
-      },
-    ).trim();
-    // pnpm prints no JSON at all if none of these ancestors is a member.
-    const members = new Set(
-      (listing ? JSON.parse(listing) : []).map((member) =>
-        relative(snapshot, member.path),
-      ),
-    );
-    return candidates.map(dirname).find((directory) => members.has(directory));
-  } finally {
-    rmSync(snapshot, { recursive: true, force: true });
+  const workspace = yaml.load(git("show", revision + ":" + workspaceFile));
+  if (workspace !== undefined && !object(workspace))
+    throw Error("Invalid pnpm workspace manifest");
+  const patterns = workspace?.packages ?? [".", "**"];
+  if (
+    !Array.isArray(patterns) ||
+    !patterns.every((p) => typeof p === "string" && p.length > 0)
+  )
+    throw Error("Invalid pnpm workspace package patterns");
+  const include = [],
+    exclude = ["**/node_modules/**", "**/bower_components/**"];
+  // pnpm appends a manifest suffix and tinyglobby distinguishes !(...) from a negation.
+  for (const raw of patterns) {
+    const p = raw.replace(/\/?$/, "/package.json");
+    if (!p.startsWith("!") || p.startsWith("!(")) include.push(normalize(p));
+    else if (!p.startsWith("!!") || p.startsWith("!!("))
+      exclude.push(normalize(p.slice(1)));
   }
+  const included = picomatch(include, { posix: true }),
+    excluded = picomatch(exclude, { posix: true });
+  const owner = candidates.find((path) => included(path) && !excluded(path));
+  return owner && dirname(owner);
 }
 
 function findFeature(input) {

@@ -9,3 +9,7 @@ pnpm-lock.yaml
 
 # Preserve formatting in the established project overview.
 README.md
+
+# Preserve the upstream distributions used by the offline Agent tool.
+scripts/vendor/js-yaml-4.3.2/
+scripts/vendor/picomatch-4.0.7/
