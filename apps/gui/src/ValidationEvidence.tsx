@@ -182,6 +182,7 @@ export function ValidationEvidence({
               ? "未确认"
               : new Date(view.evidenceExpiresAtMs).toLocaleString()}
           </p>
+          <p>当前状态 {view.state}</p>
           {failure?.success && (
             <p>
               历史首错：{failure.data.stage} / {failure.data.category}
@@ -198,7 +199,7 @@ export function ValidationEvidence({
               {"statusCode" in failure.data && failure.data.statusCode
                 ? ` / HTTP ${failure.data.statusCode}`
                 : ""}{" "}
-              · operation {failure.data.operationId}；当前状态 {view.state}。
+              · operation {failure.data.operationId}。
             </p>
           )}
           <ul>

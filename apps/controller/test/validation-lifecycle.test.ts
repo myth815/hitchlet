@@ -2327,10 +2327,13 @@ describe("shared durable validation lifecycle (simulated execution; no hardware 
       headers,
     });
     expect(query.statusCode).toBe(200);
-    expect(query.json()).toMatchObject({
+    const report = query.json();
+    expect(report).toMatchObject({
       state: "succeeded",
+      cleanupStatus: "complete",
       reportId: run.validationId,
     });
+    expect(report.checks).not.toHaveProperty("firstExecutionFailure");
     const stale = await app.inject({
       method: "POST",
       url: `/v1/image-versions/${versionId}/publish`,

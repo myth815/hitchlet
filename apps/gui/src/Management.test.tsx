@@ -1156,9 +1156,12 @@ it("keeps unknown revoke intent on its original key without blocking another Tic
   expect(writes.at(-1)).toBe(`/v1/tickets/${version}/revoke`);
 });
 
-it.each([false, true])(
-  "renders the formal validation failure and safe lifecycle facts (processExit=%s) while keeping raw diagnostics hidden",
-  async (processExit) => {
+it.each(["network mismatch", "process exit", "no failure"])(
+  "shows the current validation state and safe historical evidence (%s)",
+  async (scenario) => {
+    const hasFailure = scenario !== "no failure";
+    const processExit = scenario === "process exit";
+    const state = hasFailure ? "failed" : "succeeded";
     let safe = true;
     const client = new HitchletClient("https://controller.test", {
       fetch: async () =>
@@ -1167,33 +1170,39 @@ it.each([false, true])(
           imageArtifactId: id,
           nodeId: network,
           requestedByConsumerId: id,
-          reportId: null,
+          reportId: version,
           acceptedContract: {},
-          state: "failed",
-          testOutcome: "failed",
+          state,
+          testOutcome: hasFailure ? "failed" : "passed",
           cleanupStatus: "complete",
           scope: {},
-          checks: {
-            firstExecutionFailure: {
-              provider: "portainer",
-              stage: processExit ? "readiness" : "container_create",
-              category: processExit
-                ? "process_exited"
-                : "configuration_mismatch",
-              reasonCode: safe
-                ? processExit
-                  ? "container_process_exited"
-                  : "container_network_id_mismatch"
-                : "PRIVATE_DIAGNOSTIC_BODY",
-              ...(processExit
-                ? { containerState: "exited", exitCode: 1, oomKilled: false }
-                : {}),
-              operationId: id,
-              observedAtMs: 1,
-              attempt: 1,
-              operation: "provision",
-            },
-          },
+          checks: hasFailure
+            ? {
+                firstExecutionFailure: {
+                  provider: "portainer",
+                  stage: processExit ? "readiness" : "container_create",
+                  category: processExit
+                    ? "process_exited"
+                    : "configuration_mismatch",
+                  reasonCode: safe
+                    ? processExit
+                      ? "container_process_exited"
+                      : "container_network_id_mismatch"
+                    : "PRIVATE_DIAGNOSTIC_BODY",
+                  ...(processExit
+                    ? {
+                        containerState: "exited",
+                        exitCode: 1,
+                        oomKilled: false,
+                      }
+                    : {}),
+                  operationId: id,
+                  observedAtMs: 1,
+                  attempt: 1,
+                  operation: "provision",
+                },
+              }
+            : {},
           deadlineMs: 10000,
           finishedAtMs: 1,
           evidenceExpiresAtMs: null,
@@ -1206,15 +1215,23 @@ it.each([false, true])(
       <ValidationEvidence client={client} id={version} />,
     );
     await click(element, "检查原验证报告与截止");
+    expect(element.textContent).toContain(`当前状态 ${state}`);
+    expect(element.textContent).toContain("cleanup complete");
+    if (!hasFailure) {
+      expect(element.textContent).not.toContain("历史首错");
+      return;
+    }
     expect(element.textContent).toContain(
       processExit
         ? "历史首错：readiness / process_exited / container_process_exited / exit 1 / OOM false"
         : "历史首错：container_create / configuration_mismatch / container_network_id_mismatch",
     );
-    expect(element.textContent).toContain(`operation ${id}；当前状态 failed`);
+    expect(element.textContent).toContain(`operation ${id}`);
     expect(element.textContent).not.toContain("HTTP 200");
     safe = false;
     await click(element, "检查原验证报告与截止");
     expect(element.textContent).not.toContain("PRIVATE_DIAGNOSTIC_BODY");
+    expect(element.textContent).not.toContain("历史首错");
+    expect(element.textContent).toContain("当前状态 failed");
   },
 );
