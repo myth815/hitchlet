@@ -30,8 +30,12 @@ afterEach(async () => {
 
 function deferred() {
   let resolve!: () => void;
-  const promise = new Promise<void>((done) => (resolve = done));
-  return { promise, resolve };
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<void>((done, fail) => {
+    resolve = done;
+    reject = fail;
+  });
+  return { promise, resolve, reject };
 }
 
 async function fixture(withRenewal = true) {
@@ -120,6 +124,7 @@ describe("lease decision scheduling alongside slow work", () => {
     vi.useFakeTimers();
     const mainGate = deferred();
     const mainStarted = deferred();
+    const leaseFinished = deferred();
     const loops = new ControllerBackgroundLoops({
       refreshObservations: async () => undefined,
       reconcile: async () => {
@@ -129,27 +134,32 @@ describe("lease decision scheduling alongside slow work", () => {
       reconcileLeaseIntents: () =>
         reconcileLeaseAndExpiryIntents(f.leases, f.worker),
       onReconcileSuccess: () => undefined,
-      onLeaseSuccess: () => undefined,
-      onFailure: () => undefined,
+      onLeaseSuccess: leaseFinished.resolve,
+      onFailure: (kind, error) =>
+        leaseFinished.reject(new Error(`${kind} failed`, { cause: error })),
       reconcileIntervalMs: 2_000,
     });
 
     loops.start();
-    await mainStarted.promise;
-    await vi.advanceTimersByTimeAsync(8_000);
-
-    const renewal = await f.leases.get(f.consumerId, f.ticketId, f.renewalId!);
-    expect(renewal?.state).toBe("confirmed");
-    expect(
-      await f.storage.get<{ phase: string }>(
-        "SELECT phase FROM tickets WHERE id=?",
-        [f.ticketId],
-      ),
-    ).toEqual({ phase: "ready" });
-
-    const closing = loops.close();
-    mainGate.resolve();
-    await closing;
+    try {
+      await Promise.all([mainStarted.promise, leaseFinished.promise]);
+      const renewal = await f.leases.get(
+        f.consumerId,
+        f.ticketId,
+        f.renewalId!,
+      );
+      expect(renewal?.state).toBe("confirmed");
+      expect(
+        await f.storage.get<{ phase: string }>(
+          "SELECT phase FROM tickets WHERE id=?",
+          [f.ticketId],
+        ),
+      ).toEqual({ phase: "ready" });
+    } finally {
+      const closing = loops.close();
+      mainGate.resolve();
+      await closing;
+    }
   });
 
   it("writes the real lease-expiry cleanup intent while worker I/O is blocked", async () => {
