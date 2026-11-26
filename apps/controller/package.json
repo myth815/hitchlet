@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-schema.mjs",
     "typecheck": "pnpm --filter @hitchlet/contracts build && tsc --noEmit -p tsconfig.json",
-    "test": "pnpm --filter @hitchlet/contracts build && pnpm build && vitest run",
+    "test": "pnpm --filter @hitchlet/controller... build && vitest run",
     "dev": "node scripts/dev-watch.mjs",
     "init:simulator": "pnpm --filter @hitchlet/contracts build && pnpm build && node dist/init-simulator.js",
     "init:admin": "pnpm --filter @hitchlet/contracts build && pnpm build && node dist/init-admin.js",
@@ -22,6 +22,7 @@
     "zod": "4.1.12"
   },
   "devDependencies": {
+    "@hitchlet/sdk": "workspace:*",
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.10.0",
     "@types/ssh2": "1.15.6",

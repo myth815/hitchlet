@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "tsc -p tsconfig.json && node scripts/copy-host-assets.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run"
+    "typecheck": "pnpm --filter @hitchlet/contracts build && tsc --noEmit -p tsconfig.json",
+    "test": "pnpm --filter @hitchlet/runtime-agent... build && vitest run"
   },
   "dependencies": {
     "@hitchlet/contracts": "workspace:*",

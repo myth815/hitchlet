@@ -8,8 +8,8 @@
   },
   "scripts": {
     "build": "pnpm -r build",
-    "typecheck": "pnpm --filter @hitchlet/contracts build && pnpm --filter @hitchlet/sdk build && pnpm -r typecheck",
-    "test": "pnpm -r test",
+    "typecheck": "pnpm --filter @hitchlet/sdk... build && pnpm -r exec tsc --noEmit -p tsconfig.json",
+    "test": "pnpm run build && pnpm -r exec vitest run",
     "dev": "node scripts/dev.mjs",
     "format:check": "prettier --check .",
     "format": "prettier --write ."

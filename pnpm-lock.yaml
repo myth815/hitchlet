@@ -39,6 +39,9 @@ importers:
         specifier: 4.1.12
         version: 4.1.12
     devDependencies:
+      '@hitchlet/sdk':
+        specifier: workspace:*
+        version: link:../../packages/sdk
       '@types/better-sqlite3':
         specifier: 9.6.0
         version: 9.6.0
