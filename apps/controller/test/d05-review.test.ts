@@ -14,7 +14,7 @@ import { PersistentSimulator } from "../dist/providers/simulator.js";
 import { buildApp } from "../dist/app.js";
 import { loadConfig } from "../dist/config.js";
 import { LocalSecretStore } from "../dist/storage/secret-store.js";
-import ssh2 from "ssh2";
+import { createEd25519Fixture } from "./fixtures/ed25519.js";
 
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
@@ -135,7 +135,7 @@ describe("independent D05 protocol and lease review", () => {
       const keyFile = join(f.dir, "secret-master-key");
       await writeFile(keyFile, randomBytes(32), { mode: 0o600 });
       const secrets = await LocalSecretStore.open(f.dataDir, keyFile);
-      const privateKey = ssh2.utils.generateKeyPairSync("ed25519").private;
+      const privateKey = createEd25519Fixture().privateKey;
       const secretRef = await secrets.put(privateKey);
       const accessReceipt = JSON.stringify({
         receipt: {
@@ -408,7 +408,7 @@ describe("independent D05 protocol and lease review", () => {
     const keyFile = join(f.dir, "secret-master-key");
     await writeFile(keyFile, randomBytes(32), { mode: 0o600 });
     const secrets = await LocalSecretStore.open(f.dataDir, keyFile);
-    const privateKey = ssh2.utils.generateKeyPairSync("ed25519").private;
+    const privateKey = createEd25519Fixture().privateKey;
     const secretRef = await secrets.put(privateKey);
     const accessReceipt = JSON.stringify({
       receipt: {

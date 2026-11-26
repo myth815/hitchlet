@@ -31,7 +31,7 @@ import type {
   TartNetworkPlan,
   TartReconcileRequest,
 } from "@hitchlet/contracts/internal";
-import ssh2 from "ssh2";
+import { createEd25519Fixture } from "./fixtures/ed25519.js";
 import type {
   ExecutionPort,
   ReadyReceipt,
@@ -950,11 +950,8 @@ describe("Tart artifact draft persistence", () => {
       secretStore,
       f.now,
     );
-    const { public: hostPublicKey, private: hostPrivateKey } =
-      ssh2.utils.generateKeyPairSync("ed25519");
-    const parsedHostKey = ssh2.utils.parseKey(hostPrivateKey);
-    if (parsedHostKey instanceof Error) throw parsedHostKey;
-    const hostKeyFingerprint = `SHA256:${createHash("sha256").update(parsedHostKey.getPublicSSH()).digest("base64").replace(/=+$/, "")}`;
+    const { publicKey: hostPublicKey, fingerprint: hostKeyFingerprint } =
+      createEd25519Fixture();
     const hash = (value: unknown) =>
       createHash("sha256").update(JSON.stringify(value)).digest("hex");
     let vmInspection: TartInspection | undefined;

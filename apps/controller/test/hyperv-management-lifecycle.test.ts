@@ -2,8 +2,8 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { randomUUID, createHash } from "node:crypto";
-import ssh2 from "ssh2";
+import { randomUUID } from "node:crypto";
+import { createEd25519Fixture } from "./fixtures/ed25519.js";
 import { openStorage } from "../dist/storage/index.js";
 import { AccessService } from "../src/application/access.js";
 import { TicketQueries } from "../src/application/queries.js";
@@ -281,15 +281,7 @@ it("normal Hyper-V discovery → disabled registration → qualification → val
     requestedBy: adminId,
   });
   expect(validation.scheduler).toBe("queued");
-  const host = ssh2.utils.generateKeyPairSync("ed25519");
-  const parsed = ssh2.utils.parseKey(host.private);
-  if (parsed instanceof Error) throw parsed;
-  const fingerprint =
-    "SHA256:" +
-    createHash("sha256")
-      .update(parsed.getPublicSSH())
-      .digest("base64")
-      .replace(/=+$/, "");
+  const { publicKey: hostPublicKey, fingerprint } = createEd25519Fixture();
   const states = new Map<string, HyperVInspection>();
   let creates = 0;
   const runtime = {
@@ -339,7 +331,7 @@ it("normal Hyper-V discovery → disabled registration → qualification → val
       v.bootstrapReceipt = {
         ...fields,
         status: "applied",
-        hostPublicKey: host.public,
+        hostPublicKey,
         hostKeyFingerprint: fingerprint,
         observedAt: new Date(clock).toISOString(),
       };

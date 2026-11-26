@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { resolve } from "node:path";
@@ -17,7 +16,7 @@ vi.mock("ssh2", async (importOriginal) => {
     default: { ...actual, ...actualDefault, Client: MockClient },
   };
 });
-import { utils as sshUtils } from "ssh2";
+import { createEd25519Fixture } from "./fixtures/ed25519.js";
 import { probeTartSsh } from "../src/providers/tart-ssh-readiness.js";
 
 class TestClient extends EventEmitter {
@@ -57,7 +56,7 @@ it("submits only the fixed SSH/22 host-key-checked command and verifies guest fa
     port: 22,
     username: "guest",
   });
-  expect(connection.hostVerifier(keys.hostBlob)).toBe(true);
+  expect(connection.hostVerifier(keys.host.publicBlob)).toBe(true);
   expect(connection.hostVerifier(Buffer.from("different-host-key"))).toBe(
     false,
   );
@@ -104,16 +103,16 @@ it("rejects mismatched guest facts and host-key verification", async () => {
 
   const hostMismatch = new TestClient();
   fixture.client = hostMismatch;
-  const otherHost = sshUtils.generateKeyPairSync("ed25519");
+  const otherHost = createEd25519Fixture();
   const rejected = expect(
     probeTartSsh({
       ...input(keys),
-      hostPublicKey: otherHost.public,
-      hostKeyFingerprint: fingerprint(otherHost.public),
+      hostPublicKey: otherHost.publicKey,
+      hostKeyFingerprint: otherHost.fingerprint,
     }),
   ).rejects.toThrow("Tart SSH readiness connection failed");
   const connection = hostMismatch.connect.mock.calls[0]![0];
-  expect(connection.hostVerifier(keys.hostBlob)).toBe(false);
+  expect(connection.hostVerifier(keys.host.publicBlob)).toBe(false);
   hostMismatch.emit("error", new Error("synthetic host key mismatch"));
   await rejected;
 });
@@ -143,10 +142,10 @@ function input(
     host: "127.0.0.1",
     port: 22,
     username: "guest",
-    privateKey: keys.client.private,
-    hostPublicKey: keys.host.public,
-    hostKeyFingerprint: keys.hostFingerprint,
-    clientPublicKeyFingerprint: keys.clientFingerprint,
+    privateKey: keys.client.privateKey,
+    hostPublicKey: keys.host.publicKey,
+    hostKeyFingerprint: keys.host.fingerprint,
+    clientPublicKeyFingerprint: keys.client.fingerprint,
     guestOS: "linux" as const,
     architecture: "arm64" as const,
     deadlineMs,
@@ -154,24 +153,5 @@ function input(
 }
 
 function keyPair() {
-  const host = sshUtils.generateKeyPairSync("ed25519");
-  const client = sshUtils.generateKeyPairSync("ed25519");
-  const publicBlob = (value: string) => {
-    const parsed = sshUtils.parseKey(value);
-    if (parsed instanceof Error) throw parsed;
-    return Buffer.from(parsed.getPublicSSH());
-  };
-  return {
-    host,
-    client,
-    hostBlob: publicBlob(host.public),
-    hostFingerprint: fingerprint(host.public),
-    clientFingerprint: fingerprint(client.public),
-  };
-}
-
-function fingerprint(value: string): string {
-  const parsed = sshUtils.parseKey(value);
-  if (parsed instanceof Error) throw parsed;
-  return `SHA256:${createHash("sha256").update(parsed.getPublicSSH()).digest("base64").replace(/=+$/, "")}`;
+  return { host: createEd25519Fixture(), client: createEd25519Fixture() };
 }

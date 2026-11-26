@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import ssh2 from "ssh2";
+import { createEd25519Fixture } from "./fixtures/ed25519.js";
 import { expect, it } from "vitest";
 import type {
   TartAllocationIdentity,
@@ -17,22 +17,6 @@ import {
   type TartExecutionProviderOptions,
 } from "../src/providers/tart-provider.js";
 import { assertFactsMatchPlan } from "../src/providers/tart-runtime-resolver.js";
-
-const { utils: sshUtils } = ssh2;
-
-function generatedKey() {
-  const pair = sshUtils.generateKeyPairSync("ed25519");
-  const parsed = sshUtils.parseKey(pair.private);
-  if (parsed instanceof Error) throw parsed;
-  const blob = parsed.getPublicSSH();
-  const typeLength = blob.readUInt32BE(0);
-  const type = blob.subarray(4, 4 + typeLength).toString("ascii");
-  return {
-    privateKey: pair.private,
-    publicKey: pair.public,
-    fingerprint: `SHA256:${createHash("sha256").update(blob).digest("base64").replace(/=+$/, "")}`,
-  };
-}
 
 function networkObservation(
   identity: TartAllocationIdentity,
@@ -136,8 +120,8 @@ function removedNetworkReceipt(
 }
 
 it("resumes one owned VM after guest apply failure and readies it with the same receipt nonce", async () => {
-  const client = generatedKey();
-  const host = generatedKey();
+  const client = createEd25519Fixture();
+  const host = createEd25519Fixture();
   let fakeNow = Date.now();
   const plan: ProvisionPlan = {
     deadlineMs: fakeNow + 60_000,
