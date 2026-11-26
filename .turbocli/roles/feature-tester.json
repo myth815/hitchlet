@@ -52,6 +52,6 @@
   "builtins": ["time", "branch", "commit", "model"],
   "template": {
     "path": ".turbocli/roles/feature-tester.method.md",
-    "sha256": "e204a65184c522e7a66dec77e56dc7784d87749bc917002a3abce944f5590e8c"
+    "sha256": "a0d9b6f5a81f6a98f8ff95745e9cfcec9408fe7f325ef6e7ae61af7625dd9dcf"
   }
 }

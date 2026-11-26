@@ -12,7 +12,7 @@
   "parameters": {
     "patch": {
       "type": "string",
-      "description": "传原生 Git unified diff 文本。文件头写 --- a/路径 和 +++ b/路径，@@ 块使用当前文件的邻行，以最后一行的换行结束。工具接受可选的单独末行 *** End Patch。补丁正文沿用 Git 格式。Git 重算 hunk 行数。遇到上下文不匹配时，重读目标文件，按最新邻行提交一个可独立核对的小改动，再用 hitchlet.diff 查看结果。",
+      "description": "传原生 Git unified diff 文本。文件头写 --- a/路径 和 +++ b/路径，@@ 块使用当前文件的邻行，以最后一行的换行结束。工具接受可选的单独末行 *** End Patch。补丁正文沿用 Git 格式。Git 重算 hunk 行数。遇到上下文不匹配，重读目标文件，仅依据最新邻行重写原本要实现的业务改动。成功表示补丁已应用；以 hitchlet.diff 核对业务差异，需要验证行为时由具备 package-test 的岗位运行测试。",
       "required": true
     }
   },
