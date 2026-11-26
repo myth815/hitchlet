@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 
@@ -203,7 +203,10 @@ test("find-feature checks the committed module's globs, keeps overlaps, and sepa
     join(folder, "../project.json"),
     JSON.stringify({
       protocolVersion: "1.0",
-      featureRoom: { shared: ["test/shared.ts"] },
+      featureRoom: {
+        scope: { tests: ["test/**"] },
+        shared: ["test/shared.ts"],
+      },
     }),
   );
   const declare = (name, tests, entries = []) =>
@@ -214,7 +217,8 @@ test("find-feature checks the committed module's globs, keeps overlaps, and sepa
   await declare("broad", ["test/**/*.test.ts", "!test/skip.test.ts"]);
   await declare("specific", ["test/x.test.ts"]);
   await declare("hint", ["src/none.ts"], [{ script: "verify" }]);
-  git("add", "apps");
+  await writeFile(join(cwd, "pnpm-workspace.yaml"), "packages:\n  - apps/*\n");
+  git("add", "apps", "pnpm-workspace.yaml");
   git(
     "-c",
     "user.name=fixture",
@@ -277,5 +281,110 @@ test("find-feature checks the committed module's globs, keeps overlaps, and sepa
   assert.deepEqual(
     partial.unavailable.map((x) => x.source),
     ["apps/sample/.turbocli/features/broken.json"],
+  );
+});
+
+test("find-feature follows the committed pnpm member set and reports conflicting identities across the whole module", async (t) => {
+  const { cwd, git } = await fixture(t);
+  const manifest = join(cwd, "pnpm-workspace.yaml");
+  await writeFile(manifest, "packages:\n  - 'apps/*'\n  - '!apps/excluded'\n");
+  const moduleRoot = join(cwd, "apps/included");
+  async function put(module, path, value) {
+    const destination = join(cwd, module, path);
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, JSON.stringify(value));
+  }
+  const declaration = (id, path, testEntries = []) => ({
+    id,
+    writeSet: { tests: [path] },
+    testEntries,
+  });
+  for (const folder of [
+    "apps/included",
+    "apps/excluded",
+    "apps/included/test/nested",
+  ]) {
+    await put(folder, "package.json", {
+      name: folder.split("/").at(-1),
+      version: "1.0.0",
+    });
+    await put(
+      folder,
+      ".turbocli/features/valid.json",
+      declaration("valid", "test/**"),
+    );
+  }
+  await put(
+    "apps/included",
+    ".turbocli/features/one.json",
+    declaration("repeated", "test/x.ts"),
+  );
+  await put(
+    "apps/included",
+    ".turbocli/features/two.json",
+    declaration("repeated", "test/y.ts"),
+  );
+  await put(
+    "apps/included",
+    ".turbocli/features/invalid.json",
+    declaration("bad/id", "test/x.ts"),
+  );
+  await put(
+    "apps/included",
+    ".turbocli/features/invalid-entry.json",
+    declaration("valid", "test/x.ts", [{ command: "test", script: "test" }]),
+  );
+  await put(
+    "apps/included",
+    ".turbocli/features/no-script.json",
+    declaration("untested", "other/**", [{ script: "absent" }]),
+  );
+  git("add", "apps", "pnpm-workspace.yaml");
+  git(
+    "-c",
+    "user.email=fixture@localhost",
+    "-c",
+    "user.name=fixture",
+    "commit",
+    "-qm",
+    "member ownership",
+  );
+  await writeFile(manifest, "packages: ['apps/excluded']\n");
+  await writeFile(join(moduleRoot, "package.json"), '{"name":"dirty"}\n');
+  const find = (path) =>
+    JSON.parse(
+      execFileSync(process.execPath, [entry, "find-feature", path], {
+        cwd,
+        encoding: "utf8",
+      }),
+    );
+  const owner = find("apps/included/test/x.ts");
+  assert.deepEqual(owner.module, {
+    name: "included",
+    directory: "apps/included",
+  });
+  assert.deepEqual(
+    owner.matches.map((x) => x.feature),
+    ["valid"],
+  );
+  assert.deepEqual(
+    owner.unavailable
+      .map(({ source, error }) => [source.split("/").at(-1), error])
+      .sort(),
+    [
+      ["invalid-entry.json", "feature_definition_invalid"],
+      ["invalid.json", "feature_definition_invalid"],
+      ["no-script.json", "feature_test_script_missing"],
+      ["one.json", "feature_id_conflict"],
+      ["project.json", "feature_room_scope_missing"],
+      ["two.json", "feature_id_conflict"],
+    ],
+  );
+  assert.deepEqual(find("apps/excluded/test/x.ts").matches, []);
+  const nested = find("apps/included/test/nested/src/x.ts");
+  assert.deepEqual(nested.module, owner.module);
+  assert.deepEqual(
+    nested.matches.map((x) => x.feature),
+    ["valid"],
   );
 });

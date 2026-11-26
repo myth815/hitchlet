@@ -1,14 +1,25 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { constants, lstatSync } from "node:fs";
+import {
+  constants,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { lstat, open, readlink, realpath } from "node:fs/promises";
 import {
   dirname,
   isAbsolute,
+  join,
   matchesGlob,
   normalize,
   relative,
   resolve,
   sep,
+  win32,
 } from "node:path";
 import { pipeline } from "node:stream/promises";
 
@@ -48,28 +59,122 @@ async function readTrackedFile(input) {
   }
 }
 
+const roomFile = ".turbocli/project.json";
+const workspaceFile = "pnpm-workspace.yaml";
+const categories = ["implementation", "tests", "assets"];
+const object = (value) =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+function checkedPatterns(value = []) {
+  if (
+    !Array.isArray(value) ||
+    !value.every(
+      (p) =>
+        typeof p === "string" &&
+        p.length > 0 &&
+        !isAbsolute(p.replace(/^!/, "")) &&
+        !win32.isAbsolute(p.replace(/^!/, "")) &&
+        !p.includes("\\") &&
+        !p.split("/").includes(".."),
+    )
+  )
+    throw Error("Invalid project-relative rules");
+  return value;
+}
+
+function checkedRules(value) {
+  if (!object(value)) throw Error("Invalid write set");
+  return Object.fromEntries(
+    categories.map((kind) => [kind, checkedPatterns(value[kind])]),
+  );
+}
+
+function matchingRules(file, patterns) {
+  if (patterns.some((p) => p.startsWith("!") && matchesGlob(file, p.slice(1))))
+    return [];
+  return patterns.filter((p) => !p.startsWith("!") && matchesGlob(file, p));
+}
+
+// Let pnpm resolve membership in the committed workspace. Only ancestors of the
+// requested file can own it; no source files or working-copy settings are read.
+function findMember(target, git, revision) {
+  const ancestorManifests = [];
+  for (let dir = dirname(target); dir !== "."; dir = dirname(dir))
+    ancestorManifests.push(dir + "/package.json");
+  if (!ancestorManifests.length) return;
+  const paths = git(
+    "--literal-pathspecs",
+    "ls-tree",
+    "-z",
+    "--name-only",
+    revision,
+    "--",
+    workspaceFile,
+    ...ancestorManifests,
+  ).split("\0");
+  const candidates = ancestorManifests.filter((manifest) =>
+    paths.includes(manifest),
+  );
+  if (!candidates.length) return;
+  if (!paths.includes(workspaceFile))
+    throw Error("pnpm workspace manifest is missing");
+
+  const snapshot = realpathSync(
+    mkdtempSync(join(tmpdir(), "hitchlet-member-")),
+  );
+  try {
+    writeFileSync(
+      join(snapshot, workspaceFile),
+      git("show", revision + ":" + workspaceFile),
+    );
+    for (const path of candidates) {
+      mkdirSync(join(snapshot, dirname(path)), { recursive: true });
+      writeFileSync(join(snapshot, path), git("show", revision + ":" + path));
+    }
+    const listing = execFileSync(
+      "pnpm",
+      [
+        "--config.offline=true",
+        "--config.ignore-scripts=true",
+        "--config.ignore-pnpmfile=true",
+        "--config.manage-package-manager-versions=false",
+        "list",
+        "-r",
+        "--depth",
+        "-1",
+        "--json",
+      ],
+      {
+        cwd: snapshot,
+        encoding: "utf8",
+        env: { ...process.env, COREPACK_ENABLE_NETWORK: "0" },
+      },
+    ).trim();
+    // pnpm prints no JSON at all if none of these ancestors is a member.
+    const members = new Set(
+      (listing ? JSON.parse(listing) : []).map((member) =>
+        relative(snapshot, member.path),
+      ),
+    );
+    return candidates.map(dirname).find((directory) => members.has(directory));
+  } finally {
+    rmSync(snapshot, { recursive: true, force: true });
+  }
+}
+
 function findFeature(input) {
   const target = normalize(input);
   if (
     !target ||
     target === "." ||
     isAbsolute(target) ||
+    win32.isAbsolute(target) ||
     target === ".." ||
-    target.startsWith("../")
+    target.startsWith(".." + sep)
   )
     throw Error("Expected a file path relative to the worktree root.");
   const git = (...args) => execFileSync("git", args, { encoding: "utf8" });
   const revision = git("rev-parse", "HEAD").trim();
-  const tracked = git("ls-tree", "-r", "-z", "--name-only", revision).split(
-    "\0",
-  );
-  const roomFile = ".turbocli/project.json";
-  let directory = dirname(target);
-  while (directory !== "." && !tracked.includes(directory + "/" + roomFile))
-    directory = dirname(directory);
-  const prefix = directory === "." ? "" : directory + "/";
-  const read = (path) =>
-    JSON.parse(git("show", revision + ":" + prefix + path));
   const matches = [],
     testReferences = [],
     roomRules = [],
@@ -83,68 +188,128 @@ function findFeature(input) {
     roomRules,
     unavailable,
   };
-  if (tracked.includes(prefix + roomFile)) {
-    const file = target.slice(prefix.length);
-    const pkg = read("package.json"),
-      room = read(roomFile).featureRoom;
-    result.module = { directory, name: pkg.name };
-    const matching = (patterns = []) => {
-      if (
-        patterns.some((p) => p.startsWith("!") && matchesGlob(file, p.slice(1)))
-      )
-        return [];
-      return patterns.filter((p) => !p.startsWith("!") && matchesGlob(file, p));
-    };
-    for (const name of ["projectLevel", "shared", "exclude"]) {
-      for (const pattern of matching(room?.[name]))
-        roomRules.push({ name, pattern, source: prefix + roomFile });
-    }
-    const start = prefix + ".turbocli/features/";
-    for (const source of tracked) {
-      if (
-        !source.startsWith(start) ||
-        !/^[^/]+\.json$/.test(source.slice(start.length))
-      )
-        continue;
-      try {
-        const feature = read(source.slice(prefix.length)),
-          rules = [];
-        if (
-          typeof feature.id !== "string" ||
-          !feature.writeSet ||
-          !Array.isArray(feature.testEntries)
-        )
-          throw Error("Invalid feature declaration");
-        for (const kind of ["implementation", "tests", "assets"]) {
-          for (const pattern of matching(feature.writeSet[kind]))
-            rules.push({ kind, pattern });
-        }
-        const entries = feature.testEntries
-          .map((entry) => entry.command ?? pkg.scripts?.[entry.script])
-          .filter(Boolean);
-        if (rules.length)
-          matches.push({
-            feature: feature.id,
-            source,
-            rules,
-            testEntries: entries,
-          });
-        else {
-          const clues = entries.filter((command) =>
-            command
-              .split(/[\s"']+/)
-              .some((arg) => arg === file || arg === "./" + file),
-          );
-          if (clues.length)
-            testReferences.push({
-              feature: feature.id,
-              source,
-              commands: clues,
-            });
-        }
-      } catch (error) {
-        unavailable.push({ source, error: error.message });
+  const directory = findMember(target, git, revision);
+  if (!directory) {
+    console.log(JSON.stringify(result));
+    return;
+  }
+  const prefix = directory + "/",
+    file = target.slice(prefix.length);
+  const read = (path) => JSON.parse(git("show", revision + ":" + path));
+  const pkg = read(prefix + "package.json"),
+    roomSource = prefix + roomFile;
+  result.module = { directory, name: pkg.name ?? directory };
+  const featureDir = prefix + ".turbocli/features/";
+  const paths = git(
+    "--literal-pathspecs",
+    "ls-tree",
+    "-r",
+    "-z",
+    "--name-only",
+    revision,
+    "--",
+    roomSource,
+    featureDir,
+  ).split("\0");
+  let hasScope = false;
+  if (paths.includes(roomSource)) {
+    try {
+      const project = read(roomSource);
+      if (!object(project) || project.protocolVersion !== "1.0") throw Error();
+      if (project.featureRoom !== undefined) {
+        checkedRules(project.featureRoom.scope);
+        const room = ["projectLevel", "shared", "exclude"].flatMap((name) =>
+          matchingRules(file, checkedPatterns(project.featureRoom[name])).map(
+            (pattern) => ({ name, pattern, source: roomSource }),
+          ),
+        );
+        hasScope = true;
+        roomRules.push(...room);
       }
+    } catch {
+      unavailable.push({
+        source: roomSource,
+        error: "feature_room_configuration_invalid",
+      });
+    }
+  }
+
+  const declarations = [];
+  const idCounts = new Map();
+  for (const source of paths) {
+    if (
+      !source.startsWith(featureDir) ||
+      !/^[^/]+\.json$/.test(source.slice(featureDir.length))
+    )
+      continue;
+    try {
+      const feature = read(source);
+      if (
+        !object(feature) ||
+        typeof feature.id !== "string" ||
+        !/^[\w][\w.-]*$/.test(feature.id) ||
+        !Array.isArray(feature.testEntries)
+      )
+        throw Error();
+      const writeSet = checkedRules(feature.writeSet);
+      const missingScripts = [];
+      const entries = feature.testEntries
+        .map((entry) => {
+          if (!object(entry)) throw Error();
+          if (
+            typeof entry.command === "string" &&
+            entry.command.trim() &&
+            entry.script === undefined
+          )
+            return entry.command;
+          if (
+            typeof entry.script !== "string" ||
+            !entry.script ||
+            entry.command !== undefined
+          )
+            throw Error();
+          if (
+            Object.hasOwn(pkg.scripts ?? {}, entry.script) &&
+            pkg.scripts[entry.script]
+          )
+            return pkg.scripts[entry.script];
+          missingScripts.push({
+            source,
+            feature: feature.id,
+            error: "feature_test_script_missing",
+          });
+        })
+        .filter(Boolean);
+      declarations.push({ id: feature.id, source, writeSet, entries });
+      idCounts.set(feature.id, (idCounts.get(feature.id) ?? 0) + 1);
+      unavailable.push(...missingScripts);
+    } catch {
+      unavailable.push({ source, error: "feature_definition_invalid" });
+    }
+  }
+  if (declarations.length && !hasScope)
+    unavailable.push({
+      source: roomSource,
+      error: "feature_room_scope_missing",
+    });
+  for (const { id, source, writeSet, entries } of declarations) {
+    if (idCounts.get(id) > 1) {
+      unavailable.push({ source, feature: id, error: "feature_id_conflict" });
+      continue;
+    }
+    const rules = categories.flatMap((kind) =>
+      matchingRules(file, writeSet[kind]).map((pattern) => ({ kind, pattern })),
+    );
+    if (rules.length)
+      matches.push({ feature: id, source, rules, testEntries: entries });
+    else {
+      const clues = entries.filter((command) =>
+        command
+          .split(/[\s"']+/)
+          .some((arg) => arg === file || arg === "./" + file),
+      );
+      if (clues.length)
+        testReferences.push({ feature: id, source, commands: clues });
     }
   }
   console.log(JSON.stringify(result));

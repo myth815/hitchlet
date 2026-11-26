@@ -1,6 +1,6 @@
 {
   "id": "hitchlet.find-feature",
-  "description": "按仓库根目录相对文件路径查询当前 Git HEAD 的功能归属。matches 给出所有命中的 writeSet 规则、声明及测试入口，testReferences 仅是测试命令线索，roomRules 是模块共享、排除或项目级规则，unavailable 指明未能读取的声明。",
+  "description": "按仓库根目录相对文件路径查询当前 Git HEAD 的功能归属。matches 给出所有命中的 writeSet 规则、声明及测试入口，testReferences 仅是测试命令线索，roomRules 是模块共享、排除或项目级规则，unavailable 列出损坏、缺少或 ID 冲突的声明及原因。",
   "executable": "node",
   "argv": [
     "scripts/agent-worktree.mjs",
